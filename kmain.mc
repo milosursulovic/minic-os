@@ -9,6 +9,11 @@
 // real timer + keyboard handler. The entry stubs interrupts.s jumps to
 // are hand-written (see that file for why); everything past "here's the
 // vector number and error code" is ordinary MiniC.
+//
+// Milestone 3 adds a heap (a bump allocator over a reserved chunk of the
+// milestone-1 identity map - real dynamic page-table management is a
+// later problem, not needed yet with 1GB already flat-mapped) and a
+// minimal interactive shell built on the keyboard/VGA plumbing above.
 
 struct VgaChar {
     u8 character;
@@ -49,6 +54,20 @@ u8 gInByte;
 
 u64 gTickCount;
 char gScancodeTable[128];
+
+// ---- Shell line buffer, filled a character at a time by the keyboard
+// handler; the main loop (not the interrupt handler - keep that minimal)
+// processes a line once Enter sets gLineReady.
+char gLineBuffer[128];
+int gLineLen;
+bool gLineReady;
+
+// ---- Heap: a straight bump allocator over a reserved 1MB arena, backed
+// by .bss and already covered by the flat identity map from milestone 1.
+// No `free` - same "arena" spirit as examples/allocator_demo.mc, just
+// with `kreset` standing in for arenaReset().
+u8 gHeapArena[1048576];
+u64 gHeapUsed;
 
 // ---- Raw port I/O - the one thing asm(...) has to do directly, since
 // there's no operand binding to hand it a MiniC value. Everything else
@@ -160,6 +179,121 @@ void initScancodeTable() {
     gScancodeTable[0x1C] = (char) 10;   // enter -> newline
 }
 
+// ---- Heap ---------------------------------------------------------------
+
+void* kalloc(u64 size) {
+    u64 aligned = gHeapUsed;
+    if (aligned % 16 != 0) {
+        aligned = aligned + (16 - (aligned % 16));
+    }
+    if (aligned + size > 1048576) {
+        return null;
+    }
+    u8* base = gHeapArena;
+    void* ptr = (void*) (base + aligned);
+    gHeapUsed = aligned + size;
+    return ptr;
+}
+
+void kreset() {
+    gHeapUsed = 0;
+}
+
+// ---- Small string/number helpers - no libc, so these are hand-rolled. --
+
+bool streq(char* a, char* b) {
+    int i = 0;
+    while (a[i] != (char) 0 && b[i] != (char) 0) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return a[i] == b[i];
+}
+
+void printHex(u64 value) {
+    char* digits = "0123456789abcdef";
+    char buf[17];
+    buf[16] = (char) 0;
+    if (value == 0) {
+        buf[15] = digits[0];
+        vgaPrint(&buf[15]);
+        serialPrint(&buf[15]);
+        return;
+    }
+    int i = 15;
+    while (value > 0 && i >= 0) {
+        u64 nibble = value % 16;
+        buf[i] = digits[nibble];
+        value = value / 16;
+        i = i - 1;
+    }
+    vgaPrint(&buf[i + 1]);
+    serialPrint(&buf[i + 1]);
+}
+
+// ---- Shell ----------------------------------------------------------------
+
+void printPrompt() {
+    vgaPrint("> ");
+    serialPrint("> ");
+}
+
+void cmdHelp() {
+    vgaPrint("commands: help clear ticks alloc reset");
+    serialPrint("commands: help clear ticks alloc reset\n");
+}
+
+void cmdClear() {
+    int i = 80;   // leave the boot message on row 0
+    while (i < 2000) {
+        gVga[i].character = (u8) 32;
+        gVga[i].color = 0x07;
+        i = i + 1;
+    }
+    gVgaCursor = 80;
+}
+
+void cmdTicks() {
+    vgaPrint("ticks: 0x");
+    printHex(gTickCount);
+}
+
+void cmdAlloc() {
+    void* p = kalloc(64);
+    if (p == null) {
+        vgaPrint("alloc failed - heap full");
+        serialPrint("alloc failed - heap full\n");
+    } else {
+        vgaPrint("allocated 64 bytes at 0x");
+        printHex((u64) p);
+    }
+}
+
+void cmdReset() {
+    kreset();
+    vgaPrint("heap reset");
+    serialPrint("heap reset\n");
+}
+
+void runCommand() {
+    if (streq(gLineBuffer, "help")) {
+        cmdHelp();
+    } else if (streq(gLineBuffer, "clear")) {
+        cmdClear();
+    } else if (streq(gLineBuffer, "ticks")) {
+        cmdTicks();
+    } else if (streq(gLineBuffer, "alloc")) {
+        cmdAlloc();
+    } else if (streq(gLineBuffer, "reset")) {
+        cmdReset();
+    } else if (gLineLen > 0) {
+        vgaPrint("unknown command");
+        serialPrint("unknown command\n");
+    }
+}
+
 // Called from interrupts.s's isr_common_stub for every vector it knows
 // about. Real MiniC, called with an ordinary `call` - a normal function,
 // nothing interrupt-specific about its body.
@@ -177,7 +311,12 @@ void interrupt_handler(u64 vector, u64 errorCode) {
         u8 scancode = inb(0x60);
         if (scancode < 0x80) {   // top bit set = key release, ignore those
             char c = gScancodeTable[scancode];
-            if (c != (char) 0) {
+            if (c == (char) 10) {
+                gLineBuffer[gLineLen] = (char) 0;
+                gLineReady = true;
+            } else if (c != (char) 0 && gLineLen < 127) {
+                gLineBuffer[gLineLen] = c;
+                gLineLen = gLineLen + 1;
                 vgaPutc(c);
                 serialPutc((u8) c);
             }
@@ -221,8 +360,20 @@ void _start() {
     asm("sti");
 
     serialPrint("interrupts live\n");
+    printPrompt();
 
     while (true) {
-        asm("hlt");
+        asm("hlt");   // the CPU sleeps here between interrupts; every timer
+                       // tick and keypress wakes it right back to this check
+        if (gLineReady) {
+            runCommand();
+            gLineReady = false;
+            gLineLen = 0;
+            gVgaCursor = ((gVgaCursor / 80) + 1) * 80;   // next row
+            if (gVgaCursor >= 2000) {
+                gVgaCursor = 80;   // wrap - no real scrolling yet
+            }
+            printPrompt();
+        }
     }
 }

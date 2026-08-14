@@ -2,9 +2,9 @@
 
 The start of the OS kernel phase: a multiboot1-compliant kernel image
 that boots to 64-bit long mode, handles real interrupts (timer +
-keyboard), and writes directly to the VGA text buffer - all real, all
-verified running in QEMU (byte-for-byte checked via the QEMU monitor's
-memory dump and `sendkey`, not just "it didn't crash").
+keyboard), has a heap, and runs a minimal interactive shell over VGA -
+all real, all verified running in QEMU (byte-for-byte checked via the
+QEMU monitor's memory dump and `sendkey`, not just "it didn't crash").
 
 ## Why there's hand-written assembly here
 
@@ -27,11 +27,14 @@ something a MiniC function body can do to itself.
   `iretq`. Same "below what `asm(...)` can express" reasoning as boot.s.
 - **`kmain.mc`** - everything past "here's the vector number," in
   ordinary MiniC: the IDT (an array of `packed struct` entries), 8259 PIC
-  remapping, PIT reconfiguration, the timer/keyboard handlers themselves,
-  and the VGA/serial output. Uses nothing beyond what the freestanding/
-  systems phase already built - `volatile`, `packed struct`, pointer
-  indexing, `asm(...)` for the handful of raw port I/O instructions
-  (`out`/`in`/`lidt`/`sti`) MiniC has no other way to express.
+  remapping, PIT reconfiguration, the timer/keyboard handlers, a bump heap
+  allocator (`kalloc`/`kreset`, same idea as `examples/allocator_demo.mc`),
+  a minimal interactive shell (`help`/`clear`/`ticks`/`alloc`/`reset`,
+  built on the keyboard handler's line buffer), and the VGA/serial output.
+  Uses nothing beyond what the freestanding/systems phase already built -
+  `volatile`, `packed struct`, pointer indexing, `asm(...)` for the
+  handful of raw port I/O instructions (`out`/`in`/`lidt`/`sti`) MiniC has
+  no other way to express.
 - **`linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -60,6 +63,20 @@ To check output without a display, redirect the serial port to a file:
 qemu-system-x86_64 -kernel kernel.elf -display none -serial file:serial.log -no-reboot
 ```
 
+With a real display (`./build.sh run`), type at the shell prompt (`>` on
+the second row) - lowercase letters, space, and enter all work:
+
+```
+> help
+commands: help clear ticks alloc reset
+> alloc
+allocated 64 bytes at 0x10d139
+> alloc
+allocated 64 bytes at 0x10d179
+> reset
+heap reset
+```
+
 ## Known limitations (on purpose, for now)
 
 - Only 5 interrupt vectors are wired up: divide-by-zero (0), GPF (13),
@@ -67,8 +84,10 @@ qemu-system-x86_64 -kernel kernel.elf -display none -serial file:serial.log -no-
   empty IDT entry and triple-faults (QEMU resets) - the same
   `ISR_NOERR`/`ISR_ERR` macro pattern in `interrupts.s` covers the rest
   of 0-31 when something actually needs them.
-- No paging beyond the flat 1GB identity map from milestone 1, no memory
-  allocator, no scheduler/multitasking - one linear `_start` plus
+- The heap is a bump allocator with no `free` (same spirit as
+  `allocator_demo.mc` - `kreset()` wipes the whole thing at once, nothing
+  in between). No paging beyond the flat 1GB identity map from milestone
+  1, no scheduler/multitasking - one linear `_start` plus
   whatever the timer/keyboard handlers do.
 - Keyboard support is lowercase-letters-and-space-and-enter only (a small
   hand-built scancode table in `kmain.mc`), scancode set 1, no shift/
