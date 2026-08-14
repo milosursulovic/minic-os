@@ -14,6 +14,16 @@
 // milestone-1 identity map - real dynamic page-table management is a
 // later problem, not needed yet with 1GB already flat-mapped) and a
 // minimal interactive shell built on the keyboard/VGA plumbing above.
+// Milestone 4 upgrades the heap to a real free-list allocator (kfree,
+// splitting, coalescing).
+//
+// Milestone 5 adds real physical memory awareness: the multiboot memory
+// map (parsed from the info structure the bootloader hands us in EBX -
+// preserved by boot.s into gMultibootInfoPtr, since `_start` takes no
+// parameters) drives a frame bitmap allocator. Still entirely within the
+// milestone-1 flat 1GB map - using that memory for anything beyond the
+// heap arena (i.e. dynamically extending the page tables themselves) is
+// its own later problem.
 
 struct VgaChar {
     u8 character;
@@ -35,11 +45,41 @@ packed struct IdtPointer {
     u64 base;
 }
 
+packed struct MultibootInfo {
+    u32 flags;
+    u32 memLower;
+    u32 memUpper;
+    u32 bootDevice;
+    u32 cmdline;
+    u32 modsCount;
+    u32 modsAddr;
+    u32 syms0;
+    u32 syms1;
+    u32 syms2;
+    u32 syms3;
+    u32 mmapLength;
+    u32 mmapAddr;
+}
+
+// `size` is the byte count of the rest of THIS entry, not counting itself
+// - entries aren't necessarily a fixed stride, so `addr` genuinely does
+// sit at an unaligned 4-byte offset by the real spec. Without `packed`,
+// MiniC would insert 4 bytes of padding before `addr` to 8-byte-align it
+// and silently read the wrong bytes - exactly the case `packed` exists for.
+packed struct MmapEntry {
+    u32 size;
+    u64 addr;
+    u64 len;
+    u32 type;   // 1 = available RAM
+}
+
 extern void isr0();
 extern void isr13();
 extern void isr14();
 extern void irq0();
 extern void irq1();
+
+u32 gMultibootInfoPtr;
 
 IdtEntry gIdt[256];
 IdtPointer gIdtPtr;
@@ -188,6 +228,12 @@ void initScancodeTable() {
     gScancodeTable[0x15] = (char) 121; gScancodeTable[0x2C] = (char) 122;
     gScancodeTable[0x39] = (char) 32;   // space
     gScancodeTable[0x1C] = (char) 10;   // enter -> newline
+
+    // digit row, for typing hex addresses back into `free <addr>`
+    gScancodeTable[0x02] = (char) 49; gScancodeTable[0x03] = (char) 50; gScancodeTable[0x04] = (char) 51;
+    gScancodeTable[0x05] = (char) 52; gScancodeTable[0x06] = (char) 53; gScancodeTable[0x07] = (char) 54;
+    gScancodeTable[0x08] = (char) 55; gScancodeTable[0x09] = (char) 56; gScancodeTable[0x0A] = (char) 57;
+    gScancodeTable[0x0B] = (char) 48;
 }
 
 // ---- Heap ---------------------------------------------------------------
@@ -250,6 +296,14 @@ void kfree(void* ptr) {
     u8* base = gHeapArena;
     u64 baseAddr = (u64) base;
     u64 ptrAddr = (u64) ptr;
+    // A bogus pointer (e.g. a stale/mistyped address from `free <addr>`)
+    // would otherwise underflow this subtraction to a huge offset and
+    // either corrupt unrelated memory or fault - found this the hard way
+    // testing `free <addr>` with an address from a previous build. Ignore
+    // it instead of trusting it.
+    if (ptrAddr < baseAddr + headerSize || ptrAddr >= baseAddr + 1048576) {
+        return;
+    }
     u64 offset = ptrAddr - baseAddr - headerSize;
 
     BlockHeader* block = blockAt(offset);
@@ -271,6 +325,28 @@ void kfree(void* ptr) {
             coalescing = false;
         }
     }
+
+    // Backward-coalesce: blocks have no back-pointer, so finding the one
+    // immediately *before* this one means rescanning from the arena
+    // start - O(n) per free, fine for a hobby heap, not something a real
+    // allocator would want.
+    u64 scanOffset = 0;
+    u64 prevOffset = offset;
+    bool foundPrev = false;
+    while (scanOffset < offset) {
+        BlockHeader* scanBlock = blockAt(scanOffset);
+        if (scanOffset + headerSize + scanBlock->size == offset) {
+            prevOffset = scanOffset;
+            foundPrev = true;
+        }
+        scanOffset = scanOffset + headerSize + scanBlock->size;
+    }
+    if (foundPrev) {
+        BlockHeader* prevBlock = blockAt(prevOffset);
+        if (prevBlock->free) {
+            prevBlock->size = prevBlock->size + headerSize + block->size;
+        }
+    }
 }
 
 u64 heapFreeBytes() {
@@ -288,6 +364,101 @@ u64 heapFreeBytes() {
         offset = offset + headerSize + block->size;
     }
     return total;
+}
+
+// ---- Physical frame allocator - 1 bit per 4KB frame, covering the whole
+// milestone-1 identity-mapped 1GB (32768 bytes * 8 bits * 4KB = 1GB).
+// Distinct from the heap above: the heap hands out *virtual* bytes within
+// a fixed 1MB arena for kernel data structures; this tracks *physical*
+// frames or a real page-table layout to actually manage. Real dynamic
+// paging (mapping memory beyond the flat 1GB, or handing frames to a
+// process) is the next problem this unblocks, not solved yet.
+u8 gFrameBitmap[32768];
+u32 gTotalFrames;
+u32 gFreeFrameCount;
+
+void frameSet(u32 frame) {
+    u32 byteIndex = frame / 8;
+    u8 mask = (u8) (1 << (frame % 8));
+    gFrameBitmap[byteIndex] = gFrameBitmap[byteIndex] | mask;
+}
+
+bool frameTest(u32 frame) {
+    u32 byteIndex = frame / 8;
+    u8 mask = (u8) (1 << (frame % 8));
+    return (gFrameBitmap[byteIndex] & mask) != 0;
+}
+
+void frameClear(u32 frame) {
+    u32 byteIndex = frame / 8;
+    u8 mask = (u8) (1 << (frame % 8));
+    gFrameBitmap[byteIndex] = gFrameBitmap[byteIndex] & (~mask);
+}
+
+// Everything starts "used"; the multiboot memory map (type 1 = available
+// RAM) clears the frames that are actually free to hand out. The first
+// 4MB is reserved unconditionally regardless of what the map says -
+// simpler than computing exactly where the kernel image/heap arena/this
+// very bitmap end, and there's plenty of room to spare.
+void framesInit() {
+    u32 i = 0;
+    while (i < 32768) {
+        gFrameBitmap[i] = 255;
+        i = i + 1;
+    }
+    gTotalFrames = 262144;   // 1GB / 4KB
+    gFreeFrameCount = 0;
+
+    MultibootInfo* info = (MultibootInfo*) ((u64) gMultibootInfoPtr);
+    u64 mmapAddr = (u64) info->mmapAddr;
+    u64 mmapEnd = mmapAddr + (u64) info->mmapLength;
+    u64 entryAddr = mmapAddr;
+    while (entryAddr < mmapEnd) {
+        MmapEntry* entry = (MmapEntry*) entryAddr;
+        if (entry->type == 1) {
+            u64 start = entry->addr;
+            u64 end = entry->addr + entry->len;
+            if (start < 4194304) {
+                start = 4194304;
+            }
+            if (end > 1073741824) {
+                end = 1073741824;
+            }
+            u64 frame = start / 4096;
+            u64 frameEnd = end / 4096;
+            while (frame < frameEnd) {
+                if (frameTest((u32) frame)) {
+                    frameClear((u32) frame);
+                    gFreeFrameCount = gFreeFrameCount + 1;
+                }
+                frame = frame + 1;
+            }
+        }
+        entryAddr = entryAddr + (u64) entry->size + 4;
+    }
+}
+
+void* allocFrame() {
+    u32 i = 0;
+    while (i < gTotalFrames) {
+        if (!frameTest(i)) {
+            frameSet(i);
+            gFreeFrameCount = gFreeFrameCount - 1;
+            u64 addr = (u64) i * 4096;
+            return (void*) addr;
+        }
+        i = i + 1;
+    }
+    return null;
+}
+
+void freeFrame(void* addr) {
+    u64 a = (u64) addr;
+    u32 frame = (u32) (a / 4096);
+    if (frameTest(frame)) {
+        frameClear(frame);
+        gFreeFrameCount = gFreeFrameCount + 1;
+    }
 }
 
 // ---- Small string/number helpers - no libc, so these are hand-rolled. --
@@ -312,6 +483,34 @@ bool startsWith(char* s, char* prefix) {
         i = i + 1;
     }
     return true;
+}
+
+// Accepts an optional "0x" prefix; any non-hex-digit character is simply
+// skipped rather than treated as an error - good enough for a shell
+// that's only ever fed its own printHex() output back.
+u64 parseHex(char* s) {
+    u64 value = 0;
+    int i = 0;
+    if (s[0] == (char) 48 && s[1] == (char) 120) {   // "0x"
+        i = 2;
+    }
+    while (s[i] != (char) 0) {
+        u64 c = (u64) s[i];   // char isn't part of the Int family - <=/>=/-
+        u64 digit = 0;        // all need it cast to an Int type first (== / != are fine as-is)
+        bool validDigit = true;
+        if (c >= 48 && c <= 57) {
+            digit = c - 48;
+        } else if (c >= 97 && c <= 102) {
+            digit = c - 97 + 10;
+        } else {
+            validDigit = false;
+        }
+        if (validDigit) {
+            value = value * 16 + digit;
+        }
+        i = i + 1;
+    }
+    return value;
 }
 
 void printHex(u64 value) {
@@ -343,8 +542,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc free mem reset echo <text>");
-    serialPrint("commands: help clear ticks alloc free mem reset echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc free free <addr> mem reset frame frames echo <text>");
+    serialPrint("commands: help clear ticks alloc free free <addr> mem reset frame frames echo <text>\n");
 }
 
 void cmdClear() {
@@ -370,6 +569,7 @@ void cmdAlloc() {
     } else {
         gLastAlloc = p;
         vgaPrint("allocated 64 bytes at 0x");
+        serialPrint("allocated 64 bytes at 0x");
         printHex((u64) p);
     }
 }
@@ -381,6 +581,7 @@ void cmdFree() {
         return;
     }
     vgaPrint("freed 0x");
+    serialPrint("freed 0x");
     printHex((u64) gLastAlloc);
     kfree(gLastAlloc);
     gLastAlloc = null;
@@ -388,6 +589,7 @@ void cmdFree() {
 
 void cmdMem() {
     vgaPrint("free: 0x");
+    serialPrint("free: 0x");
     printHex(heapFreeBytes());
 }
 
@@ -404,6 +606,37 @@ void cmdEcho() {
     serialPrint(text);
 }
 
+void cmdFreeAddr() {
+    u64 addr = parseHex(&gLineBuffer[5]);   // past "free "
+    kfree((void*) addr);
+    vgaPrint("freed 0x");
+    serialPrint("freed 0x");
+    printHex(addr);
+}
+
+void cmdFrames() {
+    vgaPrint("free frames: 0x");
+    serialPrint("free frames: 0x");
+    printHex((u64) gFreeFrameCount);
+    vgaPutc((char) 32);
+    serialPutc(32);
+    vgaPrint("/ 0x");
+    serialPrint("/ 0x");
+    printHex((u64) gTotalFrames);
+}
+
+void cmdFrame() {
+    void* f = allocFrame();
+    if (f == null) {
+        vgaPrint("out of frames");
+        serialPrint("out of frames\n");
+    } else {
+        vgaPrint("allocated frame at 0x");
+        serialPrint("allocated frame at 0x");
+        printHex((u64) f);
+    }
+}
+
 void runCommand() {
     if (streq(gLineBuffer, "help")) {
         cmdHelp();
@@ -415,10 +648,16 @@ void runCommand() {
         cmdAlloc();
     } else if (streq(gLineBuffer, "free")) {
         cmdFree();
+    } else if (startsWith(gLineBuffer, "free ")) {
+        cmdFreeAddr();
     } else if (streq(gLineBuffer, "mem")) {
         cmdMem();
     } else if (streq(gLineBuffer, "reset")) {
         cmdReset();
+    } else if (streq(gLineBuffer, "frames")) {
+        cmdFrames();
+    } else if (streq(gLineBuffer, "frame")) {
+        cmdFrame();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {
@@ -490,6 +729,7 @@ void _start() {
     idtInit();
     picRemap();
     pitInit();
+    framesInit();
     asm("sti");
 
     serialPrint("interrupts live\n");

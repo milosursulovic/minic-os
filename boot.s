@@ -38,6 +38,7 @@ stack_top:
 .code32
 .global _boot_start
 .extern _start              # MiniC's void _start(), in kmain.mc
+.extern gMultibootInfoPtr   # MiniC global - see the note by its use below
 
 _boot_start:
     mov esp, offset stack_top
@@ -103,6 +104,13 @@ _start64:
     mov esp, offset stack_top   # 32-bit form: zero-extends into rsp, and (unlike
                                  # `mov rsp, ...`) only needs a 32-bit relocation -
                                  # everything here fits in 32 bits anyway (loaded at 1MB)
+
+    # Multiboot handed us a pointer to its info structure in EBX at entry,
+    # and nothing since has touched that register - stash it in a MiniC
+    # global (a real, `.globl`-exported symbol, same trick as gOutPort/
+    # gOutByte for outb) since `_start` takes no parameters.
+    mov dword ptr [rip + gMultibootInfoPtr], ebx
+
     call _start
 
 .hang:
