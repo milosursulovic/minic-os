@@ -62,12 +62,23 @@ char gLineBuffer[128];
 int gLineLen;
 bool gLineReady;
 
-// ---- Heap: a straight bump allocator over a reserved 1MB arena, backed
-// by .bss and already covered by the flat identity map from milestone 1.
-// No `free` - same "arena" spirit as examples/allocator_demo.mc, just
-// with `kreset` standing in for arenaReset().
+// ---- Heap: a real free-list allocator (split on alloc, forward-coalesce
+// on free) over a reserved 1MB arena, backed by .bss and already covered
+// by the flat identity map from milestone 1. Blocks stay in address
+// order, so "the next block" is always `offset + sizeof(header) +
+// size` - no separate `next` pointer needed, and coalescing two adjacent
+// free blocks is just folding one header's size into its neighbor's.
+// Backward coalescing (merging into the *previous* block) isn't done -
+// would need a full rescan from the start to find it; a real placement-
+// sensitive allocator profile would want it, this one doesn't need it yet.
+struct BlockHeader {
+    u64 size;    // usable bytes *after* this header, not counting the header itself
+    bool free;
+}
+
 u8 gHeapArena[1048576];
-u64 gHeapUsed;
+bool gHeapInited;
+void* gLastAlloc;
 
 // ---- Raw port I/O - the one thing asm(...) has to do directly, since
 // there's no operand binding to hand it a MiniC value. Everything else
@@ -181,22 +192,102 @@ void initScancodeTable() {
 
 // ---- Heap ---------------------------------------------------------------
 
-void* kalloc(u64 size) {
-    u64 aligned = gHeapUsed;
-    if (aligned % 16 != 0) {
-        aligned = aligned + (16 - (aligned % 16));
-    }
-    if (aligned + size > 1048576) {
-        return null;
-    }
+BlockHeader* blockAt(u64 offset) {
     u8* base = gHeapArena;
-    void* ptr = (void*) (base + aligned);
-    gHeapUsed = aligned + size;
-    return ptr;
+    return (BlockHeader*) (base + offset);
 }
 
-void kreset() {
-    gHeapUsed = 0;
+// sizeof(...) is always a plain (signed) `int`; MiniC doesn't implicitly
+// mix signed/unsigned int types in arithmetic (only a bare literal gets a
+// free pass), so every function below caches it as u64 once up front
+// rather than casting at every use.
+
+void heapInit() {
+    u64 headerSize = (u64) sizeof(BlockHeader);
+    BlockHeader* first = blockAt(0);
+    first->size = 1048576 - headerSize;
+    first->free = true;
+    gHeapInited = true;
+}
+
+void* kalloc(u64 size) {
+    if (!gHeapInited) {
+        heapInit();
+    }
+    if (size % 16 != 0) {
+        size = size + (16 - (size % 16));
+    }
+    u64 headerSize = (u64) sizeof(BlockHeader);
+
+    u64 offset = 0;
+    while (offset < 1048576) {
+        BlockHeader* block = blockAt(offset);
+        if (block->free && block->size >= size) {
+            // Split off the remainder as a new free block, but only if
+            // there's enough room left for another header plus something
+            // worth having - otherwise just hand over the whole block.
+            if (block->size >= size + headerSize + 16) {
+                u64 remainderOffset = offset + headerSize + size;
+                BlockHeader* remainder = blockAt(remainderOffset);
+                remainder->size = block->size - size - headerSize;
+                remainder->free = true;
+                block->size = size;
+            }
+            block->free = false;
+            u8* blockBytes = (u8*) block;
+            return (void*) (blockBytes + headerSize);
+        }
+        offset = offset + headerSize + block->size;
+    }
+    return null;
+}
+
+void kfree(void* ptr) {
+    if (ptr == null) {
+        return;
+    }
+    u64 headerSize = (u64) sizeof(BlockHeader);
+    u8* base = gHeapArena;
+    u64 baseAddr = (u64) base;
+    u64 ptrAddr = (u64) ptr;
+    u64 offset = ptrAddr - baseAddr - headerSize;
+
+    BlockHeader* block = blockAt(offset);
+    block->free = true;
+
+    // Forward-coalesce: fold in every immediately-following block while
+    // it's also free, since blocks are laid out contiguously in address
+    // order - no pointer-chasing needed to find "the next one". MiniC has
+    // no `break`, so "keep going" is an explicit condition instead.
+    u64 nextOffset = offset + headerSize + block->size;
+    bool coalescing = nextOffset < 1048576;
+    while (coalescing) {
+        BlockHeader* nextBlock = blockAt(nextOffset);
+        if (nextBlock->free) {
+            block->size = block->size + headerSize + nextBlock->size;
+            nextOffset = offset + headerSize + block->size;
+            coalescing = nextOffset < 1048576;
+        } else {
+            coalescing = false;
+        }
+    }
+}
+
+u64 heapFreeBytes() {
+    if (!gHeapInited) {
+        heapInit();
+    }
+    u64 headerSize = (u64) sizeof(BlockHeader);
+    u64 total = 0;
+    u64 offset = 0;
+    while (offset < 1048576) {
+        BlockHeader* block = blockAt(offset);
+        if (block->free) {
+            total = total + block->size;
+        }
+        offset = offset + headerSize + block->size;
+    }
+    return total;
 }
 
 // ---- Small string/number helpers - no libc, so these are hand-rolled. --
@@ -210,6 +301,17 @@ bool streq(char* a, char* b) {
         i = i + 1;
     }
     return a[i] == b[i];
+}
+
+bool startsWith(char* s, char* prefix) {
+    int i = 0;
+    while (prefix[i] != (char) 0) {
+        if (s[i] != prefix[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
 }
 
 void printHex(u64 value) {
@@ -241,8 +343,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc reset");
-    serialPrint("commands: help clear ticks alloc reset\n");
+    vgaPrint("commands: help clear ticks alloc free mem reset echo <text>");
+    serialPrint("commands: help clear ticks alloc free mem reset echo <text>\n");
 }
 
 void cmdClear() {
@@ -266,15 +368,40 @@ void cmdAlloc() {
         vgaPrint("alloc failed - heap full");
         serialPrint("alloc failed - heap full\n");
     } else {
+        gLastAlloc = p;
         vgaPrint("allocated 64 bytes at 0x");
         printHex((u64) p);
     }
 }
 
+void cmdFree() {
+    if (gLastAlloc == null) {
+        vgaPrint("nothing to free");
+        serialPrint("nothing to free\n");
+        return;
+    }
+    vgaPrint("freed 0x");
+    printHex((u64) gLastAlloc);
+    kfree(gLastAlloc);
+    gLastAlloc = null;
+}
+
+void cmdMem() {
+    vgaPrint("free: 0x");
+    printHex(heapFreeBytes());
+}
+
 void cmdReset() {
-    kreset();
+    heapInit();
+    gLastAlloc = null;
     vgaPrint("heap reset");
     serialPrint("heap reset\n");
+}
+
+void cmdEcho() {
+    char* text = &gLineBuffer[5];   // past "echo "
+    vgaPrint(text);
+    serialPrint(text);
 }
 
 void runCommand() {
@@ -286,8 +413,14 @@ void runCommand() {
         cmdTicks();
     } else if (streq(gLineBuffer, "alloc")) {
         cmdAlloc();
+    } else if (streq(gLineBuffer, "free")) {
+        cmdFree();
+    } else if (streq(gLineBuffer, "mem")) {
+        cmdMem();
     } else if (streq(gLineBuffer, "reset")) {
         cmdReset();
+    } else if (startsWith(gLineBuffer, "echo ")) {
+        cmdEcho();
     } else if (gLineLen > 0) {
         vgaPrint("unknown command");
         serialPrint("unknown command\n");

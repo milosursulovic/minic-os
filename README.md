@@ -2,9 +2,10 @@
 
 The start of the OS kernel phase: a multiboot1-compliant kernel image
 that boots to 64-bit long mode, handles real interrupts (timer +
-keyboard), has a heap, and runs a minimal interactive shell over VGA -
-all real, all verified running in QEMU (byte-for-byte checked via the
-QEMU monitor's memory dump and `sendkey`, not just "it didn't crash").
+keyboard), has a real heap (`kalloc`/`kfree`, splitting and coalescing),
+and runs a minimal interactive shell over VGA - all real, all verified
+running in QEMU (byte-for-byte checked via the QEMU monitor's memory
+dump and `sendkey`, not just "it didn't crash").
 
 ## Why there's hand-written assembly here
 
@@ -27,9 +28,10 @@ something a MiniC function body can do to itself.
   `iretq`. Same "below what `asm(...)` can express" reasoning as boot.s.
 - **`kmain.mc`** - everything past "here's the vector number," in
   ordinary MiniC: the IDT (an array of `packed struct` entries), 8259 PIC
-  remapping, PIT reconfiguration, the timer/keyboard handlers, a bump heap
-  allocator (`kalloc`/`kreset`, same idea as `examples/allocator_demo.mc`),
-  a minimal interactive shell (`help`/`clear`/`ticks`/`alloc`/`reset`,
+  remapping, PIT reconfiguration, the timer/keyboard handlers, a real
+  free-list heap (`kalloc`/`kfree` - splits blocks on alloc, coalesces
+  adjacent free blocks on free), a minimal interactive shell
+  (`help`/`clear`/`ticks`/`alloc`/`free`/`mem`/`reset`/`echo <text>`,
   built on the keyboard handler's line buffer), and the VGA/serial output.
   Uses nothing beyond what the freestanding/systems phase already built -
   `volatile`, `packed struct`, pointer indexing, `asm(...)` for the
@@ -67,14 +69,18 @@ With a real display (`./build.sh run`), type at the shell prompt (`>` on
 the second row) - lowercase letters, space, and enter all work:
 
 ```
-> help
-commands: help clear ticks alloc reset
 > alloc
-allocated 64 bytes at 0x10d139
+allocated 64 bytes at 0x10d149
 > alloc
-allocated 64 bytes at 0x10d179
-> reset
-heap reset
+allocated 64 bytes at 0x10d199
+> mem
+free: 0xfff50
+> free
+freed 0x10d199
+> mem
+free: 0xfffa0
+> echo hello world
+hello world
 ```
 
 ## Known limitations (on purpose, for now)
@@ -84,11 +90,16 @@ heap reset
   empty IDT entry and triple-faults (QEMU resets) - the same
   `ISR_NOERR`/`ISR_ERR` macro pattern in `interrupts.s` covers the rest
   of 0-31 when something actually needs them.
-- The heap is a bump allocator with no `free` (same spirit as
-  `allocator_demo.mc` - `kreset()` wipes the whole thing at once, nothing
-  in between). No paging beyond the flat 1GB identity map from milestone
-  1, no scheduler/multitasking - one linear `_start` plus
-  whatever the timer/keyboard handlers do.
+- `free` only frees the *most recent* allocation (`gLastAlloc`) - there's
+  no argument parsing for an arbitrary address yet, so it can't free
+  anything else. `kfree` itself takes any valid pointer and coalesces
+  correctly; it's the shell command that's limited, not the allocator.
+- Only forward coalescing (merging into the block *after* the one just
+  freed) - merging into the block *before* it would need a full rescan
+  from the arena start to find it, not done yet.
+- No paging beyond the flat 1GB identity map from milestone 1, no
+  scheduler/multitasking - one linear `_start` plus whatever the timer/
+  keyboard handlers do.
 - Keyboard support is lowercase-letters-and-space-and-enter only (a small
   hand-built scancode table in `kmain.mc`), scancode set 1, no shift/
   modifier handling, no scrolling once the VGA cursor runs off-screen.
