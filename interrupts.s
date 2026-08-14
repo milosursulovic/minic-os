@@ -1,0 +1,93 @@
+# Interrupt entry stubs. Like boot.s, this is hand-written - saving/
+# restoring full register state around an interrupt, and normalizing
+# "sometimes the CPU pushes an error code, sometimes it doesn't" into one
+# common call, is calling-convention plumbing below what a MiniC function
+# body (or asm("...")'s no-operand-binding splice) can express.
+#
+# Handles: divide-by-zero (0), general protection fault (13), page fault
+# (14) - just enough exceptions to report something useful if a kernel bug
+# trips one - plus IRQ0/IRQ1 (timer/keyboard, remapped to vectors 32/33 by
+# kmain.mc's PIC setup). Not the full 0-31 exception table yet; the same
+# ISR_NOERR/ISR_ERR macro pattern extends to the rest when something
+# actually needs them.
+
+.intel_syntax noprefix
+.code64
+
+.extern interrupt_handler
+.global isr0
+.global isr13
+.global isr14
+.global irq0
+.global irq1
+
+.macro ISR_NOERR num
+isr\num:
+    push 0
+    push \num
+    jmp isr_common_stub
+.endm
+
+.macro ISR_ERR num
+isr\num:
+    push \num
+    jmp isr_common_stub
+.endm
+
+ISR_NOERR 0
+ISR_ERR   13
+ISR_ERR   14
+
+irq0:
+    push 0
+    push 32
+    jmp isr_common_stub
+
+irq1:
+    push 0
+    push 33
+    jmp isr_common_stub
+
+# Stack on entry: [vector, errorCode, RIP, CS, RFLAGS, RSP, SS] (CPU pushed
+# the last five; the stub above pushed the first two). Read vector/
+# errorCode into the SysV arg registers before any push touches them.
+isr_common_stub:
+    mov rdi, [rsp]
+    mov rsi, [rsp + 8]
+
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    call interrupt_handler
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+
+    add rsp, 16          # drop vector + errorCode
+    iretq

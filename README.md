@@ -1,9 +1,10 @@
 # MiniC kernel
 
-The start of the OS kernel phase: a multiboot1-compliant kernel image,
-boots to 64-bit long mode, and writes directly to the VGA text buffer -
-all real, all verified running in QEMU (byte-for-byte checked via the
-QEMU monitor, not just "it didn't crash").
+The start of the OS kernel phase: a multiboot1-compliant kernel image
+that boots to 64-bit long mode, handles real interrupts (timer +
+keyboard), and writes directly to the VGA text buffer - all real, all
+verified running in QEMU (byte-for-byte checked via the QEMU monitor's
+memory dump and `sendkey`, not just "it didn't crash").
 
 ## Why there's hand-written assembly here
 
@@ -12,17 +13,25 @@ x86-64. Getting from one to the other - loading a GDT, building page
 tables, enabling long mode, far-jumping into a 64-bit code segment - is
 program *structure*, below what MiniC's `asm("...")` (a function-body
 statement, no operand binding) can express. Every kernel project hand-
-writes an equivalent of this, even ones written in Rust or Zig.
+writes an equivalent of this, even ones written in Rust or Zig. Same
+reasoning covers interrupt entry: saving/restoring full register state
+and normalizing "sometimes the CPU pushes an error code, sometimes it
+doesn't" into one common call is calling-convention plumbing, not
+something a MiniC function body can do to itself.
 
-- **`boot.s`** - the multiboot header, the 32-to-64-bit transition, and
-  nothing else. Written directly against the real hardware, not through
-  MiniC.
-- **`kmain.mc`** - everything past that point, in ordinary MiniC. Writes
-  a message to the VGA buffer (`0xB8000`, no driver needed - it's just
-  memory) and mirrors it to the serial port for headless verification.
-  Uses nothing beyond what the freestanding/systems phase already built:
-  `volatile`, a plain `struct`, pointer indexing, `asm(...)` for the one
-  raw `out` port write MiniC has no other way to express.
+- **`boot.s`** - the multiboot header and the 32-to-64-bit transition.
+  Written directly against the real hardware, not through MiniC.
+- **`interrupts.s`** - entry stubs for the exceptions/IRQs the kernel
+  handles (divide-by-zero, GPF, page fault, timer, keyboard): save every
+  register, call into MiniC with the vector number + error code, restore,
+  `iretq`. Same "below what `asm(...)` can express" reasoning as boot.s.
+- **`kmain.mc`** - everything past "here's the vector number," in
+  ordinary MiniC: the IDT (an array of `packed struct` entries), 8259 PIC
+  remapping, PIT reconfiguration, the timer/keyboard handlers themselves,
+  and the VGA/serial output. Uses nothing beyond what the freestanding/
+  systems phase already built - `volatile`, `packed struct`, pointer
+  indexing, `asm(...)` for the handful of raw port I/O instructions
+  (`out`/`in`/`lidt`/`sti`) MiniC has no other way to express.
 - **`linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -51,15 +60,26 @@ To check output without a display, redirect the serial port to a file:
 qemu-system-x86_64 -kernel kernel.elf -display none -serial file:serial.log -no-reboot
 ```
 
-## Known limitations (milestone 1 - on purpose, for now)
+## Known limitations (on purpose, for now)
 
-- No interrupts, no paging beyond the flat identity map covering the
-  first 1GB, no memory allocator, no keyboard/other input - literally
-  "boot and print," the smallest real slice of a kernel.
+- Only 5 interrupt vectors are wired up: divide-by-zero (0), GPF (13),
+  page fault (14), timer (32), keyboard (33). Any other exception hits an
+  empty IDT entry and triple-faults (QEMU resets) - the same
+  `ISR_NOERR`/`ISR_ERR` macro pattern in `interrupts.s` covers the rest
+  of 0-31 when something actually needs them.
+- No paging beyond the flat 1GB identity map from milestone 1, no memory
+  allocator, no scheduler/multitasking - one linear `_start` plus
+  whatever the timer/keyboard handlers do.
+- Keyboard support is lowercase-letters-and-space-and-enter only (a small
+  hand-built scancode table in `kmain.mc`), scancode set 1, no shift/
+  modifier handling, no scrolling once the VGA cursor runs off-screen.
 - x86-64/multiboot1/QEMU only - no real-hardware boot testing, no
   Multiboot2/GRUB ISO packaging yet (multiboot1 + QEMU's `-kernel` was
-  chosen for milestone 1 specifically because it needs no bootloader
-  tooling at all - just QEMU).
+  chosen specifically because it needs no bootloader tooling at all -
+  just QEMU).
 - The identity-mapped 1GB region is built with 2MB pages sized generously
   around what's actually needed (kernel at 1MB, VGA buffer at ~736KB) -
   not yet a real page-table layout a kernel would keep long-term.
+- Interrupt handlers don't save/restore SSE/XMM state - fine today since
+  nothing running at interrupt time uses floats, a real gap once
+  something does.
