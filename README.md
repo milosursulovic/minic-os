@@ -13,8 +13,9 @@ dump and `sendkey`, not just "it didn't crash").
 Writing this surfaced six real MiniC language gaps (char literals, `char`
 arithmetic/comparisons, `sizeof`'s int-width flexibility, `break`/
 `continue`, array-to-`void*` decay, `extern` globals) - all fixed as real
-compiler features rather than left as workarounds; see the root
-[README's roadmap](../README.md#roadmap) for the writeup. `kmain.mc`
+compiler features rather than left as workarounds; see the
+[minic repo's roadmap](https://github.com/milosursulovic/minic#roadmap)
+for the writeup. `kmain.mc`
 uses all of them directly now (`'a'`, `break`, `c - '0'`, etc.), not the
 numeric-ASCII-code/boolean-flag workarounds it launched with.
 
@@ -69,7 +70,11 @@ something a MiniC function body can do to itself.
 ## Building and running
 
 Needs `qemu-system-x86_64` (`sudo apt install qemu-system-x86` on
-Debian/Ubuntu/WSL) and a Linux-built `minicc` (`../build-linux/minicc`).
+Debian/Ubuntu/WSL) and a Linux-built `minicc` from the
+[minic](https://github.com/milosursulovic/minic) repo - `build.sh`
+defaults to `../compiler/build-linux/minicc` (a sibling checkout of that
+repo named `compiler/`), override with `MINICC=/path/to/minicc ./build.sh`
+for any other layout.
 
 ```bash
 ./build.sh          # assembles boot.s, compiles+assembles kmain.mc, links kernel.elf

@@ -9,7 +9,10 @@
 set -e
 cd "$(dirname "$0")"
 
-MINICC=../build-linux/minicc
+# Kernel and compiler now live in separate repos (minic-os / minic) -
+# defaults to the sibling-checkout layout (../compiler/build-linux/minicc),
+# override with MINICC=/path/to/minicc ./build.sh for any other layout.
+MINICC="${MINICC:-../compiler/build-linux/minicc}"
 
 # Multiboot1 (and QEMU's/GRUB's loader for it) only understands a 32-bit
 # ELF *container* - even though the code inside runs in 64-bit long mode
