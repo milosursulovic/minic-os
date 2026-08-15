@@ -13,10 +13,10 @@
 // interrupt_handler directly - interrupts.s's `call interrupt_handler`
 // needs the symbol to exist in the compiled program at all.
 
-import "io.mc";
-import "keyboard.mc";
-import "paging.mc";
-import "strings.mc";
+import "../drivers/io.mc";
+import "../drivers/keyboard.mc";
+import "../mm/paging.mc";
+import "../lib/strings.mc";
 
 u64 gTickCount;
 

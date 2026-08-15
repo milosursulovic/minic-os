@@ -2,13 +2,13 @@
 // The main loop (kmain.mc's _start) dispatches a line via runCommand()
 // once keyboard.mc's IRQ1 handler (isr.mc) sets gLineReady.
 
-import "io.mc";
-import "strings.mc";
-import "heap.mc";
-import "frames.mc";
-import "paging.mc";
-import "keyboard.mc";
-import "isr.mc";
+import "../drivers/io.mc";
+import "../lib/strings.mc";
+import "../mm/heap.mc";
+import "../mm/frames.mc";
+import "../mm/paging.mc";
+import "../drivers/keyboard.mc";
+import "../isr/isr.mc";
 
 void printPrompt() {
     vgaPrint("> ");

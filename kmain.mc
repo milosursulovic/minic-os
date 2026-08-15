@@ -8,13 +8,13 @@
 // isr/shell). See README.md for the full milestone-by-milestone writeup
 // of what each one does and why.
 
-import "io.mc";
-import "interrupts_init.mc";
-import "keyboard.mc";
-import "frames.mc";
-import "paging.mc";
-import "shell.mc";
-import "isr.mc";
+import "drivers/io.mc";
+import "drivers/interrupts_init.mc";
+import "drivers/keyboard.mc";
+import "mm/frames.mc";
+import "mm/paging.mc";
+import "shell/shell.mc";
+import "isr/isr.mc";
 
 void _start() {
     volatile VgaChar* vga = (volatile VgaChar*) 0xB8000;

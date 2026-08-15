@@ -1,6 +1,6 @@
 // Small string/number helpers - no libc, so these are hand-rolled.
 
-import "io.mc";
+import "../drivers/io.mc";
 
 bool streq(char* a, char* b) {
     int i = 0;
