@@ -3,10 +3,12 @@
 The start of the OS kernel phase: a multiboot1-compliant kernel image
 that boots to 64-bit long mode, handles real interrupts (timer +
 keyboard), has a real heap (`kalloc`/`kfree`, splitting and two-way
-coalescing) and a physical frame allocator driven by the multiboot memory
-map, and runs a minimal interactive shell over VGA - all real, all
-verified running in QEMU (byte-for-byte checked via the QEMU monitor's
-memory dump and `sendkey`, not just "it didn't crash").
+coalescing), a physical frame allocator driven by the multiboot memory
+map, real dynamic paging (walking/creating PML4/PDPT/PD/PT chains to map
+memory anywhere, not just inside the boot-time static identity map), and
+runs a minimal interactive shell over VGA - all real, all verified
+running in QEMU (byte-for-byte checked via the QEMU monitor's memory
+dump and `sendkey`, not just "it didn't crash").
 
 Writing this surfaced six real MiniC language gaps (char literals, `char`
 arithmetic/comparisons, `sizeof`'s int-width flexibility, `break`/
@@ -47,14 +49,20 @@ something a MiniC function body can do to itself.
   frame bitmap allocator (`allocFrame`/`freeFrame`) built from the
   multiboot memory map (`MultibootInfo`/`MmapEntry`, both `packed struct` -
   `MmapEntry` in particular has a genuinely unaligned field by the real
-  spec, exactly the case `packed` exists for), a minimal interactive shell
-  (`help`/`clear`/`ticks`/`alloc`/`free`/`free <addr>`/`mem`/`reset`/
-  `frame`/`unframe`/`frames`/`echo <text>`, built on the keyboard handler's line
-  buffer), and the VGA/serial output. Uses nothing beyond what the
-  freestanding/systems phase already built - `volatile`, `packed struct`,
-  pointer indexing, `asm(...)` for the handful of raw port I/O
-  instructions (`out`/`in`/`lidt`/`sti`) MiniC has no other way to
-  express.
+  spec, exactly the case `packed` exists for), real dynamic paging
+  (`mapPage` walks/creates a PML4->PDPT->PD->PT chain of 4KB pages,
+  allocating fresh frames for any missing table level - reads CR3 once at
+  boot into a MiniC global the same way `gMultibootInfoPtr` works, since
+  every physical address it touches, table pages included, lands inside
+  the boot-time flat 1GB identity map and so is directly dereferenceable
+  as an ordinary pointer, no temporary-mapping trick needed), a minimal
+  interactive shell (`help`/`clear`/`ticks`/`alloc`/`free`/`free <addr>`/
+  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`echo <text>`, built on
+  the keyboard handler's line buffer), and the VGA/serial output. Uses
+  nothing beyond what the freestanding/systems phase already built -
+  `volatile`, `packed struct`, pointer indexing, `asm(...)` for the
+  handful of raw instructions (`out`/`in`/`lidt`/`sti`/`invlpg`/reading
+  `cr2`/`cr3`) MiniC has no other way to express.
 - **`linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -99,9 +107,17 @@ freed 0x10e199
 free: 0xffff0
 > frames
 free frames: 0x7be0 / 0x40000
+> map
+mapped 0x40000000 -> 0x400000, wrote/read 0xcafebabe
 > echo hello world
 hello world
 ```
+
+That `map` result proves the whole dynamic-paging chain: a frame beyond
+the multiboot memory map's low end, mapped at a virtual address a full
+1GB past anything boot.s set up statically, written through and read
+back correctly - real PML4/PDPT/PD/PT walking and on-demand table
+creation, not just "didn't crash."
 
 That `mem` result is only possible with *both* directions of coalescing
 working: freeing the first block, then the second, then having them
@@ -122,11 +138,18 @@ recovering the header overhead a partial merge would have left behind.
   unconditionally rather than computing exactly where the kernel image/
   heap arena/frame bitmap end - simpler, and there's plenty of room to
   spare, but wastes a few MB of tracking granularity.
-- The frame allocator and the heap are two separate, unconnected systems:
-  frames aren't yet used to back anything (no dynamic page-table
-  extension), and the heap's 1MB arena is still a fixed `.bss` reservation
-  rather than frame-backed. Real paging beyond the flat 1GB identity map
-  needs the frame allocator this milestone built, but doesn't use it yet.
+- The frame allocator and the heap are still two separate, unconnected
+  systems: `mapPage` can hand out frames at any virtual address now, but
+  nothing calls it to grow the heap - the heap's 1MB arena remains a
+  fixed `.bss` reservation, not frame-backed or dynamically extensible.
+- `mapPage` must not be called on a virtual address that falls inside
+  boot.s's static 1GB identity map (PDPT index 0, i.e. any address below
+  1GB) - the PD entries there are 2MB huge pages (PS bit set), and
+  walking past one as if it pointed to a PT would read a garbage table
+  address. Every caller today (the `map` shell command) stays above 1GB
+  specifically to avoid this; nothing enforces it automatically yet.
+- No unmap / page-table teardown - `mapPage` only ever adds entries and
+  allocates frames for new table levels, never frees one back.
 - No scheduler/multitasking - one linear `_start` plus whatever the
   timer/keyboard handlers do.
 - `./build.sh` prints `warning: kmain.mc:...: unused function

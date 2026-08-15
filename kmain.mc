@@ -24,6 +24,14 @@
 // milestone-1 flat 1GB map - using that memory for anything beyond the
 // heap arena (i.e. dynamically extending the page tables themselves) is
 // its own later problem.
+//
+// Milestone 6 solves that later problem: real dynamic paging. boot.s's
+// static map stops at the PD level with 2MB huge pages and never touches
+// the PT level; mapPage() walks/creates a real PML4->PDPT->PD->PT chain
+// (4KB pages), allocating fresh frames for any missing table level, so
+// the kernel can map memory at ANY virtual address, not just inside that
+// fixed 1GB. The page-fault handler now reports the actual faulting
+// address (CR2) instead of just "page fault, halting".
 
 struct VgaChar {
     u8 character;
@@ -453,6 +461,98 @@ void freeFrame(void* addr) {
     }
 }
 
+// ---- Dynamic paging - real PML4/PDPT/PD/PT walking and creation, using
+// the frame allocator above to supply new table pages. boot.s's static
+// map only covers the first 1GB with 2MB huge pages and stops at the PD
+// level (no PT); this is what lets the kernel map memory ANYWHERE the
+// frame allocator can back it, not just inside that fixed range.
+//
+// Every physical address this code touches - the tables themselves, and
+// every frame allocFrame() hands out - is guaranteed inside the first
+// 1GB, which boot.s already identity-maps. That's what makes this doable
+// in ordinary MiniC with plain pointer dereferences: no temporary
+// mapping trick or recursive self-map is needed just to edit a table.
+//
+// Known limitation: mapPage() must not be called on a virtual address
+// that falls inside boot.s's static 1GB identity map (PDPT index 0) -
+// the PD entries there are 2MB huge pages (PS bit set), and walking past
+// one as if it pointed to a PT would read a garbage table address.
+
+u64 gPML4Phys;
+
+void readPML4() {
+    asm("mov rax, cr3\nmov [rip+gPML4Phys], rax");
+}
+
+u64 gInvlpgAddr;
+
+void invalidatePage(u64 vaddr) {
+    gInvlpgAddr = vaddr;
+    asm("mov rax, [rip+gInvlpgAddr]\ninvlpg [rax]");
+}
+
+u64 gCr2Value;
+
+// CR2 holds the faulting virtual address for a page fault (vector 14) -
+// the CPU sets it right before delivering the exception. Only valid to
+// read from inside that handler.
+void readCr2() {
+    asm("mov rax, cr2\nmov [rip+gCr2Value], rax");
+}
+
+void zeroPage(void* p) {
+    u64* words = (u64*) p;
+    u32 i = 0;
+    while (i < 512) {
+        words[i] = 0;
+        i = i + 1;
+    }
+}
+
+// Returns the next-level table's physical address, allocating and
+// zeroing a fresh frame for it if this entry isn't present yet.
+u64* tableGetOrCreate(u64* table, u32 index) {
+    u64 entry = table[index];
+    if ((entry & 1) == 0) {
+        void* newTable = allocFrame();
+        if (newTable == null) {
+            return null;
+        }
+        zeroPage(newTable);
+        table[index] = ((u64) newTable) | 0x03;   // present + writable
+        return (u64*) newTable;
+    }
+    return (u64*) (entry & ~((u64) 0xFFF));
+}
+
+// Maps one 4KB page: vaddr -> paddr, creating any missing PDPT/PD/PT
+// tables along the way. `flags` is OR'd into the final PT entry on top
+// of the present bit (e.g. 0x02 for writable).
+bool mapPage(u64 vaddr, u64 paddr, u64 flags) {
+    u32 i4 = (u32) ((vaddr >> 39) & 0x1FF);
+    u32 i3 = (u32) ((vaddr >> 30) & 0x1FF);
+    u32 i2 = (u32) ((vaddr >> 21) & 0x1FF);
+    u32 i1 = (u32) ((vaddr >> 12) & 0x1FF);
+
+    u64* pml4 = (u64*) gPML4Phys;
+    u64* pdpt = tableGetOrCreate(pml4, i4);
+    if (pdpt == null) {
+        return false;
+    }
+    u64* pd = tableGetOrCreate(pdpt, i3);
+    if (pd == null) {
+        return false;
+    }
+    u64* pt = tableGetOrCreate(pd, i2);
+    if (pt == null) {
+        return false;
+    }
+
+    pt[i1] = (paddr & ~((u64) 0xFFF)) | (flags & 0xFFF) | 0x01;
+    invalidatePage(vaddr);
+    return true;
+}
+
 // ---- Small string/number helpers - no libc, so these are hand-rolled. --
 
 bool streq(char* a, char* b) {
@@ -534,8 +634,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc free free <addr> mem reset frame unframe frames echo <text>");
-    serialPrint("commands: help clear ticks alloc free free <addr> mem reset frame unframe frames echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc free free <addr> mem reset frame unframe frames map echo <text>");
+    serialPrint("commands: help clear ticks alloc free free <addr> mem reset frame unframe frames map echo <text>\n");
 }
 
 void cmdClear() {
@@ -643,6 +743,37 @@ void cmdUnframe() {
     gLastFrame = null;
 }
 
+void cmdMap() {
+    void* frame = allocFrame();
+    if (frame == null) {
+        vgaPrint("out of frames");
+        serialPrint("out of frames\n");
+        return;
+    }
+    u64 vaddr = 0x40000000;   // 1GB - just past boot.s's static identity map
+    bool ok = mapPage(vaddr, (u64) frame, 0x02);   // writable
+    if (!ok) {
+        vgaPrint("map failed");
+        serialPrint("map failed\n");
+        freeFrame(frame);
+        return;
+    }
+
+    u32* p = (u32*) vaddr;
+    p[0] = 0xCAFEBABE;
+    u32 readBack = p[0];
+
+    vgaPrint("mapped 0x");
+    serialPrint("mapped 0x");
+    printHex(vaddr);
+    vgaPrint(" -> 0x");
+    serialPrint(" -> 0x");
+    printHex((u64) frame);
+    vgaPrint(", wrote/read 0x");
+    serialPrint(", wrote/read 0x");
+    printHex((u64) readBack);
+}
+
 void runCommand() {
     if (streq(gLineBuffer, "help")) {
         cmdHelp();
@@ -666,6 +797,8 @@ void runCommand() {
         cmdFrame();
     } else if (streq(gLineBuffer, "unframe")) {
         cmdUnframe();
+    } else if (streq(gLineBuffer, "map")) {
+        cmdMap();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {
@@ -718,7 +851,10 @@ void interrupt_handler(u64 vector, u64 errorCode) {
     } else if (vector == 13) {
         serialPrint("general protection fault, halting\n");
     } else if (vector == 14) {
-        serialPrint("page fault, halting\n");
+        readCr2();
+        serialPrint("page fault at 0x");
+        printHex(gCr2Value);
+        serialPrint(", halting\n");
     } else {
         serialPrint("unhandled exception, halting\n");
     }
@@ -746,6 +882,7 @@ void _start() {
     picRemap();
     pitInit();
     framesInit();
+    readPML4();
     asm("sti");
 
     serialPrint("interrupts live\n");
