@@ -253,6 +253,54 @@ identical before and after a `reset` that follows a grow, since `reset`
 is specifically designed to reuse already-mapped pages rather than
 re-`mapPage`-ing them (which would leak a frame per byte remapped).
 
+## Roadmap past milestone 10
+
+Everything so far still runs in ring 0 sharing one page-table hierarchy -
+"tasks" are kernel threads, not isolated processes. The longer-term
+architecture (UNIX namespace/shell + NT-style kernel objects/handles +
+microkernel-ish IPC/service isolation + a capability security model, all
+exposed through a native MiniC API with a POSIX compatibility layer on
+top) is planned in phases, each becoming a real numbered milestone when
+its turn comes - not designed in detail this far ahead, the same way
+milestones 1-10 were each scoped just before starting them:
+
+1. **Ring 3 + syscalls** (milestone 11, next up) - a GDT ring3 segments +
+   TSS, an `int 0x80`-style syscall gate, and a minimal dispatcher -
+   proving a real ring0/ring3 privilege boundary exists at all, before
+   tackling address-space isolation as a separate concern.
+2. **Per-process address spaces** - `mm/paging.mc` gains the ability to
+   build a *new* PML4 hierarchy (not just add entries to the shared one),
+   with the scheduler switching CR3 per task.
+3. **A real `Process` concept + a loader** for a statically embedded
+   program (no filesystem yet to load from disk).
+4. **Kernel object model + per-process handle tables** (the NT-style
+   piece) - userspace gets handles, never raw kernel pointers.
+5. **IPC channels** between isolated processes - reuses milestone 10's
+   `sleep()`/blocking mechanism for blocking `receive()`.
+6. **Storage + VFS + a first filesystem** - ATA PIO driver, a minimal
+   custom filesystem, then a VFS layer above it (FAT32/ext2 as later
+   backends).
+7. **Real `Process.spawn()` from disk**, once 3 and 6 both exist.
+8. **Method-call syntax in MiniC itself** (a compiler milestone in the
+   `minic` repo, not this one) - before building a native `File`/
+   `Process`/`Socket`-style system API with real methods, then a thin
+   POSIX compatibility shim over it.
+9. **Capability/permission system** on top of the handle table, then
+   security hardening (NX/ASLR/sandboxing).
+10. **A real driver framework (PCI enumeration) + networking** (NIC
+    driver, a from-scratch TCP/IP stack) - deliberately last: the
+    largest remaining subsystem, with the fewest things depending on it.
+11. **Service architecture + a real `init`** - the current hardcoded
+    `shell/shell.mc` loop migrates to an actual userspace program once
+    processes/IPC/VFS exist to support that; async I/O as a cross-cutting
+    pass once sync I/O works everywhere.
+
+Self-hosting (`minicc` compiled for MiniC OS's own target, running *on*
+MiniC OS to compile something) isn't one of these phases - it's an
+ongoing checkpoint to try after each major phase, with the real
+prerequisites (native API, real file I/O, real process spawning) landing
+around phase 7-8.
+
 ## Known limitations (on purpose, for now)
 
 - Only 5 interrupt vectors are wired up: divide-by-zero (0), GPF (13),
