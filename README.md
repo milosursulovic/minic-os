@@ -3,12 +3,13 @@
 The start of the OS kernel phase: a multiboot1-compliant kernel image
 that boots to 64-bit long mode, handles real interrupts (timer +
 keyboard), has a real heap (`kalloc`/`kfree`, splitting and two-way
-coalescing), a physical frame allocator driven by the multiboot memory
-map, real dynamic paging (walking/creating PML4/PDPT/PD/PT chains to map
-memory anywhere, not just inside the boot-time static identity map), and
-runs a minimal interactive shell over VGA - all real, all verified
-running in QEMU (byte-for-byte checked via the QEMU monitor's memory
-dump and `sendkey`, not just "it didn't crash").
+coalescing, growing on demand by mapping fresh physical frames rather
+than a fixed arena), a physical frame allocator driven by the multiboot
+memory map, real dynamic paging (walking/creating PML4/PDPT/PD/PT chains
+to map memory anywhere, not just inside the boot-time static identity
+map), and runs a minimal interactive shell over VGA - all real, all
+verified running in QEMU (byte-for-byte checked via the QEMU monitor's
+memory dump and `sendkey`, not just "it didn't crash").
 
 Writing this surfaced six real MiniC language gaps (char literals, `char`
 arithmetic/comparisons, `sizeof`'s int-width flexibility, `break`/
@@ -49,7 +50,7 @@ drivers/          hardware setup and I/O
   interrupts_init.mc IDT + 8259 PIC remap + PIT reconfiguration
   keyboard.mc        scancode table + the shell's line buffer
 mm/               memory management
-  heap.mc            kalloc/kfree free-list allocator (1MB arena)
+  heap.mc            kalloc/kfree free-list allocator, grows on demand via mm/paging.mc
   frames.mc          multiboot memory map parser + physical frame bitmap allocator
   paging.mc          dynamic PML4/PDPT/PD/PT paging
 lib/              no-libc helpers
@@ -87,10 +88,15 @@ shell/            the interactive shell
   needed. `mm/frames.mc`'s multiboot parser uses `MultibootInfo`/
   `MmapEntry`, both `packed struct` - `MmapEntry` in particular has a
   genuinely unaligned field by the real spec, exactly the case `packed`
-  exists for. `shell/shell.mc` is the interactive shell (`help`/`clear`/
-  `ticks`/`alloc`/`free`/`free <addr>`/`mem`/`reset`/`frame`/`unframe`/
-  `frames`/`map`/`echo <text>`) built on `drivers/keyboard.mc`'s line
-  buffer.
+  exists for. `mm/heap.mc` is what all of that unblocks: `kalloc`
+  starts the heap at a 64KB mapping and grows it a chunk at a time
+  (`allocFrame` + `mapPage`, at a dedicated virtual base well clear of
+  both the static identity map and the `map` command's demo page) once
+  the free list runs dry, up to a 16MB cap - not the fixed `.bss` arena
+  earlier milestones used. `shell/shell.mc` is the interactive shell
+  (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/`mem`/
+  `reset`/`frame`/`unframe`/`frames`/`map`/`echo <text>`) built on
+  `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -159,17 +165,21 @@ the second row) - lowercase letters, digits, space, and enter all work:
 
 ```
 > alloc
-allocated 64 bytes at 0x10e149
+allocated 64 bytes at 0x50000010
 > alloc
-allocated 64 bytes at 0x10e199
-> free 0x10e149
-freed 0x10e149
+allocated 64 bytes at 0x50000060
+> free 0x50000010
+freed 0x50000010
 > free
-freed 0x10e199
+freed 0x50000060
 > mem
-free: 0xffff0
+free: 0xfff0 / 0x10000
+> bigalloc
+allocated 65536 bytes at 0x50010010
+> mem
+free: 0x10fd0 / 0x21000
 > frames
-free frames: 0x7be0 / 0x40000
+free frames: 0x7bbd / 0x40000
 > map
 mapped 0x40000000 -> 0x400000, wrote/read 0xcafebabe
 > echo hello world
@@ -182,10 +192,17 @@ the multiboot memory map's low end, mapped at a virtual address a full
 back correctly - real PML4/PDPT/PD/PT walking and on-demand table
 creation, not just "didn't crash."
 
-That `mem` result is only possible with *both* directions of coalescing
-working: freeing the first block, then the second, then having them
-(plus the trailing free space) merge back into exactly one block again -
-recovering the header overhead a partial merge would have left behind.
+That `bigalloc` result proves the heap's growth path specifically: the
+request (65536 bytes) doesn't fit in the 64KB heap's first free block
+(65520 bytes after its header), so `kalloc` grows the heap - `mem`
+afterward shows the total (`0x21000`) jumped by more than one page,
+confirming a real `allocFrame`+`mapPage` cycle ran rather than the
+allocation silently failing or reusing something stale. `reset` after
+a grow (not shown here) collapses the free list back to one block over
+whatever's *already* mapped without touching the frame allocator again -
+worth checking `frames`' count is unchanged before/after if you're
+verifying this by hand, since re-mapping already-mapped pages would leak
+a frame per byte otherwise.
 
 ## Known limitations (on purpose, for now)
 
@@ -201,10 +218,13 @@ recovering the header overhead a partial merge would have left behind.
   unconditionally rather than computing exactly where the kernel image/
   heap arena/frame bitmap end - simpler, and there's plenty of room to
   spare, but wastes a few MB of tracking granularity.
-- The frame allocator and the heap are still two separate, unconnected
-  systems: `mapPage` can hand out frames at any virtual address now, but
-  nothing calls it to grow the heap - the heap's 1MB arena remains a
-  fixed `.bss` reservation, not frame-backed or dynamically extensible.
+- The heap's 16MB growth cap and 64KB-minimum-chunk sizing are both
+  arbitrary constants (`mm/heap.mc`'s `gHeapCap` / `heapGrow`'s minimum
+  chunk) picked for "plenty for a hobby kernel," not computed from actual
+  available memory or tuned for any real workload.
+- The heap only ever grows, never shrinks - `kfree` can leave large
+  trailing free regions, but nothing unmaps pages and returns frames to
+  the allocator once they're no longer needed.
 - `mapPage` must not be called on a virtual address that falls inside
   boot.s's static 1GB identity map (PDPT index 0, i.e. any address below
   1GB) - the PD entries there are 2MB huge pages (PS bit set), and

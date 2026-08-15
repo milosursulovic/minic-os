@@ -16,8 +16,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc free free <addr> mem reset frame unframe frames map echo <text>");
-    serialPrint("commands: help clear ticks alloc free free <addr> mem reset frame unframe frames map echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map echo <text>\n");
 }
 
 void cmdClear() {
@@ -49,6 +49,22 @@ void cmdAlloc() {
     }
 }
 
+void cmdBigAlloc() {
+    // 64KB - bigger than a single heapGrow() chunk, so this reliably
+    // forces at least one on-demand growth cycle in one shot, instead of
+    // needing dozens of plain `alloc`s to exhaust the initial mapping.
+    void* p = kalloc(65536);
+    if (p == null) {
+        vgaPrint("bigalloc failed - heap full");
+        serialPrint("bigalloc failed - heap full\n");
+    } else {
+        gLastAlloc = p;
+        vgaPrint("allocated 65536 bytes at 0x");
+        serialPrint("allocated 65536 bytes at 0x");
+        printHex((u64) p);
+    }
+}
+
 void cmdFree() {
     if (gLastAlloc == null) {
         vgaPrint("nothing to free");
@@ -66,6 +82,9 @@ void cmdMem() {
     vgaPrint("free: 0x");
     serialPrint("free: 0x");
     printHex(heapFreeBytes());
+    vgaPrint(" / 0x");
+    serialPrint(" / 0x");
+    printHex(gHeapSize);
 }
 
 void cmdReset() {
@@ -166,6 +185,8 @@ void runCommand() {
         cmdTicks();
     } else if (streq(gLineBuffer, "alloc")) {
         cmdAlloc();
+    } else if (streq(gLineBuffer, "bigalloc")) {
+        cmdBigAlloc();
     } else if (streq(gLineBuffer, "free")) {
         cmdFree();
     } else if (startsWith(gLineBuffer, "free ")) {
