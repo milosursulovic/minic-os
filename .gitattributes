@@ -1,0 +1,7 @@
+# build.sh runs under WSL/Linux bash via its shebang line - a CRLF
+# checkout (e.g. git's default core.autocrlf=true on Windows) breaks
+# `#!/usr/bin/env bash` outright ("env: bash\r: No such file or
+# directory"). Force LF for every text file in this repo regardless of
+# the cloning machine's line-ending settings, since the whole toolchain
+# (as, ld, bash) here is Linux-only anyway.
+* text=auto eol=lf
