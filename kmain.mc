@@ -142,21 +142,21 @@ void serialPutc(u8 c) {
 
 void serialPrint(char* s) {
     int i = 0;
-    while (s[i] != (char) 0) {
-        serialPutc((u8) s[i]);
+    while (s[i] != '\0') {
+        serialPutc(s[i]);
         i = i + 1;
     }
 }
 
 void vgaPutc(char c) {
-    gVga[gVgaCursor].character = (u8) c;
+    gVga[gVgaCursor].character = c;
     gVga[gVgaCursor].color = 0x0F;
     gVgaCursor = gVgaCursor + 1;
 }
 
 void vgaPrint(char* s) {
     int i = 0;
-    while (s[i] != (char) 0) {
+    while (s[i] != '\0') {
         vgaPutc(s[i]);
         i = i + 1;
     }
@@ -215,25 +215,24 @@ void pitInit() {
     outb(0x40, (u8) (divisor >> 8));
 }
 
-// No char literals in MiniC yet - these are plain ASCII codes ('a' = 97, etc).
 void initScancodeTable() {
-    gScancodeTable[0x1E] = (char) 97;  gScancodeTable[0x30] = (char) 98;  gScancodeTable[0x2E] = (char) 99;
-    gScancodeTable[0x20] = (char) 100; gScancodeTable[0x12] = (char) 101; gScancodeTable[0x21] = (char) 102;
-    gScancodeTable[0x22] = (char) 103; gScancodeTable[0x23] = (char) 104; gScancodeTable[0x17] = (char) 105;
-    gScancodeTable[0x24] = (char) 106; gScancodeTable[0x25] = (char) 107; gScancodeTable[0x26] = (char) 108;
-    gScancodeTable[0x32] = (char) 109; gScancodeTable[0x31] = (char) 110; gScancodeTable[0x18] = (char) 111;
-    gScancodeTable[0x19] = (char) 112; gScancodeTable[0x10] = (char) 113; gScancodeTable[0x13] = (char) 114;
-    gScancodeTable[0x1F] = (char) 115; gScancodeTable[0x14] = (char) 116; gScancodeTable[0x16] = (char) 117;
-    gScancodeTable[0x2F] = (char) 118; gScancodeTable[0x11] = (char) 119; gScancodeTable[0x2D] = (char) 120;
-    gScancodeTable[0x15] = (char) 121; gScancodeTable[0x2C] = (char) 122;
-    gScancodeTable[0x39] = (char) 32;   // space
-    gScancodeTable[0x1C] = (char) 10;   // enter -> newline
+    gScancodeTable[0x1E] = 'a'; gScancodeTable[0x30] = 'b'; gScancodeTable[0x2E] = 'c';
+    gScancodeTable[0x20] = 'd'; gScancodeTable[0x12] = 'e'; gScancodeTable[0x21] = 'f';
+    gScancodeTable[0x22] = 'g'; gScancodeTable[0x23] = 'h'; gScancodeTable[0x17] = 'i';
+    gScancodeTable[0x24] = 'j'; gScancodeTable[0x25] = 'k'; gScancodeTable[0x26] = 'l';
+    gScancodeTable[0x32] = 'm'; gScancodeTable[0x31] = 'n'; gScancodeTable[0x18] = 'o';
+    gScancodeTable[0x19] = 'p'; gScancodeTable[0x10] = 'q'; gScancodeTable[0x13] = 'r';
+    gScancodeTable[0x1F] = 's'; gScancodeTable[0x14] = 't'; gScancodeTable[0x16] = 'u';
+    gScancodeTable[0x2F] = 'v'; gScancodeTable[0x11] = 'w'; gScancodeTable[0x2D] = 'x';
+    gScancodeTable[0x15] = 'y'; gScancodeTable[0x2C] = 'z';
+    gScancodeTable[0x39] = ' ';
+    gScancodeTable[0x1C] = '\n';   // enter -> newline
 
     // digit row, for typing hex addresses back into `free <addr>`
-    gScancodeTable[0x02] = (char) 49; gScancodeTable[0x03] = (char) 50; gScancodeTable[0x04] = (char) 51;
-    gScancodeTable[0x05] = (char) 52; gScancodeTable[0x06] = (char) 53; gScancodeTable[0x07] = (char) 54;
-    gScancodeTable[0x08] = (char) 55; gScancodeTable[0x09] = (char) 56; gScancodeTable[0x0A] = (char) 57;
-    gScancodeTable[0x0B] = (char) 48;
+    gScancodeTable[0x02] = '1'; gScancodeTable[0x03] = '2'; gScancodeTable[0x04] = '3';
+    gScancodeTable[0x05] = '4'; gScancodeTable[0x06] = '5'; gScancodeTable[0x07] = '6';
+    gScancodeTable[0x08] = '7'; gScancodeTable[0x09] = '8'; gScancodeTable[0x0A] = '9';
+    gScancodeTable[0x0B] = '0';
 }
 
 // ---- Heap ---------------------------------------------------------------
@@ -243,13 +242,8 @@ BlockHeader* blockAt(u64 offset) {
     return (BlockHeader*) (base + offset);
 }
 
-// sizeof(...) is always a plain (signed) `int`; MiniC doesn't implicitly
-// mix signed/unsigned int types in arithmetic (only a bare literal gets a
-// free pass), so every function below caches it as u64 once up front
-// rather than casting at every use.
-
 void heapInit() {
-    u64 headerSize = (u64) sizeof(BlockHeader);
+    u64 headerSize = sizeof(BlockHeader);
     BlockHeader* first = blockAt(0);
     first->size = 1048576 - headerSize;
     first->free = true;
@@ -263,7 +257,7 @@ void* kalloc(u64 size) {
     if (size % 16 != 0) {
         size = size + (16 - (size % 16));
     }
-    u64 headerSize = (u64) sizeof(BlockHeader);
+    u64 headerSize = sizeof(BlockHeader);
 
     u64 offset = 0;
     while (offset < 1048576) {
@@ -292,7 +286,7 @@ void kfree(void* ptr) {
     if (ptr == null) {
         return;
     }
-    u64 headerSize = (u64) sizeof(BlockHeader);
+    u64 headerSize = sizeof(BlockHeader);
     u8* base = gHeapArena;
     u64 baseAddr = (u64) base;
     u64 ptrAddr = (u64) ptr;
@@ -311,19 +305,15 @@ void kfree(void* ptr) {
 
     // Forward-coalesce: fold in every immediately-following block while
     // it's also free, since blocks are laid out contiguously in address
-    // order - no pointer-chasing needed to find "the next one". MiniC has
-    // no `break`, so "keep going" is an explicit condition instead.
+    // order - no pointer-chasing needed to find "the next one".
     u64 nextOffset = offset + headerSize + block->size;
-    bool coalescing = nextOffset < 1048576;
-    while (coalescing) {
+    while (nextOffset < 1048576) {
         BlockHeader* nextBlock = blockAt(nextOffset);
-        if (nextBlock->free) {
-            block->size = block->size + headerSize + nextBlock->size;
-            nextOffset = offset + headerSize + block->size;
-            coalescing = nextOffset < 1048576;
-        } else {
-            coalescing = false;
+        if (!nextBlock->free) {
+            break;
         }
+        block->size = block->size + headerSize + nextBlock->size;
+        nextOffset = offset + headerSize + block->size;
     }
 
     // Backward-coalesce: blocks have no back-pointer, so finding the one
@@ -338,6 +328,7 @@ void kfree(void* ptr) {
         if (scanOffset + headerSize + scanBlock->size == offset) {
             prevOffset = scanOffset;
             foundPrev = true;
+            break;
         }
         scanOffset = scanOffset + headerSize + scanBlock->size;
     }
@@ -353,7 +344,7 @@ u64 heapFreeBytes() {
     if (!gHeapInited) {
         heapInit();
     }
-    u64 headerSize = (u64) sizeof(BlockHeader);
+    u64 headerSize = sizeof(BlockHeader);
     u64 total = 0;
     u64 offset = 0;
     while (offset < 1048576) {
@@ -465,7 +456,7 @@ void freeFrame(void* addr) {
 
 bool streq(char* a, char* b) {
     int i = 0;
-    while (a[i] != (char) 0 && b[i] != (char) 0) {
+    while (a[i] != '\0' && b[i] != '\0') {
         if (a[i] != b[i]) {
             return false;
         }
@@ -476,7 +467,7 @@ bool streq(char* a, char* b) {
 
 bool startsWith(char* s, char* prefix) {
     int i = 0;
-    while (prefix[i] != (char) 0) {
+    while (prefix[i] != '\0') {
         if (s[i] != prefix[i]) {
             return false;
         }
@@ -491,17 +482,17 @@ bool startsWith(char* s, char* prefix) {
 u64 parseHex(char* s) {
     u64 value = 0;
     int i = 0;
-    if (s[0] == (char) 48 && s[1] == (char) 120) {   // "0x"
+    if (s[0] == '0' && s[1] == 'x') {
         i = 2;
     }
-    while (s[i] != (char) 0) {
-        u64 c = (u64) s[i];   // char isn't part of the Int family - <=/>=/-
-        u64 digit = 0;        // all need it cast to an Int type first (== / != are fine as-is)
+    while (s[i] != '\0') {
+        char c = s[i];
+        u64 digit = 0;
         bool validDigit = true;
-        if (c >= 48 && c <= 57) {
-            digit = c - 48;
-        } else if (c >= 97 && c <= 102) {
-            digit = c - 97 + 10;
+        if (c >= '0' && c <= '9') {
+            digit = (u64) (c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            digit = (u64) (c - 'a') + 10;
         } else {
             validDigit = false;
         }
@@ -516,7 +507,7 @@ u64 parseHex(char* s) {
 void printHex(u64 value) {
     char* digits = "0123456789abcdef";
     char buf[17];
-    buf[16] = (char) 0;
+    buf[16] = '\0';
     if (value == 0) {
         buf[15] = digits[0];
         vgaPrint(&buf[15]);
@@ -549,7 +540,7 @@ void cmdHelp() {
 void cmdClear() {
     int i = 80;   // leave the boot message on row 0
     while (i < 2000) {
-        gVga[i].character = (u8) 32;
+        gVga[i].character = ' ';
         gVga[i].color = 0x07;
         i = i + 1;
     }
@@ -618,8 +609,8 @@ void cmdFrames() {
     vgaPrint("free frames: 0x");
     serialPrint("free frames: 0x");
     printHex((u64) gFreeFrameCount);
-    vgaPutc((char) 32);
-    serialPutc(32);
+    vgaPutc(' ');
+    serialPutc(' ');
     vgaPrint("/ 0x");
     serialPrint("/ 0x");
     printHex((u64) gTotalFrames);
@@ -673,7 +664,7 @@ void interrupt_handler(u64 vector, u64 errorCode) {
     if (vector == 32) {
         gTickCount = gTickCount + 1;
         if (gTickCount % 100 == 0) {
-            serialPutc(46);    // '.' - one dot per ~1 second at 100Hz, proves the timer keeps firing
+            serialPutc('.');   // one dot per ~1 second at 100Hz, proves the timer keeps firing
         }
         outb(0x20, 0x20);      // EOI
         return;
@@ -683,14 +674,14 @@ void interrupt_handler(u64 vector, u64 errorCode) {
         u8 scancode = inb(0x60);
         if (scancode < 0x80) {   // top bit set = key release, ignore those
             char c = gScancodeTable[scancode];
-            if (c == (char) 10) {
-                gLineBuffer[gLineLen] = (char) 0;
+            if (c == '\n') {
+                gLineBuffer[gLineLen] = '\0';
                 gLineReady = true;
-            } else if (c != (char) 0 && gLineLen < 127) {
+            } else if (c != '\0' && gLineLen < 127) {
                 gLineBuffer[gLineLen] = c;
                 gLineLen = gLineLen + 1;
                 vgaPutc(c);
-                serialPutc((u8) c);
+                serialPutc(c);
             }
         }
         outb(0x20, 0x20);
@@ -715,8 +706,8 @@ void _start() {
     volatile VgaChar* vga = (volatile VgaChar*) 0xB8000;
     char* message = "Hello from a MiniC kernel!";
     int i = 0;
-    while (message[i] != (char) 0) {
-        vga[i].character = (u8) message[i];
+    while (message[i] != '\0') {
+        vga[i].character = message[i];
         vga[i].color = 0x0F;
         i = i + 1;
     }

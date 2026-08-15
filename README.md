@@ -8,6 +8,14 @@ map, and runs a minimal interactive shell over VGA - all real, all
 verified running in QEMU (byte-for-byte checked via the QEMU monitor's
 memory dump and `sendkey`, not just "it didn't crash").
 
+Writing this surfaced six real MiniC language gaps (char literals, `char`
+arithmetic/comparisons, `sizeof`'s int-width flexibility, `break`/
+`continue`, array-to-`void*` decay, `extern` globals) - all fixed as real
+compiler features rather than left as workarounds; see the root
+[README's roadmap](../README.md#roadmap) for the writeup. `kmain.mc`
+uses all of them directly now (`'a'`, `break`, `c - '0'`, etc.), not the
+numeric-ASCII-code/boolean-flag workarounds it launched with.
+
 ## Why there's hand-written assembly here
 
 Multiboot drops you in 32-bit protected mode; this compiler only targets
