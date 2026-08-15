@@ -1,0 +1,31 @@
+// The keyboard side of the shell: a hand-built scancode table (set 1,
+// lowercase letters/digits/space/enter only, no shift/modifier handling
+// yet) and the line buffer the IRQ1 handler (isr.mc) fills a character
+// at a time. The main loop - not the interrupt handler, kept minimal -
+// processes a line once Enter sets gLineReady.
+
+char gScancodeTable[128];
+
+char gLineBuffer[128];
+int gLineLen;
+bool gLineReady;
+
+void initScancodeTable() {
+    gScancodeTable[0x1E] = 'a'; gScancodeTable[0x30] = 'b'; gScancodeTable[0x2E] = 'c';
+    gScancodeTable[0x20] = 'd'; gScancodeTable[0x12] = 'e'; gScancodeTable[0x21] = 'f';
+    gScancodeTable[0x22] = 'g'; gScancodeTable[0x23] = 'h'; gScancodeTable[0x17] = 'i';
+    gScancodeTable[0x24] = 'j'; gScancodeTable[0x25] = 'k'; gScancodeTable[0x26] = 'l';
+    gScancodeTable[0x32] = 'm'; gScancodeTable[0x31] = 'n'; gScancodeTable[0x18] = 'o';
+    gScancodeTable[0x19] = 'p'; gScancodeTable[0x10] = 'q'; gScancodeTable[0x13] = 'r';
+    gScancodeTable[0x1F] = 's'; gScancodeTable[0x14] = 't'; gScancodeTable[0x16] = 'u';
+    gScancodeTable[0x2F] = 'v'; gScancodeTable[0x11] = 'w'; gScancodeTable[0x2D] = 'x';
+    gScancodeTable[0x15] = 'y'; gScancodeTable[0x2C] = 'z';
+    gScancodeTable[0x39] = ' ';
+    gScancodeTable[0x1C] = '\n';   // enter -> newline
+
+    // digit row, for typing hex addresses back into `free <addr>`
+    gScancodeTable[0x02] = '1'; gScancodeTable[0x03] = '2'; gScancodeTable[0x04] = '3';
+    gScancodeTable[0x05] = '4'; gScancodeTable[0x06] = '5'; gScancodeTable[0x07] = '6';
+    gScancodeTable[0x08] = '7'; gScancodeTable[0x09] = '8'; gScancodeTable[0x0A] = '9';
+    gScancodeTable[0x0B] = '0';
+}

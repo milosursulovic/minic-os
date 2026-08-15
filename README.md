@@ -42,28 +42,45 @@ something a MiniC function body can do to itself.
   handles (divide-by-zero, GPF, page fault, timer, keyboard): save every
   register, call into MiniC with the vector number + error code, restore,
   `iretq`. Same "below what `asm(...)` can express" reasoning as boot.s.
-- **`kmain.mc`** - everything past "here's the vector number," in
-  ordinary MiniC: the IDT (an array of `packed struct` entries), 8259 PIC
-  remapping, PIT reconfiguration, the timer/keyboard handlers, a real
-  free-list heap (`kalloc`/`kfree` - splits blocks on alloc, coalesces
-  adjacent free blocks both forward *and* backward on free), a physical
-  frame bitmap allocator (`allocFrame`/`freeFrame`) built from the
-  multiboot memory map (`MultibootInfo`/`MmapEntry`, both `packed struct` -
-  `MmapEntry` in particular has a genuinely unaligned field by the real
-  spec, exactly the case `packed` exists for), real dynamic paging
-  (`mapPage` walks/creates a PML4->PDPT->PD->PT chain of 4KB pages,
-  allocating fresh frames for any missing table level - reads CR3 once at
-  boot into a MiniC global the same way `gMultibootInfoPtr` works, since
-  every physical address it touches, table pages included, lands inside
-  the boot-time flat 1GB identity map and so is directly dereferenceable
-  as an ordinary pointer, no temporary-mapping trick needed), a minimal
-  interactive shell (`help`/`clear`/`ticks`/`alloc`/`free`/`free <addr>`/
-  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`echo <text>`, built on
-  the keyboard handler's line buffer), and the VGA/serial output. Uses
-  nothing beyond what the freestanding/systems phase already built -
-  `volatile`, `packed struct`, pointer indexing, `asm(...)` for the
-  handful of raw instructions (`out`/`in`/`lidt`/`sti`/`invlpg`/reading
-  `cr2`/`cr3`) MiniC has no other way to express.
+- **`kmain.mc`** and its imports - everything past "here's the vector
+  number," in ordinary MiniC. `kmain.mc` itself is just the entry point
+  (`_start`) plus an `import` of every module below - one file per
+  subsystem, using nothing beyond what the freestanding/systems phase
+  already built (`volatile`, `packed struct`, pointer indexing,
+  `asm(...)` for the handful of raw instructions - `out`/`in`/`lidt`/
+  `sti`/`invlpg`/reading `cr2`/`cr3` - MiniC has no other way to express):
+  - **`io.mc`** - the VGA text buffer, the serial port, and the raw
+    `in`/`out` port I/O both are built on.
+  - **`interrupts_init.mc`** - the IDT (an array of `packed struct`
+    entries) wired to the hand-written stubs in `interrupts.s`, plus 8259
+    PIC remapping and PIT reconfiguration.
+  - **`keyboard.mc`** - the scancode table and the shell's line buffer,
+    filled a character at a time by the keyboard IRQ handler in `isr.mc`.
+  - **`heap.mc`** - a real free-list allocator (`kalloc`/`kfree` - splits
+    blocks on alloc, coalesces adjacent free blocks both forward *and*
+    backward on free) over a reserved 1MB arena.
+  - **`frames.mc`** - the multiboot memory map parser
+    (`MultibootInfo`/`MmapEntry`, both `packed struct` - `MmapEntry` in
+    particular has a genuinely unaligned field by the real spec, exactly
+    the case `packed` exists for) and the physical frame bitmap allocator
+    (`allocFrame`/`freeFrame`) built from it.
+  - **`paging.mc`** - real dynamic paging: `mapPage` walks/creates a
+    PML4->PDPT->PD->PT chain of 4KB pages, allocating fresh frames
+    (from `frames.mc`) for any missing table level - reads CR3 once at
+    boot into a MiniC global the same way `gMultibootInfoPtr` works,
+    since every physical address it touches, table pages included, lands
+    inside the boot-time flat 1GB identity map and so is directly
+    dereferenceable as an ordinary pointer, no temporary-mapping trick
+    needed.
+  - **`strings.mc`** - no-libc string/number helpers (`streq`,
+    `startsWith`, `parseHex`, `printHex`).
+  - **`isr.mc`** - `interrupt_handler`, called from `interrupts.s`'s
+    entry stubs for every vector they know about - timer, keyboard, and
+    the handful of exceptions with real handlers.
+  - **`shell.mc`** - the minimal interactive shell (`help`/`clear`/
+    `ticks`/`alloc`/`free`/`free <addr>`/`mem`/`reset`/`frame`/
+    `unframe`/`frames`/`map`/`echo <text>`) built on `keyboard.mc`'s line
+    buffer.
 - **`linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
