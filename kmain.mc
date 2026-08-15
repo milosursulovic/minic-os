@@ -46,6 +46,7 @@ void _start() {
     createTask(&task1Entry);
     createTask(&task2Entry);
     createTask(&task3Entry);
+    createTask(&task4Entry);
     asm("sti");
 
     serialPrint("interrupts live\n");

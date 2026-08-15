@@ -9,9 +9,11 @@ memory map, real dynamic paging (walking/creating PML4/PDPT/PD/PT chains
 to map memory anywhere, not just inside the boot-time static identity
 map), a preemptive scheduler switching between real kernel tasks on
 their own stacks - the timer interrupt forces a switch, not just
-voluntary `yield()` - and runs a minimal interactive shell over VGA - all
-real, all verified running in QEMU (byte-for-byte checked via the QEMU
-monitor's memory dump and `sendkey`, not just "it didn't crash").
+voluntary `yield()` - with real blocking (`sleep()` takes a task out of
+the round-robin until a given tick, not just "always ready"), and runs a
+minimal interactive shell over VGA - all real, all verified running in
+QEMU (byte-for-byte checked via the QEMU monitor's memory dump and
+`sendkey`, not just "it didn't crash").
 
 Writing this surfaced six real MiniC language gaps (char literals, `char`
 arithmetic/comparisons, `sizeof`'s int-width flexibility, `break`/
@@ -65,7 +67,7 @@ isr/              interrupt dispatch
   isr.mc             interrupt_handler, called from interrupts.s's stubs
 sched/            preemptive task scheduler
   switch.s           hand-written context switch (below what asm(...) can express)
-  task.mc            Task table, createTask/yield, three demo tasks
+  task.mc            Task table, createTask/yield/sleep, four demo tasks
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -125,7 +127,13 @@ shell/            the interactive shell
   inside it suspends that call exactly like a voluntary `yield()` would -
   the timer's full trap frame (pushed by `interrupts.s` below it on the
   stack) rides along for free and gets `iretq`'d correctly whenever the
-  ring cascades back around to it. `shell/shell.mc` is the interactive
+  ring cascades back around to it. `sleep(ticks)` adds real blocking on
+  top: a task marks itself `blocked` with a wake tick and yields away;
+  `yield()`'s task-selection scan skips blocked tasks (waking one up the
+  moment its wake tick arrives) instead of always picking "whoever's
+  next" - task 0 (the shell) never blocks itself, which is what
+  guarantees the scan always finds something runnable. `shell/shell.mc`
+  is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
   `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`echo <text>`)
   built on `drivers/keyboard.mc`'s line buffer.
@@ -203,22 +211,24 @@ allocated 64 bytes at 0x5000c090
 > free
 freed 0x5000c090
 > mem
-free: 0x3f70 / 0x10000
+free: 0xff50 / 0x20000
 > frames
-free frames: 0x7bce / 0x40000
+free frames: 0x7bbe / 0x40000
 > map
-mapped 0x40000000 -> 0x412000, wrote/read 0xcafebabe
+mapped 0x40000000 -> 0x422000, wrote/read 0xcafebabe
 > tasks
-task1: 0x1bff task2: 0x1bff task3: 0x2cf90d42b
+task1: 0x1dc3 task2: 0x1dc4 task3: 0x2a38d9720 task4: 0x131 ticks: 0x3b8c
 > echo hello world
 hello world
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
-anymore, the way they were before milestone 8 - `sched/task.mc`'s three
+anymore, the way they were before milestone 8 - `sched/task.mc`'s four
 demo tasks each `kalloc` a 16KB stack during boot, before the shell even
-starts, so by the time a user types `alloc` the first ~48KB of the
-heap's initial 64KB mapping is already spoken for.
+starts. That's 64KB of stacks alone, which is why `mem`'s total is
+already `0x20000` (128KB, not the 64KB a fresh heap bootstraps with) by
+the time anyone types a command - the stacks *just* pushed the heap into
+its first on-demand growth before the shell even printed a prompt.
 
 That `map` result proves the whole dynamic-paging chain: a frame beyond
 the multiboot memory map's low end, mapped at a virtual address a full
@@ -226,20 +236,22 @@ the multiboot memory map's low end, mapped at a virtual address a full
 back correctly - real PML4/PDPT/PD/PT walking and on-demand table
 creation, not just "didn't crash."
 
-That `tasks` result is preemption working as designed: task1 and task2
-(cooperative, one increment then a voluntary `yield()`) stay in exact
-lockstep with each other, while task3 - a tight loop that never calls
-`yield()` at all - is *five orders of magnitude* ahead, because it spins
+That `tasks` result proves both preemption and blocking at once. task1
+and task2 (cooperative, one increment then a voluntary `yield()`) stay
+in exact lockstep with each other. task3 - a tight loop that never calls
+`yield()` at all - is *six orders of magnitude* ahead, because it spins
 for its *entire* timer slice every turn instead of giving up the CPU
-after one increment. Both are only possible together if the timer really
-does force control away from task3 periodically (proving preemption
-works) while task3 genuinely never cooperates in between (proving it
-isn't secretly voluntary). `bigalloc` (not shown here) forces the heap
-to grow past its initial mapping in one call - worth checking `frames`'
-free count is identical before and after a `reset` that follows a grow,
-since `reset` is specifically designed to reuse already-mapped pages
-rather than re-`mapPage`-ing them (which would leak a frame per byte
-remapped).
+after one increment; only possible if the timer genuinely forces control
+away from it periodically (proving preemption) while it genuinely never
+cooperates in between (proving that lead isn't secretly voluntary).
+task4 (`sleep(50)` between increments) tracks `ticks / 50` almost
+exactly - `0x3b8c` / 50 ≈ `0x131` - proving `sleep()` really removes it
+from the round-robin for that many ticks rather than either blocking it
+forever or being a no-op. `bigalloc` (not shown here) forces the heap to
+grow further in one call - worth checking `frames`' free count is
+identical before and after a `reset` that follows a grow, since `reset`
+is specifically designed to reuse already-mapped pages rather than
+re-`mapPage`-ing them (which would leak a frame per byte remapped).
 
 ## Known limitations (on purpose, for now)
 
@@ -284,10 +296,10 @@ remapped).
   purpose; a `switch_context` `ret` into a task whose function actually
   returned would pop whatever's next on that stack as a return address,
   undefined behavior. No task-exit/cleanup path exists yet.
-- Tasks can't exit - `sched/task.mc`'s demo tasks are infinite loops on
-  purpose; a `switch_context` `ret` into a task whose function actually
-  returned would pop whatever's next on that stack as a return address,
-  undefined behavior. No task-exit/cleanup path exists yet.
+- `sleep()` blocks by tick count only - no wait-on-event (I/O completion,
+  another task finishing, a semaphore/mutex) yet, and no way for one task
+  to wake another early. `yield()`'s scan for a runnable task is O(n) in
+  the task count every call, fine for the handful of tasks here.
 - The scheduler has a fixed 8-task table (`sched/task.mc`'s `gTasks`) and
   each task's 16KB stack is `kalloc`'d once and never freed - fine for a
   handful of long-lived demo tasks, not a real process model.
