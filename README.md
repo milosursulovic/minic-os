@@ -106,7 +106,38 @@ for any other layout.
 ```bash
 ./build.sh          # assembles boot.s, compiles+assembles kmain.mc, links kernel.elf
 ./build.sh run       # also boots it in QEMU (curses display, in-terminal)
+./build.sh iso       # also packages a GRUB-bootable minic-os.iso
 ```
+
+## Running outside QEMU (VirtualBox, VMware, real hardware)
+
+QEMU's `-kernel kernel.elf` is a QEMU-only shortcut - it understands
+multiboot1 itself and skips needing a real bootloader. Nothing else does
+that, so anywhere else (VirtualBox, VMware, real hardware) needs an
+actual bootloader in front of the same `kernel.elf`. Since the kernel is
+already multiboot1-compliant, GRUB2 can chainload it directly - no
+kernel-side changes needed, just packaging.
+
+`./build.sh iso` needs `grub-mkrescue`, `xorriso`, and `mtools`
+(`sudo apt install grub-pc-bin grub-common xorriso mtools` on
+Debian/Ubuntu/WSL). It copies `kernel.elf` into `iso/boot/kernel.elf`
+(gitignored - `iso/boot/grub/grub.cfg` is the only checked-in part of
+that tree) and runs `grub-mkrescue -o minic-os.iso iso`, producing a
+standard bootable CD image - verified booting byte-for-byte identically
+to the direct QEMU path via `qemu-system-x86_64 -cdrom minic-os.iso`
+(the same BIOS+GRUB route VirtualBox takes, unlike `-kernel`).
+
+For VirtualBox specifically:
+
+1. New VM - Type "Other", Version "Other/Unknown (64-bit)". No guest
+   additions, no EFI (this kernel boots via legacy BIOS + GRUB).
+2. Give it a small amount of RAM (128MB+ is plenty) and skip creating a
+   virtual hard disk - this kernel doesn't touch one.
+3. Settings → Storage → attach `minic-os.iso` as the optical drive.
+4. Start the VM - GRUB's menu appears, boots straight into the kernel.
+
+VMware and real hardware (via a USB stick written with `dd` or similar)
+should work the same way, unverified so far.
 
 `build.sh` assembles both files as **32-bit ELF objects** even though
 `kmain.mc`'s code (and `boot.s`'s post-transition half) runs in 64-bit
@@ -193,10 +224,9 @@ recovering the header overhead a partial merge would have left behind.
   small hand-built scancode table in `kmain.mc`), scancode set 1, no
   shift/modifier handling, no scrolling once the VGA cursor runs
   off-screen.
-- x86-64/multiboot1/QEMU only - no real-hardware boot testing, no
-  Multiboot2/GRUB ISO packaging yet (multiboot1 + QEMU's `-kernel` was
-  chosen specifically because it needs no bootloader tooling at all -
-  just QEMU).
+- x86-64/multiboot1 only, no Multiboot2 - still no real-hardware boot
+  testing, only VirtualBox and QEMU (both via the `./build.sh iso` GRUB
+  path) so far.
 - The identity-mapped 1GB region is built with 2MB pages sized generously
   around what's actually needed (kernel at 1MB, VGA buffer at ~736KB) -
   not yet a real page-table layout a kernel would keep long-term.

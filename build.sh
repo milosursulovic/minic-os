@@ -5,6 +5,10 @@
 #
 # Usage: ./build.sh          # just build kernel.elf
 #        ./build.sh run      # build, then boot it in QEMU (curses display)
+#        ./build.sh iso      # build, then package a GRUB-bootable minic-os.iso
+#                             # (for VirtualBox/VMware/real hardware - QEMU's
+#                             # -kernel is a QEMU-only shortcut, everything
+#                             # else needs a real bootloader)
 
 set -e
 cd "$(dirname "$0")"
@@ -30,4 +34,13 @@ echo "built kernel/kernel.elf"
 
 if [ "$1" == "run" ]; then
     qemu-system-x86_64 -kernel kernel.elf -display curses
+fi
+
+if [ "$1" == "iso" ]; then
+    # grub-mkrescue wants the kernel inside the ISO tree it packages -
+    # iso/boot/grub/grub.cfg is checked in, iso/boot/kernel.elf is just
+    # today's build copied into place.
+    cp kernel.elf iso/boot/kernel.elf
+    grub-mkrescue -o minic-os.iso iso
+    echo "built kernel/minic-os.iso"
 fi
