@@ -119,6 +119,7 @@ struct BlockHeader {
 u8 gHeapArena[1048576];
 bool gHeapInited;
 void* gLastAlloc;
+void* gLastFrame;
 
 // ---- Raw port I/O - the one thing asm(...) has to do directly, since
 // there's no operand binding to hand it a MiniC value. Everything else
@@ -533,8 +534,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc free free <addr> mem reset frame frames echo <text>");
-    serialPrint("commands: help clear ticks alloc free free <addr> mem reset frame frames echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc free free <addr> mem reset frame unframe frames echo <text>");
+    serialPrint("commands: help clear ticks alloc free free <addr> mem reset frame unframe frames echo <text>\n");
 }
 
 void cmdClear() {
@@ -622,10 +623,24 @@ void cmdFrame() {
         vgaPrint("out of frames");
         serialPrint("out of frames\n");
     } else {
+        gLastFrame = f;
         vgaPrint("allocated frame at 0x");
         serialPrint("allocated frame at 0x");
         printHex((u64) f);
     }
+}
+
+void cmdUnframe() {
+    if (gLastFrame == null) {
+        vgaPrint("nothing to unframe");
+        serialPrint("nothing to unframe\n");
+        return;
+    }
+    vgaPrint("freed frame 0x");
+    serialPrint("freed frame 0x");
+    printHex((u64) gLastFrame);
+    freeFrame(gLastFrame);
+    gLastFrame = null;
 }
 
 void runCommand() {
@@ -649,6 +664,8 @@ void runCommand() {
         cmdFrames();
     } else if (streq(gLineBuffer, "frame")) {
         cmdFrame();
+    } else if (streq(gLineBuffer, "unframe")) {
+        cmdUnframe();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {
@@ -660,6 +677,14 @@ void runCommand() {
 // Called from interrupts.s's isr_common_stub for every vector it knows
 // about. Real MiniC, called with an ordinary `call` - a normal function,
 // nothing interrupt-specific about its body.
+//
+// minicc's unused-function warning can't see that call - interrupts.s is
+// a separate, hand-written assembly file, never parsed by minicc at all,
+// so a `warning: unused function 'interrupt_handler'` here is a known
+// false positive, not a bug. Same blind spot real C compilers have for
+// any non-`static` function - gcc's own -Wunused-function only fires for
+// internal-linkage functions for exactly this reason (MiniC doesn't have
+// an internal-linkage concept yet to make the same distinction).
 void interrupt_handler(u64 vector, u64 errorCode) {
     if (vector == 32) {
         gTickCount = gTickCount + 1;
@@ -728,7 +753,7 @@ void _start() {
 
     while (true) {
         asm("hlt");   // the CPU sleeps here between interrupts; every timer
-                       // tick and keypress wakes it right back to this check
+        // tick and keypress wakes it right back to this check
         if (gLineReady) {
             runCommand();
             gLineReady = false;

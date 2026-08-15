@@ -49,7 +49,7 @@ something a MiniC function body can do to itself.
   `MmapEntry` in particular has a genuinely unaligned field by the real
   spec, exactly the case `packed` exists for), a minimal interactive shell
   (`help`/`clear`/`ticks`/`alloc`/`free`/`free <addr>`/`mem`/`reset`/
-  `frame`/`frames`/`echo <text>`, built on the keyboard handler's line
+  `frame`/`unframe`/`frames`/`echo <text>`, built on the keyboard handler's line
   buffer), and the VGA/serial output. Uses nothing beyond what the
   freestanding/systems phase already built - `volatile`, `packed struct`,
   pointer indexing, `asm(...)` for the handful of raw port I/O
@@ -129,6 +129,11 @@ recovering the header overhead a partial merge would have left behind.
   needs the frame allocator this milestone built, but doesn't use it yet.
 - No scheduler/multitasking - one linear `_start` plus whatever the
   timer/keyboard handlers do.
+- `./build.sh` prints `warning: kmain.mc:...: unused function
+  'interrupt_handler'` - a known false positive. `minicc`'s unused-
+  function warning can't see that `interrupts.s` (a separate, hand-
+  written assembly file) calls it; that's the same blind spot gcc's own
+  `-Wunused-function` has for any non-`static` function.
 - Keyboard support is lowercase letters, digits, space, and enter only (a
   small hand-built scancode table in `kmain.mc`), scancode set 1, no
   shift/modifier handling, no scrolling once the VGA cursor runs
