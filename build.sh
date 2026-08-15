@@ -31,7 +31,7 @@ as --32 sched/switch.s -o switch.o
 { echo ".code64"; cat kmain.s; } | as --32 -o kmain.o
 ld -m elf_i386 -T boot/linker.ld -o kernel.elf boot.o interrupts.o switch.o kmain.o
 
-echo "built kernel/kernel.elf"
+echo "built kernel.elf"
 
 if [ "$1" == "run" ]; then
     qemu-system-x86_64 -kernel kernel.elf -display curses
@@ -43,5 +43,5 @@ if [ "$1" == "iso" ]; then
     # today's build copied into place.
     cp kernel.elf iso/boot/kernel.elf
     grub-mkrescue -o minic-os.iso iso
-    echo "built kernel/minic-os.iso"
+    echo "built minic-os.iso"
 fi
