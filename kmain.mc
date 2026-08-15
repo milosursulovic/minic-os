@@ -16,6 +16,7 @@ import "mm/paging.mc";
 import "shell/shell.mc";
 import "isr/isr.mc";
 import "sched/task.mc";
+import "syscall/syscall.mc";
 
 void _start() {
     volatile VgaChar* vga = (volatile VgaChar*) 0xB8000;

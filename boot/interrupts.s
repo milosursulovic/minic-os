@@ -15,11 +15,13 @@
 .code64
 
 .extern interrupt_handler
+.extern syscall_dispatch
 .global isr0
 .global isr13
 .global isr14
 .global irq0
 .global irq1
+.global isr_syscall
 
 .macro ISR_NOERR num
 isr\num:
@@ -90,4 +92,62 @@ isr_common_stub:
     pop rax
 
     add rsp, 16          # drop vector + errorCode
+    iretq
+
+# Milestone 11's syscall gate (vector 0x80, DPL=3 so ring3's `int 0x80` is
+# allowed to reach it at all - see drivers/interrupts_init.mc). Separate
+# from isr_common_stub above: that one calls interrupt_handler(vector,
+# errorCode) - fine for hardware interrupts/exceptions, but a syscall
+# needs its *arguments* (already sitting in rax/rdi/rsi/rdx when this
+# fires, by this kernel's own calling convention - see syscall/syscall.mc)
+# passed through, and its *return value* written back into the saved rax
+# slot so `iretq` hands it to ring3 in rax, the way a function call would.
+#
+# No error code to drop here either - `int n` (a software interrupt,
+# unlike a CPU-raised exception) never pushes one, for any vector.
+isr_syscall:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    # Read the caller's syscall number/args from where they landed on the
+    # stack (not straight from the registers - by now rdi/rsi/rdx/rcx are
+    # about to be overwritten as this call's *own* arguments) and shuffle
+    # them into SysV argument order for syscall_dispatch(num, a1, a2, a3).
+    mov rcx, [rsp + 88]    # a3 = orig rdx
+    mov rdx, [rsp + 80]    # a2 = orig rsi
+    mov rsi, [rsp + 72]    # a1 = orig rdi
+    mov rdi, [rsp + 112]   # num = orig rax
+
+    call syscall_dispatch
+
+    mov [rsp + 112], rax   # overwrite the saved rax with the return value
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
     iretq

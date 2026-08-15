@@ -10,6 +10,7 @@ import "../mm/paging.mc";
 import "../drivers/keyboard.mc";
 import "../isr/isr.mc";
 import "../sched/task.mc";
+import "../syscall/syscall.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -17,8 +18,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks ring3 echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks ring3 echo <text>\n");
 }
 
 void cmdClear() {
@@ -195,6 +196,19 @@ void cmdTasks() {
     printHex(gTickCount);
 }
 
+void cmdRing3() {
+    vgaPrint("entering ring3...");
+    serialPrint("entering ring3...\n");
+    bool ok = runRing3Test();
+    if (!ok) {
+        vgaPrint("ring3 test failed - out of frames or map failed");
+        serialPrint("ring3 test failed - out of frames or map failed\n");
+        return;
+    }
+    vgaPrint("back in ring0 - ring3 roundtrip verified");
+    serialPrint("back in ring0 - ring3 roundtrip verified\n");
+}
+
 void runCommand() {
     if (streq(gLineBuffer, "help")) {
         cmdHelp();
@@ -224,6 +238,8 @@ void runCommand() {
         cmdMap();
     } else if (streq(gLineBuffer, "tasks")) {
         cmdTasks();
+    } else if (streq(gLineBuffer, "ring3")) {
+        cmdRing3();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {

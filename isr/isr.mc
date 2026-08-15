@@ -68,7 +68,9 @@ void interrupt_handler(u64 vector, u64 errorCode) {
     if (vector == 0) {
         serialPrint("divide by zero, halting\n");
     } else if (vector == 13) {
-        serialPrint("general protection fault, halting\n");
+        serialPrint("general protection fault, errorCode=0x");
+        printHex(errorCode);
+        serialPrint(", halting\n");
     } else if (vector == 14) {
         readCr2();
         serialPrint("page fault at 0x");

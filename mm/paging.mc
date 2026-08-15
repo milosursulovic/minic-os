@@ -58,7 +58,17 @@ u64* tableGetOrCreate(u64* table, u32 index) {
             return null;
         }
         zeroPage(newTable);
-        table[index] = ((u64) newTable) | 0x03;   // present + writable
+        // Milestone 11: user (0x04) added alongside present+writable. This
+        // doesn't loosen any existing protection - the CPU ANDs the user
+        // bit across every level from PML4 down to the leaf PT entry, so a
+        // supervisor-only *leaf* (mapPage() callers not passing 0x04, which
+        // is everything except the ring3 test's own stack today) still
+        // blocks user access regardless of what intermediate tables allow.
+        // Without this, an intermediate table created for one purpose
+        // (e.g. the heap) could accidentally block user access to a
+        // completely different, unrelated leaf mapped later through the
+        // same table - this just removes that possibility.
+        table[index] = ((u64) newTable) | 0x07;   // present + writable + user
         return (u64*) newTable;
     }
     return (u64*) (entry & ~((u64) 0xFFF));

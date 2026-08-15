@@ -10,10 +10,11 @@ to map memory anywhere, not just inside the boot-time static identity
 map), a preemptive scheduler switching between real kernel tasks on
 their own stacks - the timer interrupt forces a switch, not just
 voluntary `yield()` - with real blocking (`sleep()` takes a task out of
-the round-robin until a given tick, not just "always ready"), and runs a
-minimal interactive shell over VGA - all real, all verified running in
-QEMU (byte-for-byte checked via the QEMU monitor's memory dump and
-`sendkey`, not just "it didn't crash").
+the round-robin until a given tick, not just "always ready"), a real
+ring0/ring3 privilege boundary with a working syscall gate (`int 0x80`),
+and runs a minimal interactive shell over VGA - all real, all verified
+running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
+and `sendkey`, not just "it didn't crash").
 
 Writing this surfaced six real MiniC language gaps (char literals, `char`
 arithmetic/comparisons, `sizeof`'s int-width flexibility, `break`/
@@ -68,6 +69,9 @@ isr/              interrupt dispatch
 sched/            preemptive task scheduler
   switch.s           hand-written context switch (below what asm(...) can express)
   task.mc            Task table, createTask/yield/sleep, four demo tasks
+syscall/          ring0/ring3 boundary
+  usermode.s         hand-written ring3 entry (below what asm(...) can express)
+  syscall.mc         syscall dispatcher + the one-shot ring3 test
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -77,7 +81,13 @@ shell/            the interactive shell
   structure, handed to the kernel at entry and never overwritten since)
   into a MiniC global before calling `_start` - `_start` takes no
   parameters, same global-relay trick as `outb`'s port/value. Written
-  directly against the real hardware, not through MiniC.
+  directly against the real hardware, not through MiniC. Also where the
+  GDT and TSS live: a ring3 code/data segment pair alongside the
+  original ring0 ones, and a TSS whose `RSP0` field tells the CPU which
+  stack to switch to on any ring3->ring0 transition (interrupt/exception
+  firing while in ring3) - its own dedicated stack, deliberately not the
+  one `_start`'s own C-style call chain runs on (see `int_stack_top`'s
+  comment for the real bug that discovery fixed).
 - **`boot/interrupts.s`** - entry stubs for the exceptions/IRQs the
   kernel handles (divide-by-zero, GPF, page fault, timer, keyboard): save
   every register, call into MiniC with the vector number + error code,
@@ -93,6 +103,17 @@ shell/            the interactive shell
   file's own comment for why it has to live exactly there (the one place
   execution transfers to *any* task, resuming or brand new) and not in
   MiniC's `yield()`.
+- **`syscall/usermode.s`** - `run_ring3_test(entry, userStack)`: builds a
+  fake `iretq` frame (the same trick `interrupts.s` already relies on for
+  returning *from* an interrupt, just used here to enter ring3 for the
+  first time) and jumps into it. Never returns the normal way - there's
+  no ring3 "exit" mechanism yet (that needs a real process to exit *to*,
+  milestone 12+) - instead `syscall.mc`'s syscall dispatcher, for one
+  specific syscall number, pops this function's saved registers directly
+  and `ret`s, faking a normal return without ever going back through
+  `isr_syscall`'s `iretq` - the exact same "save an rsp, later load it
+  and pop+ret" trick `switch_context` already uses, just for a one-shot
+  privilege transition instead of an ongoing task switch.
 - **`kmain.mc`** and its imports - everything past "here's the vector
   number," in ordinary MiniC. `kmain.mc` itself is just the entry point
   (`_start`) plus an `import` of every module above, using nothing beyond
@@ -132,11 +153,23 @@ shell/            the interactive shell
   `yield()`'s task-selection scan skips blocked tasks (waking one up the
   moment its wake tick arrives) instead of always picking "whoever's
   next" - task 0 (the shell) never blocks itself, which is what
-  guarantees the scan always finds something runnable. `shell/shell.mc`
+  guarantees the scan always finds something runnable. `syscall/
+  syscall.mc`'s `syscall_dispatch(num, arg1, arg2, arg3)` is what
+  `boot/interrupts.s`'s `isr_syscall` calls for every `int 0x80` - the
+  calling convention (`rax` = number in / return value out, `rdi`/`rsi`/
+  `rdx` = up to three arguments) is this kernel's own, since going
+  through a software interrupt gate rather than the `SYSCALL`/`SYSRET`
+  instruction pair means there's no fixed convention to inherit. The
+  `ring3` shell command runs a one-shot test through the whole path:
+  `allocFrame` + `mapPage` (with the user bit, `0x06`) for a ring3-only
+  stack, `run_ring3_test` into it, two `int 0x80` calls that print (and
+  echo back the `cs` register's value, so the serial log has direct,
+  checkable proof of which ring it actually ran in - `0x1B & 3 == 3`),
+  then the exit syscall back to ring0. `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
-  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`echo <text>`)
-  built on `drivers/keyboard.mc`'s line buffer.
+  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`ring3`/
+  `echo <text>`) built on `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -218,6 +251,11 @@ free frames: 0x7bbe / 0x40000
 mapped 0x40000000 -> 0x422000, wrote/read 0xcafebabe
 > tasks
 task1: 0x1dc3 task2: 0x1dc4 task3: 0x2a38d9720 task4: 0x131 ticks: 0x3b8c
+> ring3
+entering ring3...
+ring3 alive, cs=0x1b
+ring3 alive again, cs=0x1b
+back in ring0 - ring3 roundtrip verified
 > echo hello world
 hello world
 ```
@@ -253,6 +291,18 @@ identical before and after a `reset` that follows a grow, since `reset`
 is specifically designed to reuse already-mapped pages rather than
 re-`mapPage`-ing them (which would leak a frame per byte remapped).
 
+That `ring3` result is the milestone 11 proof: `cs=0x1b` twice over
+(`0x1B & 3 == 3` for the ring, `0x1B >> 3 == 3` for the GDT index -
+exactly the ring3 code segment `boot.s` set up, not a coincidence or a
+stale value) shows code genuinely ran at CPL 3, not just that a syscall
+"happened" - a plain `int 0x80` would succeed from *any* ring targeting
+a DPL=3 gate, so the CS readback is what actually rules out "still
+secretly in ring0." Two round trips back to back rules out "worked once
+by luck." And getting back to `>` afterward (not a hang, not another
+crash) proves the exit path - the one-shot `switch_context`-style
+save/restore trick in `syscall.mc` - works too, not just the initial
+entry.
+
 ## Roadmap past milestone 10
 
 Everything so far still runs in ring 0 sharing one page-table hierarchy -
@@ -264,13 +314,21 @@ top) is planned in phases, each becoming a real numbered milestone when
 its turn comes - not designed in detail this far ahead, the same way
 milestones 1-10 were each scoped just before starting them:
 
-1. **Ring 3 + syscalls** (milestone 11, next up) - a GDT ring3 segments +
-   TSS, an `int 0x80`-style syscall gate, and a minimal dispatcher -
-   proving a real ring0/ring3 privilege boundary exists at all, before
-   tackling address-space isolation as a separate concern.
-2. **Per-process address spaces** - `mm/paging.mc` gains the ability to
-   build a *new* PML4 hierarchy (not just add entries to the shared one),
-   with the scheduler switching CR3 per task.
+1. ~~**Ring 3 + syscalls** (milestone 11) - GDT ring3 segments + a TSS
+   (`RSP0` pointing at its own dedicated stack - see `int_stack_top`'s
+   comment for why sharing one with the boot stack corrupted things) + an
+   `int 0x80` syscall gate (DPL=3) + a minimal dispatcher. Address-space
+   isolation deliberately *not* tackled yet (next item) - the entire
+   static identity map is temporarily marked user-accessible instead, so
+   an ordinary MiniC function and a freshly `mapPage`'d stack are enough
+   to prove the privilege-transition mechanism itself works. Verified in
+   QEMU: two `int 0x80` round trips read back `cs=0x1B` from ring3 (CPL 3,
+   the real ring3 code segment - not just "a syscall happened", which
+   would succeed from any ring), and a `switch_context`-style one-shot
+   exit trick gets cleanly back to the shell afterward, not a hang.~~
+2. **Per-process address spaces** (next up) - `mm/paging.mc` gains the
+   ability to build a *new* PML4 hierarchy (not just add entries to the
+   shared one), with the scheduler switching CR3 per task.
 3. **A real `Process` concept + a loader** for a statically embedded
    program (no filesystem yet to load from disk).
 4. **Kernel object model + per-process handle tables** (the NT-style
@@ -303,6 +361,23 @@ around phase 7-8.
 
 ## Known limitations (on purpose, for now)
 
+- The entire static identity map is user-accessible (`boot.s`'s PML4/
+  PDPT/PD entries all carry the user bit) - meaning ring3 code today can
+  read/write/execute the *whole kernel*, not just its own memory. This is
+  milestone 11's explicitly temporary scope: proving the ring0/ring3
+  mechanism works at all, before real per-process address-space isolation
+  (milestone 12) makes "which pages are user-accessible" actually mean
+  something.
+- The ring3 test isn't scheduler-aware - it's not a `sched/task.mc` task,
+  so `runRing3Test()` disables interrupts (`cli`) around the whole thing
+  rather than risk a timer tick calling `yield()` mid-test and corrupting
+  whichever kernel task's slot happened to be "current" when it started.
+  Real ring3 tasks that coexist with preemption need a proper per-task
+  register/CR3 frame (milestone 12+), not this one-shot workaround.
+- Only one `int 0x80` syscall gate, two syscall numbers (1 = print, 2 =
+  exit the one-shot test) - no real syscall table, no arguments beyond
+  three plain integers, no pointer validation (a ring3 caller can pass
+  any address as `arg1` for syscall 1 and it gets dereferenced directly).
 - Only 5 interrupt vectors are wired up: divide-by-zero (0), GPF (13),
   page fault (14), timer (32), keyboard (33). Any other exception hits an
   empty IDT entry and triple-faults (QEMU resets) - the same

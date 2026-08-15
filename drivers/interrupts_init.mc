@@ -29,26 +29,32 @@ extern void isr13();
 extern void isr14();
 extern void irq0();
 extern void irq1();
+extern void isr_syscall();
 
 IdtEntry gIdt[256];
 IdtPointer gIdtPtr;
 
-void setIdtEntry(int vector, u64 handlerAddr) {
+// `dpl` is the *minimum* privilege level allowed to reach this gate via
+// a software `int n` - 0 for everything hardware-raised (exceptions,
+// IRQs - ring3 code should never trigger those directly), 3 for the
+// syscall gate specifically, since that's the whole point of it.
+void setIdtEntry(int vector, u64 handlerAddr, u8 dpl) {
     gIdt[vector].offsetLow = (u16) handlerAddr;
     gIdt[vector].selector = 0x08;    // the code64 selector from boot.s's GDT
     gIdt[vector].ist = 0;
-    gIdt[vector].typeAttr = 0x8E;    // present, ring0, 64-bit interrupt gate
+    gIdt[vector].typeAttr = 0x8E | (dpl << 5);   // present, DPL, 64-bit interrupt gate
     gIdt[vector].offsetMid = (u16) (handlerAddr >> 16);
     gIdt[vector].offsetHigh = (u32) (handlerAddr >> 32);
     gIdt[vector].zero = 0;
 }
 
 void idtInit() {
-    setIdtEntry(0, (u64) &isr0);
-    setIdtEntry(13, (u64) &isr13);
-    setIdtEntry(14, (u64) &isr14);
-    setIdtEntry(32, (u64) &irq0);
-    setIdtEntry(33, (u64) &irq1);
+    setIdtEntry(0, (u64) &isr0, 0);
+    setIdtEntry(13, (u64) &isr13, 0);
+    setIdtEntry(14, (u64) &isr14, 0);
+    setIdtEntry(32, (u64) &irq0, 0);
+    setIdtEntry(33, (u64) &irq1, 0);
+    setIdtEntry(0x80, (u64) &isr_syscall, 3);
 
     IdtEntry* base = gIdt;
     gIdtPtr.limit = (u16) (sizeof(IdtEntry) * 256 - 1);
