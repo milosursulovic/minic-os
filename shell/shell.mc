@@ -9,6 +9,7 @@ import "../mm/frames.mc";
 import "../mm/paging.mc";
 import "../drivers/keyboard.mc";
 import "../isr/isr.mc";
+import "../sched/task.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -16,8 +17,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks echo <text>\n");
 }
 
 void cmdClear() {
@@ -176,6 +177,15 @@ void cmdMap() {
     printHex((u64) readBack);
 }
 
+void cmdTasks() {
+    vgaPrint("task1: 0x");
+    serialPrint("task1: 0x");
+    printHex(gTask1Ticks);
+    vgaPrint(" task2: 0x");
+    serialPrint(" task2: 0x");
+    printHex(gTask2Ticks);
+}
+
 void runCommand() {
     if (streq(gLineBuffer, "help")) {
         cmdHelp();
@@ -203,6 +213,8 @@ void runCommand() {
         cmdUnframe();
     } else if (streq(gLineBuffer, "map")) {
         cmdMap();
+    } else if (streq(gLineBuffer, "tasks")) {
+        cmdTasks();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {

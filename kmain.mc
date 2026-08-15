@@ -15,6 +15,7 @@ import "mm/frames.mc";
 import "mm/paging.mc";
 import "shell/shell.mc";
 import "isr/isr.mc";
+import "sched/task.mc";
 
 void _start() {
     volatile VgaChar* vga = (volatile VgaChar*) 0xB8000;
@@ -38,12 +39,17 @@ void _start() {
     readPML4();
     asm("sti");
 
+    schedulerInit();
+    createTask(&task1Entry);
+    createTask(&task2Entry);
+
     serialPrint("interrupts live\n");
     printPrompt();
 
     while (true) {
         asm("hlt");   // the CPU sleeps here between interrupts; every timer
         // tick and keypress wakes it right back to this check
+        yield();   // give the background demo tasks a turn every time we wake up
         if (gLineReady) {
             runCommand();
             gLineReady = false;

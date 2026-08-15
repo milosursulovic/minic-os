@@ -26,9 +26,10 @@ MINICC="${MINICC:-../compiler/build-linux/minicc}"
 # its own (it only ever targets hosted 64-bit ELF), so it's prepended here.
 as --32 boot/boot.s -o boot.o
 as --32 boot/interrupts.s -o interrupts.o
+as --32 sched/switch.s -o switch.o
 "$MINICC" kmain.mc -S --freestanding -o kmain.s
 { echo ".code64"; cat kmain.s; } | as --32 -o kmain.o
-ld -m elf_i386 -T boot/linker.ld -o kernel.elf boot.o interrupts.o kmain.o
+ld -m elf_i386 -T boot/linker.ld -o kernel.elf boot.o interrupts.o switch.o kmain.o
 
 echo "built kernel/kernel.elf"
 

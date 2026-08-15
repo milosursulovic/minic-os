@@ -7,9 +7,10 @@ coalescing, growing on demand by mapping fresh physical frames rather
 than a fixed arena), a physical frame allocator driven by the multiboot
 memory map, real dynamic paging (walking/creating PML4/PDPT/PD/PT chains
 to map memory anywhere, not just inside the boot-time static identity
-map), and runs a minimal interactive shell over VGA - all real, all
-verified running in QEMU (byte-for-byte checked via the QEMU monitor's
-memory dump and `sendkey`, not just "it didn't crash").
+map), a cooperative scheduler switching between real kernel tasks on
+their own stacks, and runs a minimal interactive shell over VGA - all
+real, all verified running in QEMU (byte-for-byte checked via the QEMU
+monitor's memory dump and `sendkey`, not just "it didn't crash").
 
 Writing this surfaced six real MiniC language gaps (char literals, `char`
 arithmetic/comparisons, `sizeof`'s int-width flexibility, `break`/
@@ -31,7 +32,11 @@ writes an equivalent of this, even ones written in Rust or Zig. Same
 reasoning covers interrupt entry: saving/restoring full register state
 and normalizing "sometimes the CPU pushes an error code, sometimes it
 doesn't" into one common call is calling-convention plumbing, not
-something a MiniC function body can do to itself.
+something a MiniC function body can do to itself. A context switch is
+the same kind of gap: MiniC never keeps a value live in a register
+across a statement boundary, but switching tasks means preserving
+register state *across* what looks like one ordinary call into a
+completely different task's stack.
 
 ## Project layout
 
@@ -57,6 +62,9 @@ lib/              no-libc helpers
   strings.mc         streq/startsWith/parseHex/printHex
 isr/              interrupt dispatch
   isr.mc             interrupt_handler, called from interrupts.s's stubs
+sched/            cooperative task scheduler
+  switch.s           hand-written context switch (below what asm(...) can express)
+  task.mc            Task table, createTask/yield, two demo tasks
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -72,6 +80,12 @@ shell/            the interactive shell
   every register, call into MiniC with the vector number + error code,
   restore, `iretq`. Same "below what `asm(...)` can express" reasoning as
   boot.s.
+- **`sched/switch.s`** - `switch_context(oldRspOut, newRsp)`: pushes the
+  current task's callee-saved registers, stashes the resulting stack
+  pointer, switches to the next task's stack, pops its callee-saved
+  registers, `ret`s. Same "below `asm(...)`" reasoning again - a context
+  switch's entire point is preserving register state across what looks
+  like one ordinary call into a different task's stack.
 - **`kmain.mc`** and its imports - everything past "here's the vector
   number," in ordinary MiniC. `kmain.mc` itself is just the entry point
   (`_start`) plus an `import` of every module above, using nothing beyond
@@ -93,10 +107,16 @@ shell/            the interactive shell
   (`allocFrame` + `mapPage`, at a dedicated virtual base well clear of
   both the static identity map and the `map` command's demo page) once
   the free list runs dry, up to a 16MB cap - not the fixed `.bss` arena
-  earlier milestones used. `shell/shell.mc` is the interactive shell
-  (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/`mem`/
-  `reset`/`frame`/`unframe`/`frames`/`map`/`echo <text>`) built on
-  `drivers/keyboard.mc`'s line buffer.
+  earlier milestones used. `sched/task.mc` is a fixed table of kernel
+  tasks, each with its own `kalloc`'d stack; `createTask()` hand-builds a
+  new task's initial stack to look exactly like what `switch_context()`
+  would have left behind, with the task's entry point as a fake "return
+  address," so the first switch into it lands there via an ordinary
+  `ret`. Cooperative, not preemptive yet - `yield()` is the only thing
+  that switches tasks, round-robin. `shell/shell.mc` is the interactive
+  shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
+  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`echo <text>`)
+  built on `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -165,26 +185,28 @@ the second row) - lowercase letters, digits, space, and enter all work:
 
 ```
 > alloc
-allocated 64 bytes at 0x50000010
+allocated 64 bytes at 0x50008030
 > alloc
-allocated 64 bytes at 0x50000060
-> free 0x50000010
-freed 0x50000010
+allocated 64 bytes at 0x50008080
 > free
-freed 0x50000060
+freed 0x50008080
 > mem
-free: 0xfff0 / 0x10000
-> bigalloc
-allocated 65536 bytes at 0x50010010
-> mem
-free: 0x10fd0 / 0x21000
+free: 0x7f80 / 0x10000
 > frames
-free frames: 0x7bbd / 0x40000
+free frames: 0x7bce / 0x40000
 > map
-mapped 0x40000000 -> 0x400000, wrote/read 0xcafebabe
+mapped 0x40000000 -> 0x412000, wrote/read 0xcafebabe
+> tasks
+task1: 0x5137 task2: 0x5137
 > echo hello world
 hello world
 ```
+
+Those first two `alloc` addresses aren't right at the heap's base
+address anymore, the way they were before milestone 8 - `sched/task.mc`'s
+two demo tasks each `kalloc` a 16KB stack during boot, before the shell
+even starts, so by the time a user types `alloc` the first ~32KB of the
+heap's initial 64KB mapping is already spoken for.
 
 That `map` result proves the whole dynamic-paging chain: a frame beyond
 the multiboot memory map's low end, mapped at a virtual address a full
@@ -192,17 +214,16 @@ the multiboot memory map's low end, mapped at a virtual address a full
 back correctly - real PML4/PDPT/PD/PT walking and on-demand table
 creation, not just "didn't crash."
 
-That `bigalloc` result proves the heap's growth path specifically: the
-request (65536 bytes) doesn't fit in the 64KB heap's first free block
-(65520 bytes after its header), so `kalloc` grows the heap - `mem`
-afterward shows the total (`0x21000`) jumped by more than one page,
-confirming a real `allocFrame`+`mapPage` cycle ran rather than the
-allocation silently failing or reusing something stale. `reset` after
-a grow (not shown here) collapses the free list back to one block over
-whatever's *already* mapped without touching the frame allocator again -
-worth checking `frames`' count is unchanged before/after if you're
-verifying this by hand, since re-mapping already-mapped pages would leak
-a frame per byte otherwise.
+That `tasks` result - both counters exactly equal - is round-robin
+cooperative scheduling working as designed: the main shell loop calls
+`yield()` once per wake-up, which cascades through task1 and task2 (each
+increments its counter once, then immediately yields onward) before
+control returns to the shell, so all three "tasks" advance in lockstep.
+`bigalloc` (not shown here) forces the heap to grow past its initial
+mapping in one call - worth checking `frames`' free count is identical
+before and after a `reset` that follows a grow, since `reset` is
+specifically designed to reuse already-mapped pages rather than
+re-`mapPage`-ing them (which would leak a frame per byte remapped).
 
 ## Known limitations (on purpose, for now)
 
@@ -233,8 +254,23 @@ a frame per byte otherwise.
   specifically to avoid this; nothing enforces it automatically yet.
 - No unmap / page-table teardown - `mapPage` only ever adds entries and
   allocates frames for new table levels, never frees one back.
-- No scheduler/multitasking - one linear `_start` plus whatever the
-  timer/keyboard handlers do.
+- The scheduler is cooperative only - tasks switch when they call
+  `yield()`, not on a timer tick. A task that never yields (an infinite
+  loop with no `yield()` in it, or a bug) starves every other task and
+  the shell forever; nothing preempts it. Making the timer interrupt
+  itself trigger a switch is the natural next step, but needs more than
+  `switch_context` - the interrupt entry stub already saved the
+  interrupted task's *full* trap frame (all GP registers plus what
+  `iretq` needs) onto its stack before calling `interrupt_handler`, so a
+  preemptive switch has to swap that whole frame, not just the
+  callee-saved registers a voluntary `yield()` cares about.
+- Tasks can't exit - `sched/task.mc`'s demo tasks are infinite loops on
+  purpose; a `switch_context` `ret` into a task whose function actually
+  returned would pop whatever's next on that stack as a return address,
+  undefined behavior. No task-exit/cleanup path exists yet.
+- The scheduler has a fixed 8-task table (`sched/task.mc`'s `gTasks`) and
+  each task's 16KB stack is `kalloc`'d once and never freed - fine for a
+  handful of long-lived demo tasks, not a real process model.
 - `./build.sh` prints `warning: kmain.mc:...: unused function
   'interrupt_handler'` - a known false positive. `minicc`'s unused-
   function warning can't see that `interrupts.s` (a separate, hand-
