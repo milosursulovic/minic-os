@@ -18,6 +18,23 @@
 # boundary - but a context switch's entire point is preserving register
 # state *across* what looks like one ordinary call into a completely
 # different task's stack.
+#
+# The `sti` right before `ret` (not a stray instruction - x86 guarantees
+# the instruction immediately after `sti` executes before any interrupt
+# can be delivered, so this can't race with the `ret` itself) is what
+# makes milestone 9's preemption actually work rather than deadlock: this
+# is the ONE place execution transfers to a task, whether it's resuming
+# (mid-yield()) or running for the very first time via createTask()'s
+# fake stack. Putting the re-enable in MiniC's yield() instead - "after
+# switch_context returns" - only covers the resuming case; a chain of
+# brand-new tasks that cascade through each other without ever returning
+# (like task1 -> task2 -> task3 during task3's very first timer
+# preemption, none of whose switch_context calls have returned yet) would
+# leave interrupts globally off with nothing left to ever turn them back
+# on - task3 doesn't yield, so it would spin forever with no timer ticks
+# able to fire again. Found this the hard way: the kernel hung solid
+# (100% host CPU, no further serial output) the first time preemption was
+# wired up with `sti` in yield() instead of here.
 
 .intel_syntax noprefix
 .code64
@@ -40,4 +57,5 @@ switch_context:
     pop r12
     pop rbx
     pop rbp
+    sti
     ret

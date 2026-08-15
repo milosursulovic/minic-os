@@ -37,19 +37,26 @@ void _start() {
     pitInit();
     framesInit();
     readPML4();
-    asm("sti");
 
+    // Scheduler state must exist *before* interrupts are live - the timer
+    // ISR calls yield() unconditionally now (milestone 9's preemption),
+    // and yield() divides by gTaskCount; a timer tick landing between
+    // `sti` and schedulerInit() would hit gTaskCount==0.
     schedulerInit();
     createTask(&task1Entry);
     createTask(&task2Entry);
+    createTask(&task3Entry);
+    asm("sti");
 
     serialPrint("interrupts live\n");
     printPrompt();
 
     while (true) {
         asm("hlt");   // the CPU sleeps here between interrupts; every timer
-        // tick and keypress wakes it right back to this check
-        yield();   // give the background demo tasks a turn every time we wake up
+        // tick preempts whatever's running (including this loop) via
+        // interrupt_handler's own yield() call now - no manual yield()
+        // needed here anymore, milestone 8's cooperative one was folded
+        // into that automatic preemption.
         if (gLineReady) {
             runCommand();
             gLineReady = false;

@@ -184,6 +184,9 @@ void cmdTasks() {
     vgaPrint(" task2: 0x");
     serialPrint(" task2: 0x");
     printHex(gTask2Ticks);
+    vgaPrint(" task3: 0x");
+    serialPrint(" task3: 0x");
+    printHex(gTask3Ticks);
 }
 
 void runCommand() {

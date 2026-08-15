@@ -66,14 +66,25 @@ void yield() {
     Task* prevTask = &gTasks[prev];
     Task* nextTask = &gTasks[next];
     switch_context(&prevTask->savedRsp, nextTask->savedRsp);
+    // Execution resumes here once some other task switches back to this
+    // one. Interrupts are already back on by this point - see switch.s's
+    // comment for why the `sti` lives there and not here.
 }
 
-// ---- Demo tasks - just enough to prove real cooperative switching is
-// happening (both counters climbing over time, interleaved with the
-// shell staying responsive), not full workloads.
+// ---- Demo tasks - just enough to prove real switching is happening,
+// not full workloads. task1/task2 are cooperative (voluntary yield every
+// iteration, same as milestone 8); task3 deliberately never calls
+// yield() at all - a tight busy loop. If preemption is really working,
+// task3's counter should still climb (in big jumps - it spins for its
+// *whole* timer slice each turn, unlike task1/task2's one-increment
+// turns) *and* task1/task2/the shell should keep advancing too, proving
+// the timer forces control away from it. If preemption were broken,
+// task3 would hog the CPU forever and everything else - including the
+// shell - would hang the instant its turn came up.
 
 u64 gTask1Ticks;
 u64 gTask2Ticks;
+u64 gTask3Ticks;
 
 void task1Entry() {
     while (true) {
@@ -86,5 +97,11 @@ void task2Entry() {
     while (true) {
         gTask2Ticks = gTask2Ticks + 1;
         yield();
+    }
+}
+
+void task3Entry() {
+    while (true) {
+        gTask3Ticks = gTask3Ticks + 1;
     }
 }
