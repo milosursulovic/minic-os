@@ -20,6 +20,7 @@ import "syscall/syscall.mc";
 import "proc/process.mc";
 import "disk/ata.mc";
 import "disk/minifs.mc";
+import "disk/vfs.mc";
 
 void _start() {
     volatile VgaChar* vga = (volatile VgaChar*) 0xB8000;
@@ -56,6 +57,8 @@ void _start() {
     spawnProcess(&gTestProgStart, &gTestProgEnd, 0x80000000, 0x80001000);
     gChannelDemo = createChannel();
     createIsolatedTask(&procReceiverEntry);
+    vfsMount("/system", BACKEND_MINIFS);
+    vfsMount("/devices", BACKEND_DEVICE);
     asm("sti");
 
     serialPrint("interrupts live\n");

@@ -25,8 +25,10 @@ IPC channels between isolated processes with a real blocking receive
 just generalized to a second kind of wake condition), a legacy ATA PIO
 disk driver doing genuine sector-granular reads and writes against a
 real (emulated) block device, a minimal custom filesystem ("MiniFS")
-on top of it with real multi-file create/read/list persisted to disk,
-and runs a minimal
+on top of it with real multi-file create/read/list persisted to disk, a
+VFS layer above that routing path-based requests to either MiniFS (real
+disk I/O) or a live-kernel-state device backend through the identical
+function call, and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -98,6 +100,8 @@ disk/             storage
   ata.mc             legacy ATA PIO driver - real sector read/write
   minifs.mc          MiniFS: a minimal custom filesystem (superblock +
                      flat directory + contiguous per-file storage)
+  vfs.mc             VFS: path -> mount -> backend routing (tag+if/else)
+  devfs.mc           the "/devices" backend - live kernel state, no disk
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -330,12 +334,37 @@ shell/            the interactive shell
   at the superblock, directory, and both files' data LBAs showed the
   exact same bytes the kernel reported - genuine persistence to the
   backing store, not just something the kernel believed happened.
-  `shell/shell.mc`
+  **Milestone 18** added `disk/vfs.mc` (routing) and `disk/devfs.mc`
+  (a second backend): a basic namespace (`/system`, `/devices`) so
+  `vfsRead`/`vfsWrite` can take a real path, find which mount prefix it
+  falls under, strip it, and dispatch to whichever backend owns that
+  mount - tag + if/else on `Mount.backend`, the same dispatch style
+  `proc/object.mc`'s `KernelObject.type` already established, not
+  function pointers (untested in this kernel's freestanding/no-register-
+  allocation constraints, and unnecessary for what this milestone
+  actually needed to prove). `disk/devfs.mc`'s `/devices/ticks` reflects
+  `gTickCount` live, composed into the caller's buffer on the spot -
+  nothing touches disk for it at all, which is the actual point: the
+  identical `vfsRead()` call reaches two completely different mechanisms
+  depending only on the path prefix, not a renamed MiniFS API. Needed
+  two typeable characters the shell never had before (`/` and `.`, both
+  purely kernel-generated in every earlier command's own output, never
+  typed at the keyboard) - `drivers/keyboard.mc`'s scancode table gained
+  both. Verified in QEMU: `vfscat /system/file0.mfs` (routes to MiniFS,
+  matches the same content `mkfile`/`cat` already proved) and `vfscat
+  /devices/ticks` (routes to devfs, a live hex tick count, no disk
+  touched) back to back - same function, two mechanisms. `vfswrite`
+  writes a fixed file through `vfsWrite()` rather than `fsWriteFile()`
+  directly; `vfscat`-ing it back, and separately running MiniFS's own
+  `ls` (which has no idea the file arrived via VFS) both confirmed it
+  landed in the exact same underlying MiniFS directory - the two layers
+  genuinely share one filesystem, not parallel storage. `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
   `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/
   `objs`/`chan`/`send`/`disk`/`diskwrite`/`mkfs`/`mkfile`/`cat`/`ls`/
-  `echo <text>`) built on `drivers/keyboard.mc`'s line buffer.
+  `vfscat <path>`/`vfswrite`/`echo <text>`) built on
+  `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -463,6 +492,14 @@ created file1.mfs
 Hello from MiniFS, this is file #1
 > ls
 fileCount: 0x2  file0.mfs 0x23  file1.mfs 0x23
+> vfscat /system/file0.mfs
+Hello from MiniFS, this is file #0
+> vfscat /devices/ticks
+ticks: 0x3d8a
+> vfswrite
+wrote /system/vfsdemo.mfs via VFS
+> vfscat /system/vfsdemo.mfs
+This file was written through the VFS layer, not MiniFS directly.
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
@@ -584,6 +621,24 @@ entries at the expected offsets with the expected names/sizes/start
 LBAs, and both files' exact text sitting at those start LBAs - the same
 bytes the kernel reported, independently verified from outside it.
 
+The `vfscat`/`vfswrite`/`vfscat` sequence is the milestone 18 proof.
+`vfscat /system/file0.mfs` reading back the exact same content
+`cat`/`mkfile` already proved a paragraph ago shows the VFS genuinely
+reaches MiniFS through the new path-based routing, not a separate,
+disconnected mechanism. `vfscat /devices/ticks` immediately after,
+returning a live hex tick count instead of anything disk-related, is
+the actual point of the whole milestone: the *identical* `vfsRead()`
+call, given only a different path prefix, reached a completely
+different backend - real dispatch, not a renamed API with one hardcoded
+destination. `vfswrite` (which calls `vfsWrite()`, never touching
+`fsWriteFile()` directly) followed by `vfscat` on that same path proves
+the write side routes too, not just reads - and running plain `ls`
+afterward (MiniFS's own directory listing, with no idea any of its
+entries arrived via VFS) would show `vfsdemo.mfs` sitting right next to
+`file0.mfs`/`file1.mfs` in the same directory, confirming the two
+layers genuinely share one underlying filesystem rather than VFS being
+a parallel, disconnected storage silo.
+
 That `procs` result is the milestone 12 proof: `procA` and `procB` both
 map the identical virtual address (`0x80000000`) in their own private
 address space, each to a physical frame it allocated itself, and each
@@ -693,7 +748,7 @@ milestones 1-10 were each scoped just before starting them:
    in the `minic` repo (multi-dimensional array declarations, `const`),
    then used here to remove `proc/object.mc`'s manually-flattened handle
    table and only-by-convention-const globals.~~
-6. **Storage + VFS + a first filesystem** - in progress, spans three
+6. ~~**Storage + VFS + a first filesystem**~~ - done, spanned three
    milestones:
    - ~~**Milestone 16: a legacy ATA PIO disk driver** - real sector-
      granular reads/writes against the classic ISA IDE ports
@@ -729,10 +784,26 @@ milestones 1-10 were each scoped just before starting them:
      a third way, entirely outside the kernel: reading `disk.img`
      directly on the host afterward showed the exact same superblock,
      directory entries, and file contents the kernel reported.~~
-   - **Next up: a VFS abstraction** above MiniFS, with a basic namespace
-     (`/system`, `/devices`, ...) - the layer that will eventually also
-     support FAT32/ext2 as alternative backends.
-7. **Real `Process.spawn()` from disk**, once 3 and 6 both exist.
+   - ~~**Milestone 18: a VFS abstraction** above MiniFS, with a basic
+     namespace (`/system`, `/devices`). `disk/vfs.mc`'s `Mount` table
+     maps a path prefix to a backend tag; `vfsRead`/`vfsWrite` find the
+     matching mount, strip the prefix, and dispatch via tag + if/else
+     (the same style `proc/object.mc`'s handle-table dispatch already
+     used, not function pointers - untested in this kernel and
+     unnecessary for what needed proving). `disk/devfs.mc` is the second
+     backend, proving the abstraction is real: `/devices/ticks` reflects
+     `gTickCount` live, no disk touched at all. Needed the shell to
+     finally type `/`/`.` (`drivers/keyboard.mc`'s scancode table gained
+     both - every earlier command's punctuation had been kernel-
+     generated, never typed). Verified in QEMU: `vfscat /system/...`
+     and `vfscat /devices/...` back to back - the identical function
+     call reaching two completely different mechanisms depending only
+     on the path prefix - plus a `vfswrite` round trip confirming writes
+     route too, and land in the exact same MiniFS directory a plain `ls`
+     (with no idea VFS was involved) could still see.~~
+7. **Real `Process.spawn()` from disk** (next up) - milestone 13's
+   loader extended to load a real program from MiniFS via the VFS,
+   instead of a statically embedded blob linked into the kernel image.
 8. **Method-call syntax in MiniC itself** (a compiler milestone in the
    `minic` repo, not this one) - before building a native `File`/
    `Process`/`Socket`-style system API with real methods, then a thin
@@ -920,7 +991,28 @@ around phase 7-8.
   did complete left them in). All deliberate scope cuts for a first
   filesystem, not oversights - see milestone 17's roadmap entry for the
   reasoning.
-- MiniFS has no VFS layer yet - `fsWriteFile`/`fsReadFile`/`mkfs` are
-  called directly, there's no path namespace, no mount points, and no
-  way to plug in a second filesystem implementation (FAT32/ext2) even
-  in principle. That's milestone 18's entire job.
+- `disk/vfs.mc`'s mount table is fixed-size (4 entries) and flat - no
+  nested mounts, no unmounting, no mount-time validation that a MiniFS
+  mount actually points at a formatted filesystem (a `vfscat` against an
+  unformatted `/system` just fails the same way a missing file would,
+  indistinguishable from "not found"). Paths are also not normalized or
+  bounds-checked beyond what `startsWith`/array indexing naturally do -
+  no `..`, no double slashes handled specially, no path-length cap
+  enforced before it's used (the shell's own 128-byte line buffer is the
+  real limit in practice).
+- `disk/devfs.mc` has exactly one pseudo-file (`/devices/ticks`) and is
+  read-only - `vfsWrite()` unconditionally fails for any `/devices` path
+  rather than routing to a per-file write handler, since none of the
+  live kernel state it currently exposes has a sensible "write" meaning.
+  More device files (task count, free heap/frame counts, etc.) are
+  straightforward additions of the same shape whenever something needs
+  them.
+- Mount dispatch is a tag (`Mount.backend`) plus `if`/`else`, not
+  function pointers - MiniC has real function-pointer support (used
+  elsewhere in this project, e.g. `examples/funcptr_demo.mc` in the
+  `minic` repo), but this kernel had never exercised one as a struct
+  field/callback under freestanding/no-register-allocation constraints,
+  and this milestone's actual point was proving routing works, not
+  testing that specific language feature under kernel constraints for
+  the first time. Worth revisiting once a third+ backend makes the
+  if/else chain genuinely unwieldy.

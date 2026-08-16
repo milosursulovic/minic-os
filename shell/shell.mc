@@ -16,6 +16,7 @@ import "../proc/object.mc";
 import "../proc/channel.mc";
 import "../disk/ata.mc";
 import "../disk/minifs.mc";
+import "../disk/vfs.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -23,8 +24,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite echo <text>\n");
 }
 
 void cmdClear() {
@@ -376,6 +377,44 @@ void cmdLs() {
     }
 }
 
+// Reads an arbitrary path through the VFS - "vfscat /system/file0.mfs"
+// routes to MiniFS (real disk I/O), "vfscat /devices/ticks" routes to
+// devfs (live kernel state, no disk touched at all). Same function
+// call, two completely different mechanisms depending only on the path
+// prefix - that's the actual milestone 18 proof, not the printed text.
+void cmdVfsCat() {
+    char* path = &gLineBuffer[7];   // past "vfscat "
+    u8 buf[128];
+    int n = vfsRead(path, buf, 128);
+    if (n < 0) {
+        vgaPrint("vfscat: not found");
+        serialPrint("vfscat: not found\n");
+        return;
+    }
+    buf[n] = 0;
+    char* s = (char*) &buf[0];
+    vgaPrint(s);
+    serialPrint(s);
+}
+
+// Writes a fixed demo file through the VFS (not fsWriteFile() directly)
+// to prove the write side routes too, not just reads - `vfscat` the
+// same path afterward, or plain `ls` (MiniFS's own directory listing,
+// unaware this file arrived via VFS rather than `mkfile`) to see it
+// landed in the exact same underlying MiniFS directory.
+void cmdVfsWrite() {
+    char* content = "This file was written through the VFS layer, not MiniFS directly.";
+    int len = strlen(content) + 1;   // include the null terminator, same as mkfile's content
+    bool ok = vfsWrite("/system/vfsdemo.mfs", (u8*) content, (u32) len);
+    if (ok) {
+        vgaPrint("wrote /system/vfsdemo.mfs via VFS");
+        serialPrint("wrote /system/vfsdemo.mfs via VFS\n");
+    } else {
+        vgaPrint("vfswrite failed");
+        serialPrint("vfswrite failed\n");
+    }
+}
+
 void cmdChan() {
     vgaPrint("receiver got: 0x");
     serialPrint("receiver got: 0x");
@@ -491,6 +530,10 @@ void runCommand() {
         cmdCat();
     } else if (streq(gLineBuffer, "ls")) {
         cmdLs();
+    } else if (startsWith(gLineBuffer, "vfscat ")) {
+        cmdVfsCat();
+    } else if (streq(gLineBuffer, "vfswrite")) {
+        cmdVfsWrite();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {

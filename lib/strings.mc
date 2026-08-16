@@ -13,6 +13,14 @@ bool streq(char* a, char* b) {
     return a[i] == b[i];
 }
 
+int strlen(char* s) {
+    int i = 0;
+    while (s[i] != '\0') {
+        i = i + 1;
+    }
+    return i;
+}
+
 bool startsWith(char* s, char* prefix) {
     int i = 0;
     while (prefix[i] != '\0') {
@@ -71,4 +79,31 @@ void printHex(u64 value) {
     }
     vgaPrint(&buf[i + 1]);
     serialPrint(&buf[i + 1]);
+}
+
+// Same digit-generation logic as printHex, but writes into a caller-
+// owned buffer (no null terminator) and returns the digit count instead
+// of printing - milestone 18's devices VFS backend needs hex text
+// composed into a byte buffer, not sent straight to VGA/serial.
+int formatHex(u64 value, u8* out) {
+    char* digits = "0123456789abcdef";
+    char buf[16];
+    if (value == 0) {
+        out[0] = (u8) digits[0];
+        return 1;
+    }
+    int i = 15;
+    while (value > 0 && i >= 0) {
+        u64 nibble = value % 16;
+        buf[i] = digits[nibble];
+        value = value / 16;
+        i = i - 1;
+    }
+    int len = 15 - i;
+    int j = 0;
+    while (j < len) {
+        out[j] = (u8) buf[i + 1 + j];
+        j = j + 1;
+    }
+    return len;
 }
