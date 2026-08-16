@@ -15,9 +15,10 @@ ring0/ring3 privilege boundary with a working syscall gate (`int 0x80`),
 real per-process address-space isolation (each task can get its own PML4,
 switched on every context switch, with a private region no other task can
 see even at the identical virtual address), a real loader that copies a
-hand-assembled machine-code blob into a freshly cloned address space and
-schedules it as a genuine preemptible ring3 task (not a MiniC function
-pretending), a kernel object model with per-process handle tables (ring3
+real, `minicc`-compiled MiniC program into a freshly cloned address space
+and schedules it as a genuine preemptible ring3 task (not a MiniC
+function of the *kernel's own* address space pretending), a kernel
+object model with per-process handle tables (ring3
 code only ever sees a small integer, never a raw kernel pointer, and an
 out-of-range or never-allocated handle is rejected rather than trusted),
 IPC channels between isolated processes with a real blocking receive
@@ -96,8 +97,16 @@ syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
   syscall.mc         syscall dispatcher
 proc/             process loading + the kernel object model + IPC
-  testprog.s         hand-assembled, position-independent ring3 "program" -
-                     an opaque blob, not a MiniC function
+  ring3prog.mc       a real, minicc-compiled MiniC ring3 "program" -
+                     the loaded blob; see ring3.ld/ring3blob.s for how a
+                     compiled program's separate ELF sections get
+                     flattened into the one contiguous blob the loader
+                     below expects
+  ring3.ld           standalone linker script for ring3prog.mc's own
+                     link (keeps .text/.rodata/.data/.bss contiguous)
+  ring3blob.s        wraps the objcopy'd flat blob in gTestProgStart/
+                     gTestProgEnd, same marker names every earlier
+                     milestone's hand-assembled testprog.s exported
   process.mc         Process table + spawnProcess()/spawnProcessFromPath():
                      the real loader, from a pointer range or a VFS path
   object.mc          KernelObject table + per-process handle tables
@@ -152,17 +161,36 @@ shell/            the interactive shell
   rsp, bypassing `isr_syscall`'s `iretq`) for its now-retired one-shot
   ring3 demo - removed in milestone 13, see `proc/process.mc`'s comment
   for why keeping it around actively conflicted with real per-task ring3.
-- **`proc/testprog.s`** - a tiny, hand-assembled ring3 "program": two
-  `int 0x80` print syscalls with a message living inside the blob itself,
-  then spins forever. Deliberately *not* MiniC compiled into the kernel
-  image (that would just be milestone 11/12's demo trick again - kernel
-  code with a borrowed address space, not a real loader) - the kernel
-  treats it as opaque bytes it never inspects beyond copying them.
-  Position-independent by construction (`lea reg, [rip+label]`, never an
-  absolute `offset label`) since it gets *copied* to a virtual address
-  that has nothing to do with wherever it happens to link inside this
-  kernel image - RIP-relative offsets survive that copy unchanged as
-  long as the whole blob moves as one contiguous unit.
+- **`proc/ring3prog.mc`** - the loaded ring3 "program": real MiniC, compiled
+  by `minicc --freestanding`, as of milestone 21 (`proc/testprog.s`, a
+  hand-assembled version, is what this replaced). Same behavior as the
+  old hand-assembled version: two `int 0x80` print syscalls with an
+  embedded message, a self-handle query and an invalid-handle query each
+  printed, then spins forever. Still deliberately *not* linked straight
+  into the kernel image the way `kmain.mc` is (that would put its
+  `.text` and `.rodata` in different places than a simple byte-range copy
+  can handle - see `proc/ring3.ld`) - the kernel still treats the final
+  flattened blob as opaque bytes it never inspects beyond copying them,
+  same as before. Position-independent by construction, same reasoning
+  as ever (every global/string addressed `[rip+label]`, every call a
+  plain relative `call name` - this codegen's ordinary conventions,
+  not anything special-cased for this file), but now that guarantee only
+  holds because `ring3.ld`'s standalone link keeps `.text`/`.rodata`/
+  `.data`/`.bss` contiguous - if this were linked into `kernel.elf`
+  directly instead, `ld` would separate them from every other object's
+  same-named sections and break the RIP-relative offsets between them.
+  `asm(...)`'s lack of operand binding means syscall arguments can't be
+  received in a register and used immediately - `doSyscall()` stages
+  them into globals first, loads them into `rax`/`rdi`/`rsi` from
+  `[rip+global]` right before `int 0x80`, same pattern every other
+  `asm()` block in this kernel already uses.
+- **`proc/ring3.ld`** / **`proc/ring3blob.s`** - the standalone link +
+  `objcopy -O binary` + `.incbin` pipeline that turns `ring3prog.mc`'s
+  compiled output into one flat, contiguous blob and re-exports it under
+  the same `gTestProgStart`/`gTestProgEnd` symbol names the old
+  hand-assembled `testprog.s` always used - see `build.sh` for the exact
+  steps. Nothing in `proc/process.mc`, `kmain.mc`, or `shell.mc` needed
+  to change: only how those bytes get produced is new.
 - **`proc/process.mc`** - `spawnProcess(imageStart, imageEnd, loadVaddr,
   stackVaddr)`: the real loader. Clones a fresh address space
   (`mm/paging.mc`'s `cloneAddressSpace()`), maps and copies the image
@@ -543,7 +571,7 @@ wrote /system/vfsdemo.mfs via VFS
 > vfscat /system/vfsdemo.mfs
 This file was written through the VFS layer, not MiniFS directly.
 > install
-installed /system/testprog.bin, 0xd0 bytes
+installed /system/testprog.bin, 0x250 bytes
 > spawn
 spawned process 0x1
 > ps
@@ -583,10 +611,11 @@ re-`mapPage`-ing them (which would leak a frame per byte remapped).
 
 The two `hello from a LOADED process!` lines, printed automatically
 before the shell even shows its first prompt, are the milestone 13
-proof: `proc/testprog.s` is hand-assembled machine code the kernel never
-compiled, copied by `spawnProcess()` into a freshly cloned private
-address space and jumped into via `run_ring3_test()` - two real `int
-0x80` syscalls from inside that loaded, executing code, printing a
+proof: `proc/ring3prog.mc` (real, `minicc`-compiled MiniC as of
+milestone 21 - hand-assembled machine code the kernel never compiled
+before that) gets copied by `spawnProcess()` into a freshly cloned
+private address space and jumped into via `run_ring3_test()` - two real
+`int 0x80` syscalls from inside that loaded, executing code, printing a
 message that lives *inside the blob itself*, not a kernel string. Milestone
 11's old `ring3` shell command (`cs=0x1b` readback proving CPL 3) is
 retired - `spawnProcess()`'s task takes over that proof and more: it's
@@ -688,9 +717,11 @@ layers genuinely share one underlying filesystem rather than VFS being
 a parallel, disconnected storage silo.
 
 The `install`/`spawn`/`ps` sequence is the milestone 19 proof. `install`
-writing `0xd0` (208) bytes - the real, host-verifiable size of `proc/
-testprog.s`'s assembled blob - confirms the compiled-in program
-genuinely reached disk through `vfsWrite()`. `spawn` then reads it back
+writing `0x250` (592) bytes - the real, host-verifiable size of `proc/
+ring3prog.mc`'s compiled-and-flattened blob (`0xd0`/208 bytes back when
+this was `proc/testprog.s`'s hand-assembled version, pre-milestone-21) -
+confirms the compiled-in program genuinely reached disk through
+`vfsWrite()`. `spawn` then reads it back
 and launches a second process; the loaded program's own two greeting
 prints appearing a second time in the log, followed by *its own* `handle
 0 (self) -> taskIndex` syscall reading back a task index different from
@@ -902,9 +933,40 @@ milestones 1-10 were each scoped just before starting them:
    syntax sugar, not a new dispatch mechanism - no vtables, no
    inheritance, no operator overloading; this kernel's own tag+if/else
    "polymorphic" routing (`proc/object.mc`, `disk/vfs.mc`) is untouched
-   by it. See `minic`'s `examples/methods_demo.mc`.~~ Next up: a native
-   `File`/`Process`/`Socket`-style system API with real methods, then a
-   thin POSIX compatibility shim over it.
+   by it. See `minic`'s `examples/methods_demo.mc`.~~
+   ~~**Milestone 21: a real compiled-MiniC program running in ring3** -
+   every ring3 program until now was hand-assembled (`proc/testprog.s`);
+   `spawnProcess()`'s loader is a dead-simple "copy one contiguous byte
+   range, jump to its first byte" model, which doesn't survive unmodified
+   for anything `minicc` compiles, since string literals land in
+   `.rodata` and globals in `.bss`/`.data` - separate ELF sections that
+   `ld` groups by type across every input object, breaking contiguity
+   the moment the compiled object links straight into `kernel.elf`
+   alongside everything else. Fixed with a build-step change, not a
+   compiler change: `proc/ring3prog.mc` (the new, real MiniC replacement
+   for testprog.s) gets its own **separate** standalone link
+   (`proc/ring3.ld`, `.text`/`.rodata`/`.data`/`.bss` placed contiguously
+   with nothing else's sections in between) and gets flattened with
+   `objcopy -O binary` before being wrapped in the same
+   `gTestProgStart`/`gTestProgEnd` markers everything downstream already
+   used - zero changes needed in `proc/process.mc`, `kmain.mc`, or
+   `shell.mc`. `asm(...)` has no operand binding (nothing lives in a
+   register across a statement boundary in this codegen), so the new
+   `doSyscall(num, arg1, arg2)` helper stages arguments into globals
+   first, same pattern every other `asm()` block in this kernel already
+   uses. Verified byte-for-byte identical behavior to the old
+   hand-assembled version at every call site that used it: the boot-time
+   automatic spawn, and the milestone-19 `install`+`spawn` disk path
+   (which now installs a 0x250-byte compiled blob instead of the old
+   0xd0-byte hand-assembled one, but produces identical message text and
+   a correctly distinct `taskIndex` for the second process). Full
+   regression pass (`tasks`/`procs`/`ps`/`objs`/`chan`+`send`/`disk`/
+   `diskwrite`/`mkfs`/`mkfile`/`cat`/`ls`/`vfscat`/`vfswrite`/`alloc`/
+   `map`) stayed clean.~~ Next up: milestone 22, a native
+   `File`/`Process`/`Socket`-style system API with real methods (built on
+   milestone 20's syntax and milestone 21's now-proven compiled-ring3-
+   program pipeline), then milestone 23, a thin POSIX compatibility shim
+   over it.
 9. **Capability/permission system** on top of the handle table, then
    security hardening (NX/ASLR/sandboxing).
 10. **A real driver framework (PCI enumeration) + networking** (NIC
