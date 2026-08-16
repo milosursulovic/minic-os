@@ -19,6 +19,7 @@ import "../mm/frames.mc";
 import "../mm/paging.mc";
 import "../sched/task.mc";
 import "../syscall/syscall.mc";
+import "object.mc";
 
 extern u8 gTestProgStart;
 extern u8 gTestProgEnd;
@@ -107,5 +108,15 @@ int spawnProcess(u8* imageStart, u8* imageEnd, u64 loadVaddr, u64 stackVaddr) {
     gProcesses[procIndex].cr3 = cr3;
     gProcesses[procIndex].taskIndex = taskIndex;
     gProcessCount = gProcessCount + 1;
+    gTasks[taskIndex].processIndex = procIndex;
+
+    // Every process gets a handle to itself for free, in the one well-
+    // known slot ("handle 0 = myself") - its own handle table starts
+    // completely empty, so the very first allocation into it is
+    // guaranteed to land in slot 0. Ring3 code can rely on that without
+    // needing a syscall just to discover its own handle.
+    int selfObject = allocObject(OBJ_PROCESS, procIndex);
+    allocHandle(procIndex, selfObject);
+
     return procIndex;
 }

@@ -17,13 +17,16 @@
 # moves as one contiguous unit and the *relative* distance between an
 # instruction and gTestProgMsg never changes.
 #
-# What it does: two `int 0x80` syscalls (number 1 = print) with a
-# message living inside the blob itself - proving these are genuinely
-# the loaded bytes executing at the loaded address under the process's
-# own private address space, not a kernel string or a kernel function
-# pretending - then spins forever, preemptible by the timer exactly like
-# any other task (task3Entry's whole reason for existing, just proven
-# here for a ring3 context for the first time).
+# What it does: two `int 0x80` print syscalls (number 1) with a message
+# living inside the blob itself - proving these are genuinely the loaded
+# bytes executing at the loaded address under the process's own private
+# address space, not a kernel string or a kernel function pretending -
+# then (milestone 14) two handle-query syscalls (number 3): one against
+# handle 0 (every process's well-known "handle to myself"), one against
+# handle 99 (never allocated, deliberately invalid), printing whatever
+# comes back from each so the serial log holds a real positive and a
+# real negative result side by side - then spins forever, preemptible by
+# the timer exactly like any other task.
 
 .intel_syntax noprefix
 .code64
@@ -42,10 +45,34 @@ gTestProgStart:
     mov rax, 1
     int 0x80
 
+    # handle 0 = myself (guaranteed by spawnProcess()) - should resolve
+    # to this process's own taskIndex, checkable against `ps`'s output.
+    mov rax, 3
+    mov rdi, 0
+    int 0x80
+    mov rsi, rax
+    lea rdi, [rip + gMsgSelfHandle]
+    mov rax, 1
+    int 0x80
+
+    # handle 99 was never allocated - should come back as the -1
+    # sentinel (0xffffffffffffffff), not garbage and not a crash.
+    mov rax, 3
+    mov rdi, 99
+    int 0x80
+    mov rsi, rax
+    lea rdi, [rip + gMsgBadHandle]
+    mov rax, 1
+    int 0x80
+
 spin:
     jmp spin
 
 gTestProgMsg:
     .asciz "hello from a LOADED process! 0x"
+gMsgSelfHandle:
+    .asciz "handle 0 (self) -> taskIndex 0x"
+gMsgBadHandle:
+    .asciz "handle 99 (invalid) -> 0x"
 
 gTestProgEnd:

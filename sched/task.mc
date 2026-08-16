@@ -32,6 +32,7 @@ struct Task {
     u64 cr3;        // this task's address space (milestone 12)
     u64 ring3EntryVaddr;    // 0 = plain kernel task; else jump here via run_ring3_test (milestone 13)
     u64 ring3UserStackTop;  // only meaningful when ring3EntryVaddr != 0
+    int processIndex;       // -1 = plain kernel task; else an index into gProcesses[] (milestone 14)
 }
 
 Task gTasks[8];
@@ -68,6 +69,7 @@ bool createTaskWithCr3(fn() -> void entry, u64 cr3) {
     t->savedRsp = (u64) sp;
     t->used = true;
     t->cr3 = cr3;
+    t->processIndex = -1;   // plain kernel task by default - 0 would wrongly look like gProcesses[0]
     gTaskCount = gTaskCount + 1;
     return true;
 }

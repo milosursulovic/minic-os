@@ -14,6 +14,9 @@ import "../drivers/io.mc";
 import "../lib/strings.mc";
 import "../mm/frames.mc";
 import "../mm/paging.mc";
+import "../sched/task.mc";
+import "../proc/process.mc";
+import "../proc/object.mc";
 
 extern void run_ring3_test(u64 entry, u64 userStack);
 
@@ -40,6 +43,17 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // demo entirely, rather than trying to make two incompatible mechanisms
 // coexist - milestone 13's real mechanism proves everything it did
 // (ring3 entry + syscalls + CPL) and more, so nothing is lost.
+// num 3: resolve arg1 as a handle *within the calling process's own
+// handle table* (milestone 14) and return a piece of ground-truth info
+// about whatever it points to - for a process object, its taskIndex,
+// independently checkable against the `ps` shell command's own output.
+// A handle that's out of range, never allocated, or belongs to a plain
+// kernel task with no handle table at all (gTasks[...].processIndex < 0
+// - can't happen for real ring3 code today, since only spawnProcess()
+// tasks ever reach syscall_dispatch from ring3, but checked anyway since
+// arg1 is caller-controlled) all return the same -1 sentinel rather than
+// trusting the index or crashing - the entire point of a handle table
+// over a raw array index.
 u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     if (num == 1) {
         char* s = (char*) arg1;
@@ -48,6 +62,21 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
         printHex(arg2);
         serialPrint("\n");
         return 0;
+    }
+    if (num == 3) {
+        int callerProcess = gTasks[gCurrentTask].processIndex;
+        if (callerProcess < 0) {
+            return (u64) -1;
+        }
+        int objIndex = resolveHandle(callerProcess, (int) arg1);
+        if (objIndex < 0) {
+            return (u64) -1;
+        }
+        if (gObjects[objIndex].type == OBJ_PROCESS) {
+            int procIdx = gObjects[objIndex].dataIndex;
+            return (u64) gProcesses[procIdx].taskIndex;
+        }
+        return (u64) -1;
     }
     return (u64) -1;   // unknown syscall
 }

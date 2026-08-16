@@ -17,7 +17,10 @@ switched on every context switch, with a private region no other task can
 see even at the identical virtual address), a real loader that copies a
 hand-assembled machine-code blob into a freshly cloned address space and
 schedules it as a genuine preemptible ring3 task (not a MiniC function
-pretending), and runs a minimal
+pretending), a kernel object model with per-process handle tables (ring3
+code only ever sees a small integer, never a raw kernel pointer, and an
+out-of-range or never-allocated handle is rejected rather than trusted),
+and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -79,10 +82,11 @@ sched/            preemptive task scheduler
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
   syscall.mc         syscall dispatcher
-proc/             process loading
+proc/             process loading + the kernel object model
   testprog.s         hand-assembled, position-independent ring3 "program" -
                      an opaque blob, not a MiniC function
   process.mc         Process table + spawnProcess(): the real loader
+  object.mc          KernelObject table + per-process handle tables
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -234,11 +238,29 @@ shell/            the interactive shell
   the moment a real preemptible ring3 task could also be mid-suspension
   when the demo fired. Fixed by retiring the demo entirely rather than
   coordinating two incompatible mechanisms - see `syscall/syscall.mc`'s
-  comment for the full diagnosis. `shell/shell.mc`
+  comment for the full diagnosis. **Milestone 14** added `proc/
+  object.mc`: a kernel-wide `KernelObject` table plus a *separate*
+  per-process handle table (`gHandleTables`, flattened to one array since
+  MiniC has no 2D array declarations - process P's handle H lives at
+  `gHandleTables[P * HANDLES_PER_PROCESS + H]`), the NT-style piece of
+  the long-term plan. `resolveHandle(processIndex, handle)` is the one
+  place a small ring3-supplied integer gets turned into an object index
+  - bounds-checked and existence-checked, never trusted as a raw array
+  index. `spawnProcess()` gives every new process a handle to itself for
+  free, guaranteed to land in slot 0 (a fresh handle table is empty, so
+  the first allocation into it always takes slot 0) - "handle 0 =
+  myself," no syscall needed just to discover it. `sched/task.mc`'s
+  `Task` gained a `processIndex` field (-1 for plain kernel tasks) so
+  `syscall_dispatch` can find *whose* handle table a syscall's handle
+  argument should be resolved against. New syscall number 3 (query
+  handle) returns a process object's `taskIndex` - arbitrary but real
+  ground truth, independently checkable against the `ps` shell command's
+  own output - or the same `-1` sentinel `resolveHandle` returns
+  whenever the handle doesn't check out. `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
   `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/
-  `echo <text>`) built on `drivers/keyboard.mc`'s line buffer.
+  `objs`/`echo <text>`) built on `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -310,6 +332,8 @@ Hello from a MiniC kernel!
 hello from a LOADED process! 0xc0ffee
 interrupts live
 hello from a LOADED process! 0xc0ffee
+handle 0 (self) -> taskIndex 0x7
+handle 99 (invalid) -> 0xffffffffffffffff
 > alloc
 allocated 64 bytes at 0x5000c040
 > alloc
@@ -330,6 +354,8 @@ hello world
 procA: 0xaaaaaaaa @phys 0x426000 procB: 0xbbbbbbbb @phys 0x429000
 > ps
 processes: 0x1 proc0 task=0x7 cr3=0x426000
+> objs
+objects: 0x1 obj0 type=0x1 dataIndex=0x0
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
@@ -376,6 +402,25 @@ scheduled like any other task, interleaved with the boot sequence and
 the rest of the demo tasks without any `cli` wrapping, and `ps`'s
 `proc0 task=0x7 cr3=0x426000` confirms it's a real, queryable process
 object, not just something that ran once and vanished.
+
+The `handle 0 (self) -> taskIndex 0x7` / `handle 99 (invalid) ->
+0xffffffffffffffff` lines are the milestone 14 proof, and they're a
+matched positive/negative pair on purpose. The first shows the loaded
+ring3 process resolving its *own* well-known handle (0) all the way
+through to a piece of kernel ground truth (`taskIndex`) - `0x7` is
+exactly what `ps` independently reports for this same process later in
+the same session, which is the actual point: two different paths (a
+ring3 syscall's handle lookup, and the shell's direct table read) landed
+on the identical number, meaning the handle genuinely resolved through
+`gObjects`/`gProcesses` rather than being hardcoded or coincidental. The
+second shows a handle number that was never allocated (99, past the
+8-per-process limit *and* never assigned even if it weren't) coming back
+as the same `-1` sentinel `resolveHandle()` returns for any invalid
+handle - not garbage, not a crash - proving the bounds/existence check
+is real, not decorative. `objs`' `obj0 type=0x1 dataIndex=0x0` confirms
+the object side directly: exactly one `KernelObject` exists, its type is
+`OBJ_PROCESS` (`1`), and it points at `gProcesses[0]` - the same process
+`ps` and the ring3 self-handle both already agreed on.
 
 That `procs` result is the milestone 12 proof: `procA` and `procB` both
 map the identical virtual address (`0x80000000`) in their own private
@@ -451,11 +496,20 @@ milestones 1-10 were each scoped just before starting them:
    from ring3 at boot, and the shell stayed fully responsive through a
    full regression pass afterward (the exact sequence that hung before
    the fix).~~
-4. **Kernel object model + per-process handle tables** (next up, the
-   NT-style piece) - userspace gets handles, never raw kernel pointers.
-   `proc/process.mc`'s `Process` table is the natural place this attaches
-   to.
-5. **IPC channels** between isolated processes - reuses milestone 10's
+4. ~~**Kernel object model + per-process handle tables** (milestone 14,
+   the NT-style piece) - `proc/object.mc`'s `KernelObject` table plus a
+   *separate* per-process handle table (`resolveHandle(processIndex,
+   handle)` is the one place a ring3-supplied integer becomes an object
+   index - bounds-checked, never trusted directly). Every process gets a
+   handle to itself for free in the well-known slot 0. New syscall number
+   3 resolves a handle within the *calling* process's own table.
+   Verified in QEMU: a loaded process resolving its own handle 0 gets
+   back its `taskIndex` (`0x7`), independently matching what the `ps`
+   shell command reports for the same process moments later - two
+   different paths landing on the identical number, not a coincidence -
+   while an invalid handle (99, never allocated) comes back as the same
+   `-1` sentinel every failure path uses, not garbage or a crash.~~
+5. **IPC channels** (next up) between isolated processes - reuses milestone 10's
    `sleep()`/blocking mechanism for blocking `receive()`.
 6. **Storage + VFS + a first filesystem** - ATA PIO driver, a minimal
    custom filesystem, then a VFS layer above it (FAT32/ext2 as later
@@ -504,13 +558,25 @@ around phase 7-8.
   real constraint the next milestone that spawns multiple processes must
   address, not an oversight to rediscover the hard way.
 - `cloneAddressSpace()`'s PML4/PDPT/PT frames (and a spawned process's
-  image/stack frames) are never freed - there's no process teardown at
-  all yet (nothing calls `freeFrame` on any of it), consistent with the
-  kernel having no process *exit* mechanism at all so far.
-- Only one `int 0x80` syscall gate, one syscall number (1 = print) - no
-  real syscall table, no arguments beyond three plain integers, no
-  pointer validation (a ring3 caller can pass any address as `arg1` and
-  it gets dereferenced directly).
+  image/stack frames, and now its `KernelObject`/handle-table entries)
+  are never freed - there's no process teardown at all yet (nothing
+  calls `freeFrame` on any of it, no "close handle"/"free object"
+  exists), consistent with the kernel having no process *exit*
+  mechanism at all so far.
+- `proc/object.mc`'s tables are fixed-size arbitrary constants (8
+  `KernelObject`s total, 8 handles per process, matching `gProcesses`'
+  4-process cap) - fine for today's one loaded process, would need real
+  sizing (or dynamic growth) once more than a handful of objects/
+  processes exist at once.
+- Only one kernel object type exists (`OBJ_PROCESS`) - a `Task` (the
+  scheduler's own thread-of-control concept) isn't a kernel object in
+  its own right yet, unlike real NT where Process and Thread are
+  separate object types. Not a gap so much as not-yet-needed: nothing
+  today creates more than one thread per process to distinguish.
+- Only one `int 0x80` syscall gate, two syscall numbers (1 = print, 3 =
+  resolve a handle) - no real syscall table, no arguments beyond three
+  plain integers, no pointer validation (a ring3 caller can pass any
+  address as syscall 1's `arg1` and it gets dereferenced directly).
 - Only 5 interrupt vectors are wired up: divide-by-zero (0), GPF (13),
   page fault (14), timer (32), keyboard (33). Any other exception hits an
   empty IDT entry and triple-faults (QEMU resets) - the same

@@ -12,6 +12,7 @@ import "../isr/isr.mc";
 import "../sched/task.mc";
 import "../syscall/syscall.mc";
 import "../proc/process.mc";
+import "../proc/object.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -19,8 +20,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs echo <text>\n");
 }
 
 void cmdClear() {
@@ -227,6 +228,20 @@ void cmdPs() {
     }
 }
 
+void cmdObjs() {
+    vgaPrint("objects: 0x");
+    serialPrint("objects: 0x");
+    printHex((u64) gObjectCount);
+    if (gObjectCount > 0) {
+        vgaPrint(" obj0 type=0x");
+        serialPrint(" obj0 type=0x");
+        printHex((u64) gObjects[0].type);
+        vgaPrint(" dataIndex=0x");
+        serialPrint(" dataIndex=0x");
+        printHex((u64) gObjects[0].dataIndex);
+    }
+}
+
 void runCommand() {
     if (streq(gLineBuffer, "help")) {
         cmdHelp();
@@ -260,6 +275,8 @@ void runCommand() {
         cmdProcs();
     } else if (streq(gLineBuffer, "ps")) {
         cmdPs();
+    } else if (streq(gLineBuffer, "objs")) {
+        cmdObjs();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {
