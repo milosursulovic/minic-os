@@ -18,8 +18,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks ring3 echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks ring3 echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks ring3 procs echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks ring3 procs echo <text>\n");
 }
 
 void cmdClear() {
@@ -196,6 +196,21 @@ void cmdTasks() {
     printHex(gTickCount);
 }
 
+void cmdProcs() {
+    vgaPrint("procA: 0x");
+    serialPrint("procA: 0x");
+    printHex((u64) gProcAValue);
+    vgaPrint(" @phys 0x");
+    serialPrint(" @phys 0x");
+    printHex(gProcAPhys);
+    vgaPrint(" procB: 0x");
+    serialPrint(" procB: 0x");
+    printHex((u64) gProcBValue);
+    vgaPrint(" @phys 0x");
+    serialPrint(" @phys 0x");
+    printHex(gProcBPhys);
+}
+
 void cmdRing3() {
     vgaPrint("entering ring3...");
     serialPrint("entering ring3...\n");
@@ -240,6 +255,8 @@ void runCommand() {
         cmdTasks();
     } else if (streq(gLineBuffer, "ring3")) {
         cmdRing3();
+    } else if (streq(gLineBuffer, "procs")) {
+        cmdProcs();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {

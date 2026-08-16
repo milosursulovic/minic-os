@@ -12,7 +12,10 @@ their own stacks - the timer interrupt forces a switch, not just
 voluntary `yield()` - with real blocking (`sleep()` takes a task out of
 the round-robin until a given tick, not just "always ready"), a real
 ring0/ring3 privilege boundary with a working syscall gate (`int 0x80`),
-and runs a minimal interactive shell over VGA - all real, all verified
+real per-process address-space isolation (each task can get its own PML4,
+switched on every context switch, with a private region no other task can
+see even at the identical virtual address), and runs a minimal
+interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
 
@@ -61,14 +64,15 @@ drivers/          hardware setup and I/O
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via mm/paging.mc
   frames.mc          multiboot memory map parser + physical frame bitmap allocator
-  paging.mc          dynamic PML4/PDPT/PD/PT paging
+  paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address spaces
 lib/              no-libc helpers
   strings.mc         streq/startsWith/parseHex/printHex
 isr/              interrupt dispatch
   isr.mc             interrupt_handler, called from interrupts.s's stubs
 sched/            preemptive task scheduler
   switch.s           hand-written context switch (below what asm(...) can express)
-  task.mc            Task table, createTask/yield/sleep, four demo tasks
+  task.mc            Task table (each with its own CR3), createTask/yield/sleep,
+                     six demo tasks (two of them isolated processes)
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
   syscall.mc         syscall dispatcher + the one-shot ring3 test
@@ -165,10 +169,34 @@ shell/            the interactive shell
   stack, `run_ring3_test` into it, two `int 0x80` calls that print (and
   echo back the `cs` register's value, so the serial log has direct,
   checkable proof of which ring it actually ran in - `0x1B & 3 == 3`),
-  then the exit syscall back to ring0. `shell/shell.mc`
+  then the exit syscall back to ring0. **Milestone 12** added
+  `mm/paging.mc`'s `cloneAddressSpace()`: a fresh PML4 whose entry 0
+  points at a fresh PDPT that shares PDPT[0] (the static identity map)
+  and PDPT[1] (heap/dynamic-demo region) with the kernel's own PDPT -
+  literally the same physical sub-tables, so kernel code/stack/heap stay
+  reachable unchanged - while everything from PDPT[2] up (virtual
+  addresses `>= 0x80000000`) starts out not-present, private to whichever
+  task gets that PML4. `mapPage` got split into `mapPageIn(pml4Phys, ...)`
+  (walks an *explicit* address space - safe from any task's context,
+  since every page-table frame `allocFrame()` hands out lives inside the
+  shared low-1GB identity map regardless of which CR3 is active) plus a
+  `mapPage(...)` convenience wrapper for the kernel's own space, and a new
+  read-only `translateIn(pml4Phys, vaddr)` walk for verifying which
+  physical frame a given address space's mapping actually points at.
+  `sched/task.mc`'s `Task` struct gained a `cr3` field; `createTask()`
+  keeps giving new tasks the kernel's own space unchanged, while
+  `createIsolatedTask()` calls `cloneAddressSpace()` first. `yield()`
+  loads the incoming task's `cr3` (via a `[rip+global]`-relayed `mov cr3`)
+  right before `switch_context()` - safe even while still running on the
+  outgoing task's stack for that one instruction, since PDPT[0]/[1] are
+  identical across every address space. Two demo tasks, `procAEntry`/
+  `procBEntry`, both map the *same* virtual address (`0x80000000`) in
+  their own private space to their own physical frame and write a
+  different constant there - proving real isolation, not just separate
+  stacks. `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
-  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`ring3`/
+  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`ring3`/`procs`/
   `echo <text>`) built on `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
@@ -258,6 +286,8 @@ ring3 alive again, cs=0x1b
 back in ring0 - ring3 roundtrip verified
 > echo hello world
 hello world
+> procs
+procA: 0xaaaaaaaa @phys 0x426000 procB: 0xbbbbbbbb @phys 0x429000
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
@@ -303,6 +333,24 @@ crash) proves the exit path - the one-shot `switch_context`-style
 save/restore trick in `syscall.mc` - works too, not just the initial
 entry.
 
+That `procs` result is the milestone 12 proof: `procA` and `procB` both
+map the identical virtual address (`0x80000000`) in their own private
+address space, each to a physical frame it allocated itself, and each
+keeps reading back the exact constant it wrote there (`0xaaaaaaaa` /
+`0xbbbbbbbb`) forever, interleaved by the same preemptive scheduler
+proven in milestone 9 - if CR3 switching weren't actually happening, or
+the two "processes" secretly shared one address space, they'd be
+fighting over one real page-table entry and whichever task wrote most
+recently would win for *both* reads. The `@phys` addresses being
+different (`0x426000` vs `0x429000`) is the stronger half of the proof -
+not just "two different numbers came back," but that the *same virtual
+address* genuinely resolves to two different physical frames depending
+on which address space is asking, exactly what "isolation" has to mean.
+Repeating `procs` later in the same session (after `ring3`, `alloc`, and
+`map` all ran in between) showed byte-for-byte identical values and
+physical addresses - stable across scheduler churn, not a one-shot
+fluke.
+
 ## Roadmap past milestone 10
 
 Everything so far still runs in ring 0 sharing one page-table hierarchy -
@@ -326,11 +374,26 @@ milestones 1-10 were each scoped just before starting them:
    the real ring3 code segment - not just "a syscall happened", which
    would succeed from any ring), and a `switch_context`-style one-shot
    exit trick gets cleanly back to the shell afterward, not a hang.~~
-2. **Per-process address spaces** (next up) - `mm/paging.mc` gains the
-   ability to build a *new* PML4 hierarchy (not just add entries to the
-   shared one), with the scheduler switching CR3 per task.
-3. **A real `Process` concept + a loader** for a statically embedded
-   program (no filesystem yet to load from disk).
+2. ~~**Per-process address spaces** (milestone 12) - `mm/paging.mc` gained
+   `cloneAddressSpace()`, building a *new* PML4 that shares the kernel's
+   own PDPT[0]/PDPT[1] (identity map + heap) but leaves everything from
+   PDPT[2] up (`vaddr >= 0x80000000`) private, populated on demand via a
+   new `mapPageIn(pml4Phys, ...)` that walks an explicit address space
+   instead of always the global one. `sched/task.mc`'s `Task` gained a
+   `cr3` field; `yield()` loads it before every `switch_context()`.
+   Verified in QEMU: two demo tasks (`procAEntry`/`procBEntry`) map the
+   *identical* virtual address in their own private space to their own
+   physical frame and each reads back its own distinct constant forever -
+   critically, `translateIn()` shows that same virtual address resolving
+   to two genuinely different physical addresses depending on which
+   address space asks, not just "two different numbers came back."~~
+3. **A real `Process` concept + a loader** (next up) for a statically
+   embedded program (no filesystem yet to load from disk) - milestone
+   12's `createIsolatedTask()`/`cloneAddressSpace()` are the address-space
+   half of this; what's still missing is a real `Process` object wrapping
+   a task plus its address space, and a loader that places a program's
+   code/data into a fresh isolated space instead of a demo function
+   already linked into the kernel image.
 4. **Kernel object model + per-process handle tables** (the NT-style
    piece) - userspace gets handles, never raw kernel pointers.
 5. **IPC channels** between isolated processes - reuses milestone 10's
@@ -361,19 +424,25 @@ around phase 7-8.
 
 ## Known limitations (on purpose, for now)
 
-- The entire static identity map is user-accessible (`boot.s`'s PML4/
-  PDPT/PD entries all carry the user bit) - meaning ring3 code today can
-  read/write/execute the *whole kernel*, not just its own memory. This is
-  milestone 11's explicitly temporary scope: proving the ring0/ring3
-  mechanism works at all, before real per-process address-space isolation
-  (milestone 12) makes "which pages are user-accessible" actually mean
-  something.
-- The ring3 test isn't scheduler-aware - it's not a `sched/task.mc` task,
-  so `runRing3Test()` disables interrupts (`cli`) around the whole thing
-  rather than risk a timer tick calling `yield()` mid-test and corrupting
-  whichever kernel task's slot happened to be "current" when it started.
-  Real ring3 tasks that coexist with preemption need a proper per-task
-  register/CR3 frame (milestone 12+), not this one-shot workaround.
+- The shared region every address space carries (PDPT[0]/PDPT[1] - the
+  static identity map plus the heap) is still marked user-accessible
+  (`boot.s`'s PML4/PDPT/PD entries all carry the user bit), so ring3 code
+  can still read/write/execute the *whole kernel and every other task's
+  shared memory* - milestone 12 gave each task a genuinely private
+  region (`vaddr >= 0x80000000`), but didn't restrict what the *shared*
+  region looks like to unprivileged code. That needs a real memory-
+  protection pass once actual user processes exist (milestone 13+), not
+  just an address-space topology change.
+- The ring3 mechanism (milestone 11) and per-process address spaces
+  (milestone 12) haven't been wired together yet - `runRing3Test()` still
+  runs against the kernel's own CR3 with interrupts disabled around it,
+  not inside a real scheduled task with its own isolated space. A ring3
+  task that coexists with preemption *and* has its own address space is
+  what milestone 13's real `Process` concept needs to land.
+- `cloneAddressSpace()`'s PML4/PDPT/PT frames are never freed - there's
+  no process teardown yet (nothing calls `freeFrame` on any of a
+  process's page tables), consistent with the kernel having no process
+  *exit* mechanism at all so far, not a milestone-12-specific gap.
 - Only one `int 0x80` syscall gate, two syscall numbers (1 = print, 2 =
   exit the one-shot test) - no real syscall table, no arguments beyond
   three plain integers, no pointer validation (a ring3 caller can pass

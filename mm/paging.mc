@@ -74,16 +74,21 @@ u64* tableGetOrCreate(u64* table, u32 index) {
     return (u64*) (entry & ~((u64) 0xFFF));
 }
 
-// Maps one 4KB page: vaddr -> paddr, creating any missing PDPT/PD/PT
-// tables along the way. `flags` is OR'd into the final PT entry on top
-// of the present bit (e.g. 0x02 for writable).
-bool mapPage(u64 vaddr, u64 paddr, u64 flags) {
+// Maps one 4KB page: vaddr -> paddr in an EXPLICITLY given address
+// space, creating any missing PDPT/PD/PT tables along the way. `flags`
+// is OR'd into the final PT entry on top of the present bit (e.g. 0x02
+// for writable). Every page-table frame allocFrame() hands out lives
+// inside the flat 1GB identity map every address space shares, so this
+// is a plain pointer walk regardless of which CR3 is currently loaded -
+// kernel code can build up a process's private mappings without ever
+// switching into it first.
+bool mapPageIn(u64 pml4Phys, u64 vaddr, u64 paddr, u64 flags) {
     u32 i4 = (u32) ((vaddr >> 39) & 0x1FF);
     u32 i3 = (u32) ((vaddr >> 30) & 0x1FF);
     u32 i2 = (u32) ((vaddr >> 21) & 0x1FF);
     u32 i1 = (u32) ((vaddr >> 12) & 0x1FF);
 
-    u64* pml4 = (u64*) gPML4Phys;
+    u64* pml4 = (u64*) pml4Phys;
     u64* pdpt = tableGetOrCreate(pml4, i4);
     if (pdpt == null) {
         return false;
@@ -98,6 +103,90 @@ bool mapPage(u64 vaddr, u64 paddr, u64 flags) {
     }
 
     pt[i1] = (paddr & ~((u64) 0xFFF)) | (flags & 0xFFF) | 0x01;
-    invalidatePage(vaddr);
+    if (pml4Phys == gPML4Phys) {
+        invalidatePage(vaddr);   // only meaningful for the currently-loaded space
+    }
     return true;
+}
+
+// Maps into the currently-loaded (kernel) address space - every caller
+// before milestone 12 (the heap, the `map` demo, the ring3 test stack)
+// keeps working unchanged.
+bool mapPage(u64 vaddr, u64 paddr, u64 flags) {
+    return mapPageIn(gPML4Phys, vaddr, paddr, flags);
+}
+
+// Read-only walk of an explicit address space, returning the physical
+// address `vaddr` resolves to there (or 0 if any level isn't present -
+// physical address 0 is never a real answer, the frame allocator's
+// first allocatable frame starts well above the low-memory reservation).
+// Used to prove two processes' identical virtual addresses land on
+// genuinely different physical frames, not just that they read back
+// different values (which a cache or a coincidence could also explain).
+u64 translateIn(u64 pml4Phys, u64 vaddr) {
+    u32 i4 = (u32) ((vaddr >> 39) & 0x1FF);
+    u32 i3 = (u32) ((vaddr >> 30) & 0x1FF);
+    u32 i2 = (u32) ((vaddr >> 21) & 0x1FF);
+    u32 i1 = (u32) ((vaddr >> 12) & 0x1FF);
+
+    u64* pml4 = (u64*) pml4Phys;
+    if ((pml4[i4] & 1) == 0) {
+        return 0;
+    }
+    u64* pdpt = (u64*) (pml4[i4] & ~((u64) 0xFFF));
+    if ((pdpt[i3] & 1) == 0) {
+        return 0;
+    }
+    u64* pd = (u64*) (pdpt[i3] & ~((u64) 0xFFF));
+    if ((pd[i2] & 1) == 0) {
+        return 0;
+    }
+    u64* pt = (u64*) (pd[i2] & ~((u64) 0xFFF));
+    if ((pt[i1] & 1) == 0) {
+        return 0;
+    }
+    return (pt[i1] & ~((u64) 0xFFF)) | (vaddr & 0xFFF);
+}
+
+// Builds a brand-new address space for a process: a fresh PML4 whose
+// entry 0 points to a fresh PDPT that shares PDPT[0] (boot.s's static
+// identity-mapped huge pages - kernel code/stack/GDT/IDT/TSS all live
+// here) and PDPT[1] (the dynamic heap/demo region every task's stack
+// already comes from, via kalloc) with the kernel's own PDPT - literally
+// the same physical sub-tables, not copies, so a write through either
+// address space is visible through the other there. Everything from
+// PDPT[2] up (vaddr >= 0x80000000) is left NOT present - private to
+// whichever process this becomes, populated on demand the first time it
+// calls mapPageIn() there. This is what makes two processes mapping the
+// same private-region virtual address land on different physical frames:
+// they get separate PD/PT chains for that region, created independently.
+u64 cloneAddressSpace() {
+    void* newPml4Frame = allocFrame();
+    if (newPml4Frame == null) {
+        return 0;
+    }
+    void* newPdptFrame = allocFrame();
+    if (newPdptFrame == null) {
+        return 0;
+    }
+    zeroPage(newPml4Frame);
+    zeroPage(newPdptFrame);
+
+    u64* kernelPml4 = (u64*) gPML4Phys;
+    u64* kernelPdpt = (u64*) (kernelPml4[0] & ~((u64) 0xFFF));
+    u64* newPdpt = (u64*) newPdptFrame;
+    newPdpt[0] = kernelPdpt[0];   // shared: static identity map
+    newPdpt[1] = kernelPdpt[1];   // shared: heap / dynamic-demo region
+
+    u64* newPml4 = (u64*) newPml4Frame;
+    newPml4[0] = ((u64) newPdptFrame) | 0x07;   // present + writable + user
+
+    return (u64) newPml4Frame;
+}
+
+u64 gCr3ToLoad;
+
+void loadCr3(u64 phys) {
+    gCr3ToLoad = phys;
+    asm("mov rax, [rip+gCr3ToLoad]\nmov cr3, rax");
 }

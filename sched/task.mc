@@ -18,6 +18,8 @@
 // waking one up (clearing `blocked`) the moment its wake tick arrives.
 
 import "../mm/heap.mc";
+import "../mm/frames.mc";
+import "../mm/paging.mc";
 import "../isr/isr.mc";
 
 extern void switch_context(u64* oldRspOut, u64 newRsp);
@@ -27,6 +29,7 @@ struct Task {
     bool used;
     bool blocked;
     u64 wakeTick;   // only meaningful while blocked
+    u64 cr3;        // this task's address space (milestone 12)
 }
 
 Task gTasks[8];
@@ -35,11 +38,12 @@ int gCurrentTask;
 
 void schedulerInit() {
     gTasks[0].used = true;
+    gTasks[0].cr3 = gPML4Phys;   // the shell/main loop keeps using the boot-time kernel space
     gTaskCount = 1;
     gCurrentTask = 0;
 }
 
-bool createTask(fn() -> void entry) {
+bool createTaskWithCr3(fn() -> void entry, u64 cr3) {
     if (gTaskCount >= 8) {
         return false;
     }
@@ -61,8 +65,27 @@ bool createTask(fn() -> void entry) {
     Task* t = &gTasks[gTaskCount];
     t->savedRsp = (u64) sp;
     t->used = true;
+    t->cr3 = cr3;
     gTaskCount = gTaskCount + 1;
     return true;
+}
+
+// Every task before milestone 12 (task1-4) shares the kernel's own
+// address space - identical behavior to before this milestone existed.
+bool createTask(fn() -> void entry) {
+    return createTaskWithCr3(entry, gPML4Phys);
+}
+
+// A task with its own private address space (see paging.mc's
+// cloneAddressSpace()) - kernel code/heap stay reachable exactly as
+// before, but anything this task maps at or past 0x80000000 is genuinely
+// private to it.
+bool createIsolatedTask(fn() -> void entry) {
+    u64 cr3 = cloneAddressSpace();
+    if (cr3 == 0) {
+        return false;
+    }
+    return createTaskWithCr3(entry, cr3);
 }
 
 void yield() {
@@ -91,6 +114,13 @@ void yield() {
     gCurrentTask = next;
     Task* prevTask = &gTasks[prev];
     Task* nextTask = &gTasks[next];
+    // Loading CR3 here, before the stack switch, is safe even though
+    // we're still running on prevTask's stack for one more instruction:
+    // cloneAddressSpace() guarantees every task's PDPT[0]/PDPT[1] (all
+    // kernel code, the current stack, the heap) resolve identically
+    // across every address space - only the private per-process region
+    // (vaddr >= 0x80000000) can differ, and nothing here touches that.
+    loadCr3(nextTask->cr3);
     switch_context(&prevTask->savedRsp, nextTask->savedRsp);
     // Execution resumes here once some other task switches back to this
     // one. Interrupts are already back on by this point - see switch.s's
@@ -158,5 +188,48 @@ void task4Entry() {
     while (true) {
         gTask4Ticks = gTask4Ticks + 1;
         sleep(50);
+    }
+}
+
+// ---- Milestone 12 demo: two isolated "processes" both map the SAME
+// virtual address (well past anything else this kernel uses) in their
+// OWN private address space, each to a physical frame nobody else knows
+// about, and write a distinct, recognizable constant there. If CR3
+// switching + per-process PDPT[2..] isolation genuinely works, each
+// keeps reading back its own value forever and their two demo pages
+// resolve to different physical addresses. If it were broken - CR3 never
+// actually switching, or the two processes secretly sharing one address
+// space - both would read back whichever value was written most
+// recently, and translateIn() would show the SAME physical address for
+// both, since there'd only really be one page table entry for that vaddr
+// in the whole system either way.
+
+u64 gDemoVaddr = 0x80000000;   // 2GB - PDPT index 2, untouched by any earlier milestone
+u32 gProcAValue;
+u32 gProcBValue;
+u64 gProcAPhys;
+u64 gProcBPhys;
+
+void procAEntry() {
+    void* frame = allocFrame();
+    mapPageIn(gTasks[gCurrentTask].cr3, gDemoVaddr, (u64) frame, 0x06);   // writable + user
+    u32* p = (u32*) gDemoVaddr;
+    *p = 0xAAAAAAAA;
+    while (true) {
+        gProcAValue = *p;
+        gProcAPhys = translateIn(gTasks[gCurrentTask].cr3, gDemoVaddr);
+        yield();
+    }
+}
+
+void procBEntry() {
+    void* frame = allocFrame();
+    mapPageIn(gTasks[gCurrentTask].cr3, gDemoVaddr, (u64) frame, 0x06);   // writable + user
+    u32* p = (u32*) gDemoVaddr;
+    *p = 0xBBBBBBBB;
+    while (true) {
+        gProcBValue = *p;
+        gProcBPhys = translateIn(gTasks[gCurrentTask].cr3, gDemoVaddr);
+        yield();
     }
 }

@@ -48,6 +48,8 @@ void _start() {
     createTask(&task2Entry);
     createTask(&task3Entry);
     createTask(&task4Entry);
+    createIsolatedTask(&procAEntry);
+    createIsolatedTask(&procBEntry);
     asm("sti");
 
     serialPrint("interrupts live\n");
