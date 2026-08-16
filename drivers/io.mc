@@ -30,6 +30,24 @@ u8 inb(u16 port) {
     return gInByte;
 }
 
+u16 gOutWord;
+u16 gInWord;
+
+// 16-bit port I/O - milestone 16's ATA PIO driver transfers a sector's
+// bytes two at a time through the data port, not one at a time like
+// every earlier port-I/O user (VGA/keyboard/PIT) needed.
+void outw(u16 port, u16 value) {
+    gOutPort = port;
+    gOutWord = value;
+    asm("mov dx, [rip+gOutPort]\nmov ax, [rip+gOutWord]\nout dx, ax");
+}
+
+u16 inw(u16 port) {
+    gInPort = port;
+    asm("mov dx, [rip+gInPort]\nin ax, dx\nmov [rip+gInWord], ax");
+    return gInWord;
+}
+
 void serialPutc(u8 c) {
     outb(0x3F8, c);
 }

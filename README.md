@@ -22,7 +22,9 @@ code only ever sees a small integer, never a raw kernel pointer, and an
 out-of-range or never-allocated handle is rejected rather than trusted),
 IPC channels between isolated processes with a real blocking receive
 (reusing the exact same scheduler mechanism `sleep()` already proved,
-just generalized to a second kind of wake condition), and runs a minimal
+just generalized to a second kind of wake condition), a legacy ATA PIO
+disk driver doing genuine sector-granular reads and writes against a
+real (emulated) block device, and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -90,6 +92,8 @@ proc/             process loading + the kernel object model + IPC
   process.mc         Process table + spawnProcess(): the real loader
   object.mc          KernelObject table + per-process handle tables
   channel.mc         Channel table + channelSend/channelHasMessage
+disk/             storage
+  ata.mc             legacy ATA PIO driver - real sector read/write
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -282,12 +286,28 @@ shell/            the interactive shell
   task1-4 + procA/procB + the one spawned ring3 process, so the two new
   demo tasks silently failed to create (`createTaskWithCr3` returning
   `false`, unchecked) - fixed by growing the table to 16 with headroom,
-  not just enough for today. `shell/shell.mc`
+  not just enough for today. **Milestone 16** added `disk/ata.mc`: a
+  legacy ATA PIO driver talking directly to the classic ISA IDE ports
+  (`0x1F0`-`0x1F7`, primary bus) - the first real storage I/O this
+  kernel has ever done, same hand-rolled direct-port-I/O style as VGA/
+  keyboard/PIT before it. `drivers/io.mc` gained `outw`/`inw` (16-bit
+  port I/O) since the ATA data port genuinely transfers a sector two
+  bytes at a time, not one - every earlier port-I/O user only ever
+  needed 8 bits. Polling, not interrupt-driven (one fewer moving part to
+  prove the basic path works, same reasoning cooperative scheduling came
+  before preemptive), with a *bounded* wait instead of a bare
+  `while (busy) {}` - a missing/misconfigured drive fails cleanly after
+  ~1,000,000 spins instead of hanging the kernel forever on hardware
+  that isn't there. `build.sh disk` creates a small (1MB, 2048-sector)
+  raw disk image with a known ASCII signature at LBA 1 and zeros
+  everywhere else - not a filesystem yet (that's milestone 17+), just
+  known bytes at known addresses so read/write have something real to
+  check themselves against. `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
   `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/
-  `objs`/`chan`/`send`/`echo <text>`) built on `drivers/keyboard.mc`'s
-  line buffer.
+  `objs`/`chan`/`send`/`disk`/`diskwrite`/`echo <text>`) built on
+  `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -302,9 +322,12 @@ for any other layout.
 
 ```bash
 ./build.sh          # assembles boot.s, compiles+assembles kmain.mc, links kernel.elf
-./build.sh run       # also boots it in QEMU (curses display, in-terminal)
+./build.sh run       # also boots it in QEMU (curses display, in-terminal), with a disk attached
 ./build.sh iso       # also packages a GRUB-bootable minic-os.iso
+./build.sh disk      # (re)builds disk.img - a 1MB test disk image (milestone 16+), gitignored
 ```
+
+`./build.sh run` builds `disk.img` automatically if it isn't already there (a fixed, regenerated-from-scratch test fixture, not real data - see the ATA driver's writeup below) and attaches it via QEMU's `-drive`. Booting and every command *except* `disk`/`diskwrite` work identically with or without it.
 
 ## Running outside QEMU (VirtualBox, VMware, real hardware)
 
@@ -328,9 +351,12 @@ For VirtualBox specifically:
 
 1. New VM - Type "Other", Version "Other/Unknown (64-bit)". No guest
    additions, no EFI (this kernel boots via legacy BIOS + GRUB).
-2. Give it a small amount of RAM (128MB+ is plenty) and skip creating a
-   virtual hard disk - this kernel doesn't touch one.
-3. Settings → Storage → attach `minic-os.iso` as the optical drive.
+2. Give it a small amount of RAM (128MB+ is plenty). A virtual hard disk
+   is optional - the kernel boots fine without one, only the `disk`/
+   `diskwrite` shell commands (milestone 16+) need one actually attached.
+3. Settings → Storage → attach `minic-os.iso` as the optical drive, and
+   (optionally, for disk commands) attach `disk.img` (`./build.sh disk`)
+   as a plain IDE hard disk on the same controller.
 4. Start the VM - GRUB's menu appears, boots straight into the kernel.
 
 VMware and real hardware (via a USB stick written with `dd` or similar)
@@ -345,7 +371,9 @@ minicc's output gets a `.code64` directive prepended before assembly (it
 only ever targets hosted 64-bit ELF on its own, so it doesn't emit one
 itself).
 
-To check output without a display, redirect the serial port to a file:
+To check output without a display, redirect the serial port to a file
+(add `-drive file=disk.img,format=raw,if=ide` too if testing `disk`/
+`diskwrite`):
 
 ```bash
 qemu-system-x86_64 -kernel kernel.elf -display none -serial file:serial.log -no-reboot
@@ -391,6 +419,10 @@ receiver got: 0x0 value=0x0
 sent 0xc0ffee1234
 > chan
 receiver got: 0x1 value=0xc0ffee1234
+> disk
+sector 1: MiniC ATA PIO driver - milestone 16 signature sector
+> diskwrite
+write+readback verified, 512/512 bytes match
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
@@ -477,6 +509,24 @@ ever being polled from the shell - `yield()`'s scan found
 does for an expired `sleep()`. The message genuinely crossed from one
 isolated address space to another through the channel, not shared
 memory.
+
+The `disk`/`diskwrite` results are the milestone 16 proof, and like
+milestone 15's, they're a deliberate two-part check rather than one.
+`disk` reads LBA 1 and gets back the *exact* signature string
+`build.sh disk` wrote there from the host side, before the kernel ever
+booted - proving the driver can read real, independently-verifiable
+content off the (emulated) disk, not a coincidence or a cached value
+the kernel already had lying around. `diskwrite` then writes a distinct
+512-byte pattern (`0x00 0x01 0x02 ... 0xFF` repeating) to a different
+LBA and reads it straight back, reporting `512/512 bytes match` -
+proving the write path independently of the read path (a bug that
+happened to cancel out between the two would still show up as `0x00`
+read back for whatever was written, not a byte-exact match on a
+256-value repeating pattern). Checked independently a third way outside
+the kernel entirely: reading `disk.img` directly on the host at LBA
+100's byte offset after the test showed the identical pattern already
+sitting there, confirming the write reached the actual backing file,
+not just something the kernel believed had happened.
 
 That `procs` result is the milestone 12 proof: `procA` and `procB` both
 map the identical virtual address (`0x80000000`) in their own private
@@ -587,9 +637,28 @@ milestones 1-10 were each scoped just before starting them:
    in the `minic` repo (multi-dimensional array declarations, `const`),
    then used here to remove `proc/object.mc`'s manually-flattened handle
    table and only-by-convention-const globals.~~
-6. **Storage + VFS + a first filesystem** (next up) - ATA PIO driver, a
-   minimal custom filesystem, then a VFS layer above it (FAT32/ext2 as
-   later backends).
+6. **Storage + VFS + a first filesystem** - in progress, spans three
+   milestones:
+   - ~~**Milestone 16: a legacy ATA PIO disk driver** - real sector-
+     granular reads/writes against the classic ISA IDE ports
+     (`0x1F0`-`0x1F7`), polling rather than interrupt-driven, with a
+     *bounded* busy-wait (fails cleanly after ~1,000,000 spins instead
+     of hanging forever if no drive is attached). `drivers/io.mc` gained
+     `outw`/`inw` (16-bit port I/O) - the data port transfers a sector
+     two bytes at a time, the first port-I/O user in this kernel that
+     needed more than 8 bits. `build.sh disk` builds a small (1MB) test
+     disk image with a known signature at a known LBA. Verified in QEMU
+     three independent ways: reading back the exact host-written
+     signature at LBA 1 (proves real reads), a 512-byte write-then-read
+     round trip matching byte-for-byte at a different LBA (proves real
+     writes, independently of the read path), and confirming that
+     written pattern directly in the host's `disk.img` file afterward
+     (proves the write reached the actual backing store, not just
+     something the kernel believed).~~
+   - **Next up: a minimal custom filesystem** ("MiniFS" - simpler than
+     FAT32/ext2 for a first pass; those come later as additional VFS
+     backends, the whole point of having a VFS layer at all), then the
+     VFS abstraction itself above that.
 7. **Real `Process.spawn()` from disk**, once 3 and 6 both exist.
 8. **Method-call syntax in MiniC itself** (a compiler milestone in the
    `minic` repo, not this one) - before building a native `File`/
@@ -719,13 +788,16 @@ around phase 7-8.
   purpose; a `switch_context` `ret` into a task whose function actually
   returned would pop whatever's next on that stack as a return address,
   undefined behavior. No task-exit/cleanup path exists yet.
-- `sleep()` blocks by tick count only - no wait-on-event (I/O completion,
-  another task finishing, a semaphore/mutex) yet, and no way for one task
-  to wake another early. `yield()`'s scan for a runnable task is O(n) in
-  the task count every call, fine for the handful of tasks here.
-- The scheduler has a fixed 8-task table (`sched/task.mc`'s `gTasks`) and
-  each task's 16KB stack is `kalloc`'d once and never freed - fine for a
-  handful of long-lived demo tasks, not a real process model.
+- `sleep()` blocks by tick count, and milestone 15's `channelReceive()`
+  added a real wait-on-message primitive - but there's still no
+  semaphore/mutex, no wait-on-I/O-completion, and no way for one task to
+  wake another early except by sending it a message. `yield()`'s scan
+  for a runnable task is O(n) in the task count every call, fine for the
+  handful of tasks here.
+- The scheduler has a fixed-size task table (`sched/task.mc`'s
+  `gTasks[16]` as of milestone 15) and each task's 16KB stack is
+  `kalloc`'d once and never freed - fine for a handful of long-lived
+  demo tasks, not a real process model.
 - `./build.sh` prints `warning: kmain.mc:...: unused function
   'interrupt_handler'` - a known false positive. `minicc`'s unused-
   function warning can't see that `interrupts.s` (a separate, hand-
@@ -744,3 +816,19 @@ around phase 7-8.
 - Interrupt handlers don't save/restore SSE/XMM state - fine today since
   nothing running at interrupt time uses floats, a real gap once
   something does.
+- `disk/ata.mc` talks only to the primary bus's master drive (port base
+  `0x1F0`, drive-select byte hardcoded to `0xE0 | ...`) - no secondary
+  bus, no slave drive, no drive detection/identification (`IDENTIFY`
+  command) to confirm a drive is even there before trying to use it. No
+  AHCI/NVMe, no PCI enumeration to find controllers dynamically - all
+  later work, see the roadmap.
+- The ATA driver is polling-only (busy-waits on the status register), not
+  interrupt-driven - simpler to get right first, same reasoning PIO came
+  before AHCI/NVMe, but it means a disk operation blocks whichever task
+  issued it (and, since `int 0x80`/hardware interrupts aren't disabled
+  during the wait, everything else keeps preempting normally around it -
+  just not the caller itself) rather than yielding the CPU while waiting.
+- `disk.img` (via `build.sh disk`) is a fixed-size (1MB/2048-sector), raw,
+  unpartitioned image with one known signature string and otherwise all
+  zeros - a test fixture for proving the driver works, not a filesystem
+  or a partition table. Milestone 17 needs both.

@@ -14,6 +14,7 @@ import "../syscall/syscall.mc";
 import "../proc/process.mc";
 import "../proc/object.mc";
 import "../proc/channel.mc";
+import "../disk/ata.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -21,8 +22,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite echo <text>\n");
 }
 
 void cmdClear() {
@@ -199,6 +200,67 @@ void cmdTasks() {
     printHex(gTickCount);
 }
 
+// Reads LBA 1, a sector the disk image is pre-populated with (from the
+// host side, before boot - see build.sh's disk-image step) with a known
+// ASCII signature followed by zero-fill. Printing it as a string is
+// safe precisely because of that zero-fill: the byte right after the
+// signature is a real null terminator, not luck.
+void cmdDisk() {
+    u8 buf[512];
+    bool ok = ataReadSector(1, buf);
+    if (!ok) {
+        vgaPrint("disk read failed");
+        serialPrint("disk read failed\n");
+        return;
+    }
+    char* s = (char*) &buf[0];
+    vgaPrint("sector 1: ");
+    serialPrint("sector 1: ");
+    vgaPrint(s);
+    serialPrint(s);
+}
+
+// Writes a fixed pattern to LBA 100 (arbitrary, clear of the signature
+// sector) and immediately reads it back into a SEPARATE buffer -
+// comparing the two proves a real round trip through the driver, not
+// just "a write instruction executed" or "a read instruction executed."
+void cmdDiskWrite() {
+    u8 writeBuf[512];
+    int i = 0;
+    while (i < 512) {
+        writeBuf[i] = (u8) (i & 0xFF);
+        i = i + 1;
+    }
+    bool wrote = ataWriteSector(100, writeBuf);
+    if (!wrote) {
+        vgaPrint("disk write failed");
+        serialPrint("disk write failed\n");
+        return;
+    }
+    u8 readBuf[512];
+    bool read = ataReadSector(100, readBuf);
+    if (!read) {
+        vgaPrint("disk write ok, readback failed");
+        serialPrint("disk write ok, readback failed\n");
+        return;
+    }
+    bool match = true;
+    i = 0;
+    while (i < 512) {
+        if (writeBuf[i] != readBuf[i]) {
+            match = false;
+        }
+        i = i + 1;
+    }
+    if (match) {
+        vgaPrint("write+readback verified, 512/512 bytes match");
+        serialPrint("write+readback verified, 512/512 bytes match\n");
+    } else {
+        vgaPrint("MISMATCH - write or read is broken");
+        serialPrint("MISMATCH - write or read is broken\n");
+    }
+}
+
 void cmdChan() {
     vgaPrint("receiver got: 0x");
     serialPrint("receiver got: 0x");
@@ -302,6 +364,10 @@ void runCommand() {
         cmdChan();
     } else if (streq(gLineBuffer, "send")) {
         cmdSend();
+    } else if (streq(gLineBuffer, "disk")) {
+        cmdDisk();
+    } else if (streq(gLineBuffer, "diskwrite")) {
+        cmdDiskWrite();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {
