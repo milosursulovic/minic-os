@@ -4,6 +4,10 @@ A multiboot1 kernel written in MiniC (plus a handful of hand-written `.s` files 
 
 This repo is one of three siblings under `d:\Projects\minic` — see `../CLAUDE.md` for the multi-repo layout and the git-discipline rule. This repo depends on `../compiler/` existing as a sibling checkout (`build.sh`'s default `MINICC` path assumes it).
 
+## No external libraries — everything is hand-written
+
+Every subsystem in this kernel is implemented from scratch in MiniC (or hand-written `.s` for what's genuinely below what `asm(...)` can express — boot/interrupt entry, context switching, ring3 entry). Never link against, port in, or adapt an existing library or reference implementation — no borrowed drivers, no FAT32/ext2 implementation ported in, no lwIP-style TCP/IP stack, no compression/crypto library. The only exception is the assembler/linker toolchain itself (`as`/`ld`). This has been true for every milestone so far (heap, scheduler, paging, every driver including the ATA PIO one) and applies just as much to what's still ahead — the filesystem (milestones 17-18) and the networking phase especially, since those are exactly where reaching for an existing implementation would otherwise be tempting.
+
 ## Building
 
 ```bash
