@@ -20,6 +20,7 @@ import "../mm/paging.mc";
 import "../sched/task.mc";
 import "../syscall/syscall.mc";
 import "object.mc";
+import "../disk/vfs.mc";
 
 extern u8 gTestProgStart;
 extern u8 gTestProgEnd;
@@ -119,4 +120,25 @@ int spawnProcess(u8* imageStart, u8* imageEnd, u64 loadVaddr, u64 stackVaddr) {
     allocHandle(procIndex, selfObject);
 
     return procIndex;
+}
+
+// Milestone 19: "the shell launches a program" becomes genuinely real -
+// the image bytes come from a real file, read through the VFS (so
+// either backend could in principle supply them, though only MiniFS
+// makes sense for something you'd actually execute), not a pointer
+// range into the kernel's own compiled-in image. Everything past that
+// is spawnProcess() completely unchanged: loading from disk is only
+// ever "get the bytes into RAM," never a second loader.
+//
+// One page (4096 bytes) is generously more than proc/testprog.s needs
+// today - fine for this milestone's demo program, a real limit worth
+// revisiting once anything bigger needs loading.
+u8 gLoadedImageBuf[4096];
+
+int spawnProcessFromPath(char* path, u64 loadVaddr, u64 stackVaddr) {
+    int n = vfsRead(path, &gLoadedImageBuf[0], 4096);
+    if (n < 0) {
+        return -1;
+    }
+    return spawnProcess(&gLoadedImageBuf[0], &gLoadedImageBuf[(u32) n], loadVaddr, stackVaddr);
 }

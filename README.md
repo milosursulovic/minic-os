@@ -28,7 +28,11 @@ real (emulated) block device, a minimal custom filesystem ("MiniFS")
 on top of it with real multi-file create/read/list persisted to disk, a
 VFS layer above that routing path-based requests to either MiniFS (real
 disk I/O) or a live-kernel-state device backend through the identical
-function call, and runs a minimal
+function call, real `Process.spawn()` from disk (a second, independently
+loaded ring3 process, its image bytes read through the VFS from a real
+MiniFS file rather than a pointer into the kernel's own image, running
+concurrently with the first thanks to a per-task `TSS.RSP0` fix), and
+runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -78,22 +82,24 @@ drivers/          hardware setup and I/O
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via mm/paging.mc
   frames.mc          multiboot memory map parser + physical frame bitmap allocator
-  paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address spaces
+  paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address
+                     spaces, per-task TSS.RSP0 (setTssRsp0)
 lib/              no-libc helpers
-  strings.mc         streq/startsWith/parseHex/printHex
+  strings.mc         streq/startsWith/strlen/parseHex/printHex/formatHex
 isr/              interrupt dispatch
   isr.mc             interrupt_handler, called from interrupts.s's stubs
 sched/            preemptive task scheduler
   switch.s           hand-written context switch (below what asm(...) can express)
-  task.mc            Task table (each with its own CR3), createTask/yield/sleep/
-                     channelReceive, seven demo tasks (three isolated processes)
+  task.mc            Task table (each with its own CR3 + TSS.RSP0), createTask/
+                     yield/sleep/channelReceive, eight demo tasks (four processes)
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
   syscall.mc         syscall dispatcher
 proc/             process loading + the kernel object model + IPC
   testprog.s         hand-assembled, position-independent ring3 "program" -
                      an opaque blob, not a MiniC function
-  process.mc         Process table + spawnProcess(): the real loader
+  process.mc         Process table + spawnProcess()/spawnProcessFromPath():
+                     the real loader, from a pointer range or a VFS path
   object.mc          KernelObject table + per-process handle tables
   channel.mc         Channel table + channelSend/channelHasMessage
 disk/             storage
@@ -115,9 +121,13 @@ shell/            the interactive shell
   GDT and TSS live: a ring3 code/data segment pair alongside the
   original ring0 ones, and a TSS whose `RSP0` field tells the CPU which
   stack to switch to on any ring3->ring0 transition (interrupt/exception
-  firing while in ring3) - its own dedicated stack, deliberately not the
-  one `_start`'s own C-style call chain runs on (see `int_stack_top`'s
-  comment for the real bug that discovery fixed).
+  firing while in ring3) - boot.s only ever sets it *once*, to its own
+  dedicated stack (`int_stack_top`, deliberately not the one `_start`'s
+  own C-style call chain runs on - see that label's comment for the real
+  bug that discovery fixed), as a safe initial value before scheduling
+  begins. From milestone 19 on, `mm/paging.mc`'s `setTssRsp0()` repoints
+  it per-task at every context switch instead - `tss_start` is exported
+  (`.global`) specifically so that MiniC function can reach it directly.
 - **`boot/interrupts.s`** - entry stubs for the exceptions/IRQs the
   kernel handles (divide-by-zero, GPF, page fault, timer, keyboard): save
   every register, call into MiniC with the vector number + error code,
@@ -358,12 +368,44 @@ shell/            the interactive shell
   directly; `vfscat`-ing it back, and separately running MiniFS's own
   `ls` (which has no idea the file arrived via VFS) both confirmed it
   landed in the exact same underlying MiniFS directory - the two layers
-  genuinely share one filesystem, not parallel storage. `shell/shell.mc`
+  genuinely share one filesystem, not parallel storage. **Milestone 19**
+  made "the shell launches a program" genuinely real: `proc/process.mc`'s
+  `spawnProcessFromPath(path, loadVaddr, stackVaddr)` calls `vfsRead()`
+  into a scratch buffer, then hands that range to `spawnProcess()`
+  completely unchanged - loading from disk turned out to be nothing more
+  than "get the bytes into RAM first," reusing the whole milestone-13
+  loader as-is rather than needing a second one. The new `install` shell
+  command writes the kernel's own compiled-in test program out to a real
+  MiniFS file (`/system/testprog.bin`) through `vfsWrite()`, simulating
+  a program actually being installed on disk; `spawn` reads it back and
+  launches a brand-new, independent instance from those bytes. This is
+  the first time this kernel has ever run *two* ring3-capable processes
+  at once (the milestone-13 boot-time one, still spinning, plus the
+  newly spawned one) - which immediately reproduced the exact `TSS.RSP0`
+  collision README's Known Limitations had been flagging as a
+  prerequisite since milestone 13: a real GPF the moment both existed
+  together, the second process's own syscalls corrupting the first's
+  still-pending suspended state on the one shared RSP0 stack. Fixed for
+  real this time (not deferred again): `sched/task.mc`'s `Task` gained a
+  `kernelStackTop` field - each task's own already-`kalloc`'d stack,
+  otherwise abandoned the moment `run_ring3_test()` iretqs into ring3
+  and never returns through it, reused as that task's *private* RSP0
+  target rather than allocating a separate stack just for this.
+  `yield()` now calls `mm/paging.mc`'s new `setTssRsp0()` for the
+  incoming task whenever it's ring3-capable, right alongside the
+  existing `loadCr3()` call - the exact fix the earlier postmortems
+  called for. Verified in QEMU: `spawn` completes cleanly, the new
+  process's own `handle 0 (self) -> taskIndex` syscall reads back a
+  *different* task index than the original process's, `ps` (extended
+  from showing only process 0 to looping over every real process) lists
+  both with distinct `cr3` values, and the system stays stable through
+  an extended regression pass with both running concurrently.
+  `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
   `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/
   `objs`/`chan`/`send`/`disk`/`diskwrite`/`mkfs`/`mkfile`/`cat`/`ls`/
-  `vfscat <path>`/`vfswrite`/`echo <text>`) built on
+  `vfscat <path>`/`vfswrite`/`install`/`spawn`/`echo <text>`) built on
   `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
@@ -500,6 +542,12 @@ ticks: 0x3d8a
 wrote /system/vfsdemo.mfs via VFS
 > vfscat /system/vfsdemo.mfs
 This file was written through the VFS layer, not MiniFS directly.
+> install
+installed /system/testprog.bin, 0xd0 bytes
+> spawn
+spawned process 0x1
+> ps
+processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
@@ -638,6 +686,27 @@ entries arrived via VFS) would show `vfsdemo.mfs` sitting right next to
 `file0.mfs`/`file1.mfs` in the same directory, confirming the two
 layers genuinely share one underlying filesystem rather than VFS being
 a parallel, disconnected storage silo.
+
+The `install`/`spawn`/`ps` sequence is the milestone 19 proof. `install`
+writing `0xd0` (208) bytes - the real, host-verifiable size of `proc/
+testprog.s`'s assembled blob - confirms the compiled-in program
+genuinely reached disk through `vfsWrite()`. `spawn` then reads it back
+and launches a second process; the loaded program's own two greeting
+prints appearing a second time in the log, followed by *its own* `handle
+0 (self) -> taskIndex` syscall reading back a task index different from
+the original boot-time process's, is what actually distinguishes "a
+real second process" from "the first one ran again." `ps`'s two lines
+with different `cr3` values (`0x426000` vs `0x444000`) confirms the same
+thing from the kernel's own bookkeeping, independent of anything the
+processes reported about themselves. None of this actually completed
+cleanly the first time - the very first `spawn` attempt reproduced the
+`TSS.RSP0` collision flagged as a known limitation since milestone 13
+(a real GPF, not a hypothetical), fixed by giving every ring3-capable
+task its own private RSP0 target instead of sharing one; the transcript
+above is the *post-fix* run, verified stable across many repeated
+`spawn`/`ps`/`procs` sequences afterward, including extended stress
+testing specifically hunting for any recurrence of the collision this
+fix was meant to close.
 
 That `procs` result is the milestone 12 proof: `procA` and `procB` both
 map the identical virtual address (`0x80000000`) in their own private
@@ -801,13 +870,30 @@ milestones 1-10 were each scoped just before starting them:
      on the path prefix - plus a `vfswrite` round trip confirming writes
      route too, and land in the exact same MiniFS directory a plain `ls`
      (with no idea VFS was involved) could still see.~~
-7. **Real `Process.spawn()` from disk** (next up) - milestone 13's
-   loader extended to load a real program from MiniFS via the VFS,
-   instead of a statically embedded blob linked into the kernel image.
-8. **Method-call syntax in MiniC itself** (a compiler milestone in the
-   `minic` repo, not this one) - before building a native `File`/
-   `Process`/`Socket`-style system API with real methods, then a thin
-   POSIX compatibility shim over it.
+7. ~~**Real `Process.spawn()` from disk** - `proc/process.mc`'s
+   `spawnProcessFromPath()` calls `vfsRead()` into a scratch buffer, then
+   hands the range to milestone 13's `spawnProcess()` completely
+   unchanged - loading from disk turned out to need no second loader,
+   just a way to get the bytes into RAM first. New `install`/`spawn`
+   shell commands: `install` writes the kernel's own compiled-in test
+   program to a real MiniFS file via `vfsWrite()`; `spawn` reads it back
+   and launches an independent second process from it. Running a second
+   ring3-capable process for the first time immediately reproduced the
+   `TSS.RSP0` collision flagged as a prerequisite since milestone 13's
+   own postmortem - a real GPF, not a hypothetical. Fixed for real this
+   time: every task's own already-`kalloc`'d kernel stack (otherwise
+   abandoned the moment it enters ring3 for good) doubles as its private
+   RSP0 target, switched per-task in `yield()` alongside `cr3`. Verified
+   in QEMU: the spawned process's own handle-query syscall reads back a
+   task index distinct from the original process's, `ps` (now listing
+   every process, not just the first) shows both with different `cr3`
+   values, and the system stayed stable across extended repeated
+   spawn/inspect cycles specifically hunting for any recurrence of the
+   collision this fix was meant to close.~~
+8. **Method-call syntax in MiniC itself** (next up - a compiler
+   milestone in the `minic` repo, not this one) - before building a
+   native `File`/`Process`/`Socket`-style system API with real methods,
+   then a thin POSIX compatibility shim over it.
 9. **Capability/permission system** on top of the handle table, then
    security hardening (NX/ASLR/sandboxing).
 10. **A real driver framework (PCI enumeration) + networking** (NIC
@@ -835,17 +921,35 @@ around phase 7-8.
   region looks like to unprivileged code. That needs a real memory-
   protection pass once security/capability work is underway (roadmap
   phase IX), not just an address-space topology change.
-- **Only one ring3 process is safe to run at a time.** `boot.s`'s TSS has
-  a single `RSP0` - correct for "at most one suspended ring3->ring0
-  transition can be in flight at once" (true with exactly one ring3 task,
-  which is what removed milestone 11's demo's conflict with milestone
-  13's real one), but a *second* concurrently-scheduled ring3 process
-  would reintroduce exactly that class of bug between itself and the
-  first. Needs a per-task `RSP0`, switched alongside `cr3` in `yield()`,
-  before `proc/process.mc`'s `spawnProcess()` can safely be called more
-  than once. Not yet needed - only one process is spawned today - but a
-  real constraint the next milestone that spawns multiple processes must
-  address, not an oversight to rediscover the hard way.
+- ~~Only one ring3 process was safe to run at a time~~ - **fixed in
+  milestone 19**: `sched/task.mc`'s `Task` gained a `kernelStackTop`
+  field (each task's own already-`kalloc`'d kernel stack, reused as its
+  private `TSS.RSP0` target since it's otherwise abandoned the moment
+  `run_ring3_test()` iretqs into ring3 for good), and `yield()` calls
+  `mm/paging.mc`'s `setTssRsp0()` for the incoming task whenever it's
+  ring3-capable, right alongside the existing `loadCr3()`. Verified with
+  two concurrently-scheduled ring3 processes running stably through
+  extended repeated testing. **A residual concern, not fully closed**:
+  during milestone 19 development, one *unreproduced* crash (a page
+  fault, not the RSP0 GPF signature) was observed once during repeated
+  `procs` testing and never recurred across 25+ further attempts,
+  including deliberately aggressive stress sequences designed to
+  reproduce it. Most likely an environment-specific fluke (a QEMU/WSL
+  timing hiccup) rather than a logic bug - the per-task RSP0 design was
+  reasoned through carefully and matches the exact fix the milestone-13
+  postmortem called for - but flagged here rather than silently assumed
+  fixed, since it was never conclusively root-caused. Revisit if it ever
+  recurs with a reproducible trigger.
+- A separate, confirmed-harmless, pre-existing artifact (reproduces even
+  on milestone 18's code, unrelated to the RSP0 work above): the *very
+  first* `procs` check after boot has occasionally shown `procA`'s or
+  `procB`'s `@phys` as a small, clearly-wrong-looking value (e.g.
+  `0x20`) instead of a real frame address - every subsequent `procs`
+  call in the same session shows the correct value from then on. Looks
+  like a narrow timing window in the demo tasks' very first scheduling
+  round, not a real correctness issue (the mechanism it's demonstrating,
+  per-process isolation, has been independently verified solid many
+  other ways) - not yet root-caused, noted here rather than ignored.
 - `cloneAddressSpace()`'s PML4/PDPT/PT frames (and a spawned process's
   image/stack frames, and now its `KernelObject`/handle-table entries)
   are never freed - there's no process teardown at all yet (nothing

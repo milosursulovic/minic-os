@@ -35,6 +35,7 @@ struct Task {
     u64 ring3UserStackTop;  // only meaningful when ring3EntryVaddr != 0
     int processIndex;       // -1 = plain kernel task; else an index into gProcesses[] (milestone 14)
     int waitingChannel;     // -1 = blocked on a tick (wakeTick), else blocked on gChannels[this] (milestone 15)
+    u64 kernelStackTop;     // this task's own TSS.RSP0 target (milestone 19) - see setTssRsp0's comment
 }
 
 // Sized with headroom past what boots today (task 0 + task1-4 + procA/
@@ -78,6 +79,15 @@ bool createTaskWithCr3(fn() -> void entry, u64 cr3) {
     t->cr3 = cr3;
     t->processIndex = -1;   // plain kernel task by default - 0 would wrongly look like gProcesses[0]
     t->waitingChannel = -1;   // not waiting on a channel by default - 0 would wrongly look like gChannels[0]
+    // This task's own kalloc'd stack, reused as its private TSS.RSP0
+    // target (milestone 19). Safe even for non-ring3 tasks (yield()
+    // only ever loads it into RSP0 for a ring3-capable task) and safe
+    // for ring3 tasks specifically because once processEntryTrampoline()
+    // -> run_ring3_test() iretqs into ring3, this stack is never touched
+    // by ordinary execution again (run_ring3_test never returns) - so
+    // there's nothing left on it worth preserving the moment a ring3->
+    // ring0 transition needs a fresh reset point.
+    t->kernelStackTop = stackTop;
     gTaskCount = gTaskCount + 1;
     return true;
 }
@@ -149,6 +159,17 @@ void yield() {
     // across every address space - only the private per-process region
     // (vaddr >= 0x80000000) can differ, and nothing here touches that.
     loadCr3(nextTask->cr3);
+    // Milestone 19: give the incoming task its own TSS.RSP0 if it's
+    // ring3-capable - see setTssRsp0's comment (mm/paging.mc) for why a
+    // single shared RSP0 broke the moment more than one ring3 process
+    // could exist at once. Harmless to skip for a plain kernel task:
+    // RSP0 is only ever consulted on a ring3->ring0 transition, which
+    // can't happen for a task that's never in ring3 to begin with, so
+    // leaving whatever the last ring3 task's RSP0 was in place costs
+    // nothing.
+    if (nextTask->ring3EntryVaddr != 0) {
+        setTssRsp0(nextTask->kernelStackTop);
+    }
     switch_context(&prevTask->savedRsp, nextTask->savedRsp);
     // Execution resumes here once some other task switches back to this
     // one. Interrupts are already back on by this point - see switch.s's

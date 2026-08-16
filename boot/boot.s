@@ -53,6 +53,7 @@ int_stack_bottom:
 int_stack_top:
 
 .align 16
+.global tss_start   # milestone 19: MiniC pokes RSP0 here directly per-task now (mm/paging.mc's setTssRsp0) - see its comment for why
 tss_start:
     .skip 104
 tss_end:

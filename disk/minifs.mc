@@ -180,8 +180,13 @@ bool fsWriteFile(char* name, u8* data, u32 len) {
 }
 
 // Reads a file's full contents into outBuffer (caller-owned, must hold
-// at least the file's real size). Returns the byte count read, or -1 if
-// the file doesn't exist or is too big for maxLen.
+// at least the file's real size). Returns the byte count read, -1 if
+// the file doesn't exist, or -2 if it exists but is too big for maxLen -
+// two genuinely different failures a caller might want to react to
+// differently (milestone 19's `vfscat` was reporting a real 208-byte
+// file as "not found" against its 128-byte display buffer before this
+// distinction existed, a real ambiguity caught by testing, not a
+// hypothetical).
 int fsReadFile(char* name, u8* outBuffer, u32 maxLen) {
     u8 dirBuf[512];
     if (!ataReadSector(DIRECTORY_LBA, dirBuf)) {
@@ -194,7 +199,7 @@ int fsReadFile(char* name, u8* outBuffer, u32 maxLen) {
     }
     u32 size = entries[slot].sizeBytes;
     if (size > maxLen) {
-        return -1;
+        return -2;
     }
 
     u32 sectorCount = sectorsFor(size);

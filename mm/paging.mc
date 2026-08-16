@@ -190,3 +190,31 @@ void loadCr3(u64 phys) {
     gCr3ToLoad = phys;
     asm("mov rax, [rip+gCr3ToLoad]\nmov cr3, rax");
 }
+
+// Milestone 19: TSS.RSP0 switched per-task, the fix milestones 13/15
+// both flagged as a prerequisite for ever running more than one ring3-
+// capable task concurrently. A single shared RSP0 (boot.s's
+// int_stack_top) was safe exactly as long as at most one ring3->ring0
+// transition could ever be "in flight" (suspended, not yet resumed) at
+// once - true when only one ring3 task existed at all, false the moment
+// milestone 19's spawn command could create a second one alongside the
+// one already running from boot. A real GPF (errorCode 0x32) confirmed
+// this the first time two ring3 processes coexisted: the second one's
+// own syscalls corrupted the first one's still-pending suspended state
+// on the shared stack, the same bug *class* as milestone 11's original
+// RSP0 discovery and milestone 13's demo-vs-real-mechanism conflict,
+// now between two equally-real processes.
+//
+// No new instruction needed - RSP0 is an ordinary memory location the
+// CPU reads automatically on a privilege-raising interrupt, not
+// something a privileged instruction has to load (unlike CR3/GDTR).
+// Plain pointer writes into the TSS's own bytes (tss_start+4/+8, the
+// same offsets boot.s's own one-time patch already used) are enough.
+extern u8 tss_start;
+
+void setTssRsp0(u64 rsp0) {
+    u32* low = (u32*) ((u64) &tss_start + 4);
+    u32* high = (u32*) ((u64) &tss_start + 8);
+    *low = (u32) (rsp0 & 0xFFFFFFFF);
+    *high = (u32) (rsp0 >> 32);
+}

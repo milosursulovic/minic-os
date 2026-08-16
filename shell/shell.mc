@@ -24,8 +24,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn echo <text>\n");
 }
 
 void cmdClear() {
@@ -384,8 +384,13 @@ void cmdLs() {
 // prefix - that's the actual milestone 18 proof, not the printed text.
 void cmdVfsCat() {
     char* path = &gLineBuffer[7];   // past "vfscat "
-    u8 buf[128];
-    int n = vfsRead(path, buf, 128);
+    u8 buf[256];
+    int n = vfsRead(path, buf, 256);
+    if (n == -2) {
+        vgaPrint("vfscat: file too large to display");
+        serialPrint("vfscat: file too large to display\n");
+        return;
+    }
     if (n < 0) {
         vgaPrint("vfscat: not found");
         serialPrint("vfscat: not found\n");
@@ -413,6 +418,48 @@ void cmdVfsWrite() {
         vgaPrint("vfswrite failed");
         serialPrint("vfswrite failed\n");
     }
+}
+
+// Milestone 19 setup step: writes the kernel's own compiled-in test
+// program (proc/testprog.s, gTestProgStart..gTestProgEnd - the exact
+// same bytes milestone 13's boot-time spawnProcess() already uses) out
+// to a real MiniFS file, simulating "this program is now genuinely
+// installed on disk," addressable by path and indistinguishable from
+// any other file - not a special-cased kernel-image blob anymore from
+// this point on. `spawn` is what actually proves the load-from-disk
+// path; `install` just gets real bytes onto real storage first.
+void cmdInstall() {
+    u32 len = (u32) ((u64) &gTestProgEnd - (u64) &gTestProgStart);
+    bool ok = vfsWrite("/system/testprog.bin", &gTestProgStart, len);
+    if (!ok) {
+        vgaPrint("install failed");
+        serialPrint("install failed\n");
+        return;
+    }
+    vgaPrint("installed /system/testprog.bin, 0x");
+    serialPrint("installed /system/testprog.bin, 0x");
+    printHex((u64) len);
+    vgaPrint(" bytes");
+    serialPrint(" bytes");
+}
+
+// The milestone 19 proof: reads /system/testprog.bin back through the
+// VFS and spawns a brand-new isolated ring3 process from THOSE bytes -
+// a second, independent instance of the same program, loaded from disk
+// this time rather than the kernel's own compiled-in image. Reuses the
+// exact same load virtual address procA/procB/the milestone-13 process
+// all use (0x80000000) - safe, since this process gets its own freshly
+// cloned address space, same as every isolated task before it.
+void cmdSpawn() {
+    int idx = spawnProcessFromPath("/system/testprog.bin", 0x80000000, 0x80001000);
+    if (idx < 0) {
+        vgaPrint("spawn failed");
+        serialPrint("spawn failed\n");
+        return;
+    }
+    vgaPrint("spawned process 0x");
+    serialPrint("spawned process 0x");
+    printHex((u64) idx);
 }
 
 void cmdChan() {
@@ -450,18 +497,28 @@ void cmdProcs() {
     printHex(gProcBPhys);
 }
 
+// Milestone 19 grew this from "print process 0's details" to a real
+// loop over every process - the moment more than one could ever exist
+// (spawn), showing only the first stopped being useful for confirming
+// each spawned process is genuinely distinct (different task, possibly
+// different cr3) rather than the same one reported twice.
 void cmdPs() {
     vgaPrint("processes: 0x");
     serialPrint("processes: 0x");
     printHex((u64) gProcessCount);
-    if (gProcessCount > 0) {
-        Process* p = &gProcesses[0];
-        vgaPrint(" proc0 task=0x");
-        serialPrint(" proc0 task=0x");
+    int i = 0;
+    while (i < gProcessCount) {
+        Process* p = &gProcesses[i];
+        vgaPrint(" proc");
+        serialPrint(" proc");
+        printHex((u64) i);
+        vgaPrint(" task=0x");
+        serialPrint(" task=0x");
         printHex((u64) p->taskIndex);
         vgaPrint(" cr3=0x");
         serialPrint(" cr3=0x");
         printHex(p->cr3);
+        i = i + 1;
     }
 }
 
@@ -534,6 +591,10 @@ void runCommand() {
         cmdVfsCat();
     } else if (streq(gLineBuffer, "vfswrite")) {
         cmdVfsWrite();
+    } else if (streq(gLineBuffer, "install")) {
+        cmdInstall();
+    } else if (streq(gLineBuffer, "spawn")) {
+        cmdSpawn();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {
