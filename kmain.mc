@@ -19,6 +19,7 @@ import "sched/task.mc";
 import "syscall/syscall.mc";
 import "proc/process.mc";
 import "disk/ata.mc";
+import "disk/minifs.mc";
 
 void _start() {
     volatile VgaChar* vga = (volatile VgaChar*) 0xB8000;

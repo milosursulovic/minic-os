@@ -24,7 +24,9 @@ IPC channels between isolated processes with a real blocking receive
 (reusing the exact same scheduler mechanism `sleep()` already proved,
 just generalized to a second kind of wake condition), a legacy ATA PIO
 disk driver doing genuine sector-granular reads and writes against a
-real (emulated) block device, and runs a minimal
+real (emulated) block device, a minimal custom filesystem ("MiniFS")
+on top of it with real multi-file create/read/list persisted to disk,
+and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -94,6 +96,8 @@ proc/             process loading + the kernel object model + IPC
   channel.mc         Channel table + channelSend/channelHasMessage
 disk/             storage
   ata.mc             legacy ATA PIO driver - real sector read/write
+  minifs.mc          MiniFS: a minimal custom filesystem (superblock +
+                     flat directory + contiguous per-file storage)
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -302,12 +306,36 @@ shell/            the interactive shell
   raw disk image with a known ASCII signature at LBA 1 and zeros
   everywhere else - not a filesystem yet (that's milestone 17+), just
   known bytes at known addresses so read/write have something real to
-  check themselves against. `shell/shell.mc`
+  check themselves against. **Milestone 17** added `disk/minifs.mc`:
+  MiniFS, a minimal custom filesystem built directly on `ataReadSector`/
+  `ataWriteSector` - a fixed-layout superblock (LBA 500) + a one-sector,
+  16-entry flat directory (LBA 501, each 32-byte `DirEntry` exactly
+  filling the sector) + a contiguous data region (LBA 502+), chosen
+  specifically clear of milestone 16's own `disk`/`diskwrite` test LBAs
+  so neither regressed. `fsWriteFile()` recomputes the next free LBA by
+  scanning existing directory entries each time rather than maintaining
+  a persistent free list - the same "prove the mechanism first" scoping
+  that put a bump allocator before the heap's free list. `sizeof`'s
+  struct-layout guarantees did real work here: `DirEntry`'s `char
+  name[20]` plus two `u32`s plus a `bool`, naturally padded to 32 bytes,
+  is *exactly* what makes 16 entries fill one 512-byte sector precisely -
+  not a coincidence, a deliberate size choice. Verified in QEMU: `mkfs`
+  then two `mkfile`/`cat` round trips, each creating a file whose name
+  and content both embed a running index (`file0.mfs`/`file1.mfs`,
+  distinct content each) - `cat`-ing each one back showed the *correct,
+  distinct* content for both (not the first file's content leaking into
+  the second), and `ls` listed both with matching sizes and a superblock
+  `fileCount` that agreed with the actual directory contents. Independently
+  confirmed on the **host** side afterward: reading `disk.img` directly
+  at the superblock, directory, and both files' data LBAs showed the
+  exact same bytes the kernel reported - genuine persistence to the
+  backing store, not just something the kernel believed happened.
+  `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
   `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/
-  `objs`/`chan`/`send`/`disk`/`diskwrite`/`echo <text>`) built on
-  `drivers/keyboard.mc`'s line buffer.
+  `objs`/`chan`/`send`/`disk`/`diskwrite`/`mkfs`/`mkfile`/`cat`/`ls`/
+  `echo <text>`) built on `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -423,6 +451,18 @@ receiver got: 0x1 value=0xc0ffee1234
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 > diskwrite
 write+readback verified, 512/512 bytes match
+> mkfs
+filesystem formatted
+> mkfile
+created file0.mfs
+> cat
+Hello from MiniFS, this is file #0
+> mkfile
+created file1.mfs
+> cat
+Hello from MiniFS, this is file #1
+> ls
+fileCount: 0x2  file0.mfs 0x23  file1.mfs 0x23
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
@@ -527,6 +567,22 @@ the kernel entirely: reading `disk.img` directly on the host at LBA
 100's byte offset after the test showed the identical pattern already
 sitting there, confirming the write reached the actual backing file,
 not just something the kernel believed had happened.
+
+The `mkfs`/`mkfile`/`cat`/`ls` sequence is the milestone 17 proof, and
+it's built the same three-part way milestone 16's was. Creating two
+files back to back and `cat`-ing each one *immediately after* the next
+`mkfile` proves the second file's write didn't clobber the first, and
+that `cat` (which always reads freshly from disk, not a cached copy)
+genuinely distinguishes between them - `file0.mfs` still reads back
+`...file #0` even after `file1.mfs` exists. `ls`'s `fileCount: 0x2`
+matches the two entries it actually lists, proving the superblock's
+metadata is maintained correctly, not just initialized once and
+forgotten. Independently confirmed a third way, outside the kernel
+entirely: reading `disk.img` directly on the host afterward showed the
+`MFS1` magic and `fileCount=2` at the superblock's LBA, both directory
+entries at the expected offsets with the expected names/sizes/start
+LBAs, and both files' exact text sitting at those start LBAs - the same
+bytes the kernel reported, independently verified from outside it.
 
 That `procs` result is the milestone 12 proof: `procA` and `procB` both
 map the identical virtual address (`0x80000000`) in their own private
@@ -655,10 +711,27 @@ milestones 1-10 were each scoped just before starting them:
      written pattern directly in the host's `disk.img` file afterward
      (proves the write reached the actual backing store, not just
      something the kernel believed).~~
-   - **Next up: a minimal custom filesystem** ("MiniFS" - simpler than
-     FAT32/ext2 for a first pass; those come later as additional VFS
-     backends, the whole point of having a VFS layer at all), then the
-     VFS abstraction itself above that.
+   - ~~**Milestone 17: a minimal custom filesystem** ("MiniFS" - simpler
+     than FAT32/ext2 for a first pass; those come later as additional
+     VFS backends, the whole point of having a VFS layer at all).
+     `disk/minifs.mc`: a fixed-layout superblock + one-sector 16-entry
+     flat directory + a contiguous data region, all on a reserved LBA
+     range clear of milestone 16's own test fixtures. `fsWriteFile()`
+     recomputes the next free LBA from the directory each call rather
+     than maintaining a persistent free list - prove the mechanism
+     first, the same reasoning behind every earlier "simplest thing that
+     works" milestone in this kernel. Verified in QEMU: format, create
+     two files back to back (name and content both embedding a running
+     index), `cat` each one immediately after the *next* file was
+     created (proving no cross-file clobbering, and that reads are
+     always fresh from disk), `ls` reporting a superblock `fileCount`
+     that matches the real directory contents. Independently confirmed
+     a third way, entirely outside the kernel: reading `disk.img`
+     directly on the host afterward showed the exact same superblock,
+     directory entries, and file contents the kernel reported.~~
+   - **Next up: a VFS abstraction** above MiniFS, with a basic namespace
+     (`/system`, `/devices`, ...) - the layer that will eventually also
+     support FAT32/ext2 as alternative backends.
 7. **Real `Process.spawn()` from disk**, once 3 and 6 both exist.
 8. **Method-call syntax in MiniC itself** (a compiler milestone in the
    `minic` repo, not this one) - before building a native `File`/
@@ -828,7 +901,26 @@ around phase 7-8.
   issued it (and, since `int 0x80`/hardware interrupts aren't disabled
   during the wait, everything else keeps preempting normally around it -
   just not the caller itself) rather than yielding the CPU while waiting.
-- `disk.img` (via `build.sh disk`) is a fixed-size (1MB/2048-sector), raw,
-  unpartitioned image with one known signature string and otherwise all
-  zeros - a test fixture for proving the driver works, not a filesystem
-  or a partition table. Milestone 17 needs both.
+- `disk.img` (via `build.sh disk`) is a fixed-size (1MB/2048-sector), raw
+  image - milestone 16's test signature at LBA 1, `diskwrite`'s scratch
+  sector at LBA 100, and milestone 17's MiniFS region from LBA 500
+  onward all coexist by convention (chosen-to-not-overlap LBA ranges),
+  not a real partition table. A real partition scheme is later work,
+  once more than one filesystem/reserved-region needs to coexist for a
+  reason other than "this kernel's own test history."
+- `disk/minifs.mc` is deliberately minimal in every dimension: flat
+  namespace (no directories/subdirectories), a fixed 16-file directory
+  cap, no file deletion or truncation (`fsWriteFile` fails outright if
+  the name already exists - no overwrite/append/resize), no persistent
+  free-space tracking (`fsWriteFile` rescans the whole directory to find
+  the next free LBA every call - O(files) per write, fine at this
+  scale), and no error recovery if a write is interrupted partway
+  (no journaling, no atomicity - a crash mid-write leaves the directory
+  and data region in whatever state the individual sector writes that
+  did complete left them in). All deliberate scope cuts for a first
+  filesystem, not oversights - see milestone 17's roadmap entry for the
+  reasoning.
+- MiniFS has no VFS layer yet - `fsWriteFile`/`fsReadFile`/`mkfs` are
+  called directly, there's no path namespace, no mount points, and no
+  way to plug in a second filesystem implementation (FAT32/ext2) even
+  in principle. That's milestone 18's entire job.

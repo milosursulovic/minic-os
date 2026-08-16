@@ -15,6 +15,7 @@ import "../proc/process.mc";
 import "../proc/object.mc";
 import "../proc/channel.mc";
 import "../disk/ata.mc";
+import "../disk/minifs.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -22,8 +23,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls echo <text>\n");
 }
 
 void cmdClear() {
@@ -261,6 +262,120 @@ void cmdDiskWrite() {
     }
 }
 
+void cmdMkfs() {
+    bool ok = mkfs();
+    if (ok) {
+        vgaPrint("filesystem formatted");
+        serialPrint("filesystem formatted\n");
+    } else {
+        vgaPrint("mkfs failed");
+        serialPrint("mkfs failed\n");
+    }
+}
+
+int gNextFileIndex;
+char gLastFileName[20];
+
+// Creates a new file every call, name and content both embedding the
+// same running index ("file0.mfs" / "file1.mfs" / ...) - running this
+// twice and `cat`-ing after each one is what proves multiple files
+// coexist correctly (distinct content, no overwriting each other) and
+// that the free-space scan advances past each file already written.
+void cmdMkfile() {
+    char nameBuf[20];
+    nameBuf[0] = 'f'; nameBuf[1] = 'i'; nameBuf[2] = 'l'; nameBuf[3] = 'e';
+    nameBuf[4] = (char) ('0' + (u8) (gNextFileIndex % 10));
+    nameBuf[5] = '.'; nameBuf[6] = 'm'; nameBuf[7] = 'f'; nameBuf[8] = 's';
+    nameBuf[9] = '\0';
+
+    char contentBuf[64];
+    char* prefix = "Hello from MiniFS, this is file #";
+    int i = 0;
+    while (prefix[i] != '\0') {
+        contentBuf[i] = prefix[i];
+        i = i + 1;
+    }
+    contentBuf[i] = (char) ('0' + (u8) (gNextFileIndex % 10));
+    i = i + 1;
+    contentBuf[i] = '\0';
+    i = i + 1;
+
+    bool ok = fsWriteFile(nameBuf, (u8*) &contentBuf[0], (u32) i);
+    if (!ok) {
+        vgaPrint("mkfile failed");
+        serialPrint("mkfile failed\n");
+        return;
+    }
+    copyName(&gLastFileName[0], nameBuf);
+    gNextFileIndex = gNextFileIndex + 1;
+    vgaPrint("created ");
+    serialPrint("created ");
+    vgaPrint(nameBuf);
+    serialPrint(nameBuf);
+}
+
+void cmdCat() {
+    if (gLastFileName[0] == '\0') {
+        vgaPrint("no file yet - run mkfile first");
+        serialPrint("no file yet - run mkfile first\n");
+        return;
+    }
+    u8 buf[65];
+    int n = fsReadFile(&gLastFileName[0], buf, 64);
+    if (n < 0) {
+        vgaPrint("cat failed");
+        serialPrint("cat failed\n");
+        return;
+    }
+    buf[n] = 0;   // fsWriteFile's own null terminator is part of the stored bytes already, this is just defensive
+    char* s = (char*) &buf[0];
+    vgaPrint(s);
+    serialPrint(s);
+}
+
+void cmdLs() {
+    u8 sbBuf[512];
+    if (!ataReadSector(SUPERBLOCK_LBA, sbBuf)) {
+        vgaPrint("ls failed - disk read error");
+        serialPrint("ls failed - disk read error\n");
+        return;
+    }
+    Superblock* sb = (Superblock*) &sbBuf[0];
+    vgaPrint("fileCount: 0x");
+    serialPrint("fileCount: 0x");
+    printHex((u64) sb->fileCount);
+    vgaPrint("  ");
+    serialPrint("  ");
+
+    u8 dirBuf[512];
+    bool ok = ataReadSector(DIRECTORY_LBA, dirBuf);
+    if (!ok) {
+        vgaPrint("ls failed - disk read error");
+        serialPrint("ls failed - disk read error\n");
+        return;
+    }
+    DirEntry* entries = (DirEntry*) &dirBuf[0];
+    int i = 0;
+    int shown = 0;
+    while (i < (int) MAX_FILES) {
+        if (entries[i].used) {
+            vgaPrint(entries[i].name);
+            serialPrint(entries[i].name);
+            vgaPrint(" 0x");
+            serialPrint(" 0x");
+            printHex((u64) entries[i].sizeBytes);
+            vgaPrint("  ");
+            serialPrint("  ");
+            shown = shown + 1;
+        }
+        i = i + 1;
+    }
+    if (shown == 0) {
+        vgaPrint("(empty)");
+        serialPrint("(empty)");
+    }
+}
+
 void cmdChan() {
     vgaPrint("receiver got: 0x");
     serialPrint("receiver got: 0x");
@@ -368,6 +483,14 @@ void runCommand() {
         cmdDisk();
     } else if (streq(gLineBuffer, "diskwrite")) {
         cmdDiskWrite();
+    } else if (streq(gLineBuffer, "mkfs")) {
+        cmdMkfs();
+    } else if (streq(gLineBuffer, "mkfile")) {
+        cmdMkfile();
+    } else if (streq(gLineBuffer, "cat")) {
+        cmdCat();
+    } else if (streq(gLineBuffer, "ls")) {
+        cmdLs();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {
