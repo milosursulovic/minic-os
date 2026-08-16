@@ -10,18 +10,16 @@
 #   rsi = ring3 stack pointer (top of a page already mapped present +
 #         writable + *user*, or this faults immediately on the first push)
 #
-# Never returns the normal way - there's no ring3 "exit" yet (milestone
-# 12+'s job, once there's a real process model to exit *to*). Instead
-# this saves its own suspend point into gKernelTestRsp, the same way
-# sched/task.mc's switch_context() saves a task's rsp - and
-# syscall.mc's syscall_dispatch(), for its one "exit" syscall number,
-# loads that back and pops+rets directly, faking a normal return from
-# this function without ever coming back through isr_syscall's iretq.
+# Never returns - there's no ring3 "exit" (no process-teardown mechanism
+# exists yet, a still-open gap - see README's Known limitations). The
+# calling task's kernel-mode life ends here; from this point on it only
+# ever runs in ring3, preemptible by the timer like any other task (see
+# proc/process.mc's processEntryTrampoline(), the only caller since
+# milestone 13 retired the one-shot demo that used to call this too).
 
 .intel_syntax noprefix
 .code64
 
-.extern gKernelTestRsp
 .global run_ring3_test
 
 run_ring3_test:
@@ -31,8 +29,6 @@ run_ring3_test:
     push r13
     push r14
     push r15
-
-    mov [rip + gKernelTestRsp], rsp
 
     mov ax, 0x23        # user data selector (GDT index 4 | RPL 3)
     mov ds, ax

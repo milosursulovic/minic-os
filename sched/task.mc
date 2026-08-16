@@ -30,6 +30,8 @@ struct Task {
     bool blocked;
     u64 wakeTick;   // only meaningful while blocked
     u64 cr3;        // this task's address space (milestone 12)
+    u64 ring3EntryVaddr;    // 0 = plain kernel task; else jump here via run_ring3_test (milestone 13)
+    u64 ring3UserStackTop;  // only meaningful when ring3EntryVaddr != 0
 }
 
 Task gTasks[8];

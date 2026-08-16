@@ -14,7 +14,10 @@ the round-robin until a given tick, not just "always ready"), a real
 ring0/ring3 privilege boundary with a working syscall gate (`int 0x80`),
 real per-process address-space isolation (each task can get its own PML4,
 switched on every context switch, with a private region no other task can
-see even at the identical virtual address), and runs a minimal
+see even at the identical virtual address), a real loader that copies a
+hand-assembled machine-code blob into a freshly cloned address space and
+schedules it as a genuine preemptible ring3 task (not a MiniC function
+pretending), and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -75,7 +78,11 @@ sched/            preemptive task scheduler
                      six demo tasks (two of them isolated processes)
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
-  syscall.mc         syscall dispatcher + the one-shot ring3 test
+  syscall.mc         syscall dispatcher
+proc/             process loading
+  testprog.s         hand-assembled, position-independent ring3 "program" -
+                     an opaque blob, not a MiniC function
+  process.mc         Process table + spawnProcess(): the real loader
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -110,14 +117,35 @@ shell/            the interactive shell
 - **`syscall/usermode.s`** - `run_ring3_test(entry, userStack)`: builds a
   fake `iretq` frame (the same trick `interrupts.s` already relies on for
   returning *from* an interrupt, just used here to enter ring3 for the
-  first time) and jumps into it. Never returns the normal way - there's
-  no ring3 "exit" mechanism yet (that needs a real process to exit *to*,
-  milestone 12+) - instead `syscall.mc`'s syscall dispatcher, for one
-  specific syscall number, pops this function's saved registers directly
-  and `ret`s, faking a normal return without ever going back through
-  `isr_syscall`'s `iretq` - the exact same "save an rsp, later load it
-  and pop+ret" trick `switch_context` already uses, just for a one-shot
-  privilege transition instead of an ongoing task switch.
+  first time) and jumps into it. Never returns - there's no ring3 "exit"
+  (no process-teardown mechanism exists yet at all). Milestone 11 also
+  had a one-shot "exit" trick here (pop-and-`ret` back to a saved kernel
+  rsp, bypassing `isr_syscall`'s `iretq`) for its now-retired one-shot
+  ring3 demo - removed in milestone 13, see `proc/process.mc`'s comment
+  for why keeping it around actively conflicted with real per-task ring3.
+- **`proc/testprog.s`** - a tiny, hand-assembled ring3 "program": two
+  `int 0x80` print syscalls with a message living inside the blob itself,
+  then spins forever. Deliberately *not* MiniC compiled into the kernel
+  image (that would just be milestone 11/12's demo trick again - kernel
+  code with a borrowed address space, not a real loader) - the kernel
+  treats it as opaque bytes it never inspects beyond copying them.
+  Position-independent by construction (`lea reg, [rip+label]`, never an
+  absolute `offset label`) since it gets *copied* to a virtual address
+  that has nothing to do with wherever it happens to link inside this
+  kernel image - RIP-relative offsets survive that copy unchanged as
+  long as the whole blob moves as one contiguous unit.
+- **`proc/process.mc`** - `spawnProcess(imageStart, imageEnd, loadVaddr,
+  stackVaddr)`: the real loader. Clones a fresh address space
+  (`mm/paging.mc`'s `cloneAddressSpace()`), maps and copies the image
+  into it page by page (writing through each frame's own physical
+  address - no need to switch into the new space first, the same
+  reasoning `mapPageIn()`'s own comment gives), maps a one-page user
+  stack, then creates a real scheduler task via `createTaskWithCr3()`
+  whose kernel-mode entry (`processEntryTrampoline()`) does exactly one
+  thing: call `run_ring3_test()` with the loaded entry point. From then
+  on the task only ever runs in ring3, preemptible by the timer like any
+  other task - the first time this kernel has proven that, rather than
+  disabling interrupts around a one-shot ring3 excursion.
 - **`kmain.mc`** and its imports - everything past "here's the vector
   number," in ordinary MiniC. `kmain.mc` itself is just the entry point
   (`_start`) plus an `import` of every module above, using nothing beyond
@@ -163,13 +191,8 @@ shell/            the interactive shell
   calling convention (`rax` = number in / return value out, `rdi`/`rsi`/
   `rdx` = up to three arguments) is this kernel's own, since going
   through a software interrupt gate rather than the `SYSCALL`/`SYSRET`
-  instruction pair means there's no fixed convention to inherit. The
-  `ring3` shell command runs a one-shot test through the whole path:
-  `allocFrame` + `mapPage` (with the user bit, `0x06`) for a ring3-only
-  stack, `run_ring3_test` into it, two `int 0x80` calls that print (and
-  echo back the `cs` register's value, so the serial log has direct,
-  checkable proof of which ring it actually ran in - `0x1B & 3 == 3`),
-  then the exit syscall back to ring0. **Milestone 12** added
+  instruction pair means there's no fixed convention to inherit.
+  **Milestone 12** added
   `mm/paging.mc`'s `cloneAddressSpace()`: a fresh PML4 whose entry 0
   points at a fresh PDPT that shares PDPT[0] (the static identity map)
   and PDPT[1] (heap/dynamic-demo region) with the kernel's own PDPT -
@@ -193,10 +216,28 @@ shell/            the interactive shell
   `procBEntry`, both map the *same* virtual address (`0x80000000`) in
   their own private space to their own physical frame and write a
   different constant there - proving real isolation, not just separate
-  stacks. `shell/shell.mc`
+  stacks. **Milestone 13** added `proc/process.mc`'s `spawnProcess()`,
+  wiring milestones 11 and 12 together into a real loader: `proc/
+  testprog.s` is a hand-assembled, position-independent ring3 program -
+  not a MiniC function, an opaque byte blob - that `spawnProcess()`
+  clones a private address space for, maps and copies page by page, and
+  schedules as a genuine task via `createTaskWithCr3()`, whose one-line
+  kernel-mode entry (`processEntryTrampoline()`) calls `run_ring3_test()`
+  and never returns to kernel mode again. This is the first ring3 code in
+  this kernel that runs preemptible, coexisting with ordinary tasks under
+  the same round-robin scheduler, rather than milestone 11's one-shot
+  demo (`cli`'d around the whole thing, now retired - see below). Doing
+  this surfaced a real bug: the retired demo and this new mechanism both
+  used the *same* `TSS.RSP0` stack for ring3->ring0 transitions, safe
+  only as long as at most one such transition could ever be "in flight"
+  (suspended, not yet resumed) at a time - true for the demo alone, false
+  the moment a real preemptible ring3 task could also be mid-suspension
+  when the demo fired. Fixed by retiring the demo entirely rather than
+  coordinating two incompatible mechanisms - see `syscall/syscall.mc`'s
+  comment for the full diagnosis. `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
-  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`ring3`/`procs`/
+  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/
   `echo <text>`) built on `drivers/keyboard.mc`'s line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
@@ -265,6 +306,10 @@ With a real display (`./build.sh run`), type at the shell prompt (`>` on
 the second row) - lowercase letters, digits, space, and enter all work:
 
 ```
+Hello from a MiniC kernel!
+hello from a LOADED process! 0xc0ffee
+interrupts live
+hello from a LOADED process! 0xc0ffee
 > alloc
 allocated 64 bytes at 0x5000c040
 > alloc
@@ -279,15 +324,12 @@ free frames: 0x7bbe / 0x40000
 mapped 0x40000000 -> 0x422000, wrote/read 0xcafebabe
 > tasks
 task1: 0x1dc3 task2: 0x1dc4 task3: 0x2a38d9720 task4: 0x131 ticks: 0x3b8c
-> ring3
-entering ring3...
-ring3 alive, cs=0x1b
-ring3 alive again, cs=0x1b
-back in ring0 - ring3 roundtrip verified
 > echo hello world
 hello world
 > procs
 procA: 0xaaaaaaaa @phys 0x426000 procB: 0xbbbbbbbb @phys 0x429000
+> ps
+processes: 0x1 proc0 task=0x7 cr3=0x426000
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
@@ -321,17 +363,19 @@ identical before and after a `reset` that follows a grow, since `reset`
 is specifically designed to reuse already-mapped pages rather than
 re-`mapPage`-ing them (which would leak a frame per byte remapped).
 
-That `ring3` result is the milestone 11 proof: `cs=0x1b` twice over
-(`0x1B & 3 == 3` for the ring, `0x1B >> 3 == 3` for the GDT index -
-exactly the ring3 code segment `boot.s` set up, not a coincidence or a
-stale value) shows code genuinely ran at CPL 3, not just that a syscall
-"happened" - a plain `int 0x80` would succeed from *any* ring targeting
-a DPL=3 gate, so the CS readback is what actually rules out "still
-secretly in ring0." Two round trips back to back rules out "worked once
-by luck." And getting back to `>` afterward (not a hang, not another
-crash) proves the exit path - the one-shot `switch_context`-style
-save/restore trick in `syscall.mc` - works too, not just the initial
-entry.
+The two `hello from a LOADED process!` lines, printed automatically
+before the shell even shows its first prompt, are the milestone 13
+proof: `proc/testprog.s` is hand-assembled machine code the kernel never
+compiled, copied by `spawnProcess()` into a freshly cloned private
+address space and jumped into via `run_ring3_test()` - two real `int
+0x80` syscalls from inside that loaded, executing code, printing a
+message that lives *inside the blob itself*, not a kernel string. Milestone
+11's old `ring3` shell command (`cs=0x1b` readback proving CPL 3) is
+retired - `spawnProcess()`'s task takes over that proof and more: it's
+scheduled like any other task, interleaved with the boot sequence and
+the rest of the demo tasks without any `cli` wrapping, and `ps`'s
+`proc0 task=0x7 cr3=0x426000` confirms it's a real, queryable process
+object, not just something that ran once and vanished.
 
 That `procs` result is the milestone 12 proof: `procA` and `procB` both
 map the identical virtual address (`0x80000000`) in their own private
@@ -346,10 +390,13 @@ different (`0x426000` vs `0x429000`) is the stronger half of the proof -
 not just "two different numbers came back," but that the *same virtual
 address* genuinely resolves to two different physical frames depending
 on which address space is asking, exactly what "isolation" has to mean.
-Repeating `procs` later in the same session (after `ring3`, `alloc`, and
+Repeating `procs` later in the same session (after `tasks`, `alloc`, and
 `map` all ran in between) showed byte-for-byte identical values and
 physical addresses - stable across scheduler churn, not a one-shot
-fluke.
+fluke. Same for `ps`'s output, checked both right after boot and again
+several seconds (and many preemption cycles of the loaded process) later
+- identical every time, including through the exact regression sequence
+that used to trigger the milestone-13 RSP0 bug before it was fixed.
 
 ## Roadmap past milestone 10
 
@@ -387,15 +434,27 @@ milestones 1-10 were each scoped just before starting them:
    critically, `translateIn()` shows that same virtual address resolving
    to two genuinely different physical addresses depending on which
    address space asks, not just "two different numbers came back."~~
-3. **A real `Process` concept + a loader** (next up) for a statically
-   embedded program (no filesystem yet to load from disk) - milestone
-   12's `createIsolatedTask()`/`cloneAddressSpace()` are the address-space
-   half of this; what's still missing is a real `Process` object wrapping
-   a task plus its address space, and a loader that places a program's
-   code/data into a fresh isolated space instead of a demo function
-   already linked into the kernel image.
-4. **Kernel object model + per-process handle tables** (the NT-style
-   piece) - userspace gets handles, never raw kernel pointers.
+3. ~~**A real `Process` concept + a loader** (milestone 13) -
+   `proc/process.mc`'s `spawnProcess()` treats a byte range as an opaque
+   blob (`proc/testprog.s`, hand-assembled, not MiniC), clones a private
+   address space for it, maps and copies it in page by page, and
+   schedules a real task whose only kernel-mode act is entering ring3 at
+   the loaded address - the first ring3 code in this kernel that's
+   genuinely preemptible rather than run under a one-shot `cli`. Doing
+   this retired milestone 11's `ring3` shell command entirely: it and the
+   new mechanism both needed the same `TSS.RSP0` stack for ring3->ring0
+   transitions, safe only with at most one such transition ever in flight
+   - true when the demo was the only ring3 path, false once a real
+   preemptible ring3 task could also be mid-suspension when the demo
+   fired. A real bug found and fixed this way, not a hypothetical.
+   Verified in QEMU: the loaded blob's own embedded message printed twice
+   from ring3 at boot, and the shell stayed fully responsive through a
+   full regression pass afterward (the exact sequence that hung before
+   the fix).~~
+4. **Kernel object model + per-process handle tables** (next up, the
+   NT-style piece) - userspace gets handles, never raw kernel pointers.
+   `proc/process.mc`'s `Process` table is the natural place this attaches
+   to.
 5. **IPC channels** between isolated processes - reuses milestone 10's
    `sleep()`/blocking mechanism for blocking `receive()`.
 6. **Storage + VFS + a first filesystem** - ATA PIO driver, a minimal
@@ -431,22 +490,27 @@ around phase 7-8.
   shared memory* - milestone 12 gave each task a genuinely private
   region (`vaddr >= 0x80000000`), but didn't restrict what the *shared*
   region looks like to unprivileged code. That needs a real memory-
-  protection pass once actual user processes exist (milestone 13+), not
-  just an address-space topology change.
-- The ring3 mechanism (milestone 11) and per-process address spaces
-  (milestone 12) haven't been wired together yet - `runRing3Test()` still
-  runs against the kernel's own CR3 with interrupts disabled around it,
-  not inside a real scheduled task with its own isolated space. A ring3
-  task that coexists with preemption *and* has its own address space is
-  what milestone 13's real `Process` concept needs to land.
-- `cloneAddressSpace()`'s PML4/PDPT/PT frames are never freed - there's
-  no process teardown yet (nothing calls `freeFrame` on any of a
-  process's page tables), consistent with the kernel having no process
-  *exit* mechanism at all so far, not a milestone-12-specific gap.
-- Only one `int 0x80` syscall gate, two syscall numbers (1 = print, 2 =
-  exit the one-shot test) - no real syscall table, no arguments beyond
-  three plain integers, no pointer validation (a ring3 caller can pass
-  any address as `arg1` for syscall 1 and it gets dereferenced directly).
+  protection pass once security/capability work is underway (roadmap
+  phase IX), not just an address-space topology change.
+- **Only one ring3 process is safe to run at a time.** `boot.s`'s TSS has
+  a single `RSP0` - correct for "at most one suspended ring3->ring0
+  transition can be in flight at once" (true with exactly one ring3 task,
+  which is what removed milestone 11's demo's conflict with milestone
+  13's real one), but a *second* concurrently-scheduled ring3 process
+  would reintroduce exactly that class of bug between itself and the
+  first. Needs a per-task `RSP0`, switched alongside `cr3` in `yield()`,
+  before `proc/process.mc`'s `spawnProcess()` can safely be called more
+  than once. Not yet needed - only one process is spawned today - but a
+  real constraint the next milestone that spawns multiple processes must
+  address, not an oversight to rediscover the hard way.
+- `cloneAddressSpace()`'s PML4/PDPT/PT frames (and a spawned process's
+  image/stack frames) are never freed - there's no process teardown at
+  all yet (nothing calls `freeFrame` on any of it), consistent with the
+  kernel having no process *exit* mechanism at all so far.
+- Only one `int 0x80` syscall gate, one syscall number (1 = print) - no
+  real syscall table, no arguments beyond three plain integers, no
+  pointer validation (a ring3 caller can pass any address as `arg1` and
+  it gets dereferenced directly).
 - Only 5 interrupt vectors are wired up: divide-by-zero (0), GPF (13),
   page fault (14), timer (32), keyboard (33). Any other exception hits an
   empty IDT entry and triple-faults (QEMU resets) - the same

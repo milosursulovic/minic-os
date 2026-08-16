@@ -17,6 +17,7 @@ import "shell/shell.mc";
 import "isr/isr.mc";
 import "sched/task.mc";
 import "syscall/syscall.mc";
+import "proc/process.mc";
 
 void _start() {
     volatile VgaChar* vga = (volatile VgaChar*) 0xB8000;
@@ -50,6 +51,7 @@ void _start() {
     createTask(&task4Entry);
     createIsolatedTask(&procAEntry);
     createIsolatedTask(&procBEntry);
+    spawnProcess(&gTestProgStart, &gTestProgEnd, 0x80000000, 0x80001000);
     asm("sti");
 
     serialPrint("interrupts live\n");

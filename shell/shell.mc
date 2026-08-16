@@ -11,6 +11,7 @@ import "../drivers/keyboard.mc";
 import "../isr/isr.mc";
 import "../sched/task.mc";
 import "../syscall/syscall.mc";
+import "../proc/process.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -18,8 +19,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks ring3 procs echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks ring3 procs echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps echo <text>\n");
 }
 
 void cmdClear() {
@@ -211,17 +212,19 @@ void cmdProcs() {
     printHex(gProcBPhys);
 }
 
-void cmdRing3() {
-    vgaPrint("entering ring3...");
-    serialPrint("entering ring3...\n");
-    bool ok = runRing3Test();
-    if (!ok) {
-        vgaPrint("ring3 test failed - out of frames or map failed");
-        serialPrint("ring3 test failed - out of frames or map failed\n");
-        return;
+void cmdPs() {
+    vgaPrint("processes: 0x");
+    serialPrint("processes: 0x");
+    printHex((u64) gProcessCount);
+    if (gProcessCount > 0) {
+        Process* p = &gProcesses[0];
+        vgaPrint(" proc0 task=0x");
+        serialPrint(" proc0 task=0x");
+        printHex((u64) p->taskIndex);
+        vgaPrint(" cr3=0x");
+        serialPrint(" cr3=0x");
+        printHex(p->cr3);
     }
-    vgaPrint("back in ring0 - ring3 roundtrip verified");
-    serialPrint("back in ring0 - ring3 roundtrip verified\n");
 }
 
 void runCommand() {
@@ -253,10 +256,10 @@ void runCommand() {
         cmdMap();
     } else if (streq(gLineBuffer, "tasks")) {
         cmdTasks();
-    } else if (streq(gLineBuffer, "ring3")) {
-        cmdRing3();
     } else if (streq(gLineBuffer, "procs")) {
         cmdProcs();
+    } else if (streq(gLineBuffer, "ps")) {
+        cmdPs();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {
