@@ -14,13 +14,14 @@
 // the one place that decides whether a given process's handle N refers
 // to anything at all.
 
-// MiniC has no `const` and enum member values aren't wired to codegen
-// yet - a plain global, by convention never reassigned after this line,
-// same as every other "constant" in this codebase (gHeapBase, etc.).
-// No OBJ_NONE constant - an unallocated KernelObject's zero-valued
-// `type` field is never read (guarded by `used` everywhere), so there's
-// nothing for a "none" tag to ever be compared against.
-int OBJ_PROCESS = 1;
+// A real `const` as of the `minic` compiler's const support (added the
+// same session this needed it) - was a plain, only-by-convention-const
+// global before that, same as everything else in this codebase still
+// not yet converted (gHeapBase, etc.). No OBJ_NONE constant - an
+// unallocated KernelObject's zero-valued `type` field is never read
+// (guarded by `used` everywhere), so there's nothing for a "none" tag
+// to ever be compared against.
+const int OBJ_PROCESS = 1;
 
 struct KernelObject {
     bool used;
@@ -36,12 +37,15 @@ struct Handle {
     int objectIndex;
 }
 
-int HANDLES_PER_PROCESS = 8;
+const int HANDLES_PER_PROCESS = 8;
 
-// MiniC has no 2D array declarations - flattened manually, same as any
-// C codebase without them: process P's handle H lives at
-// gHandleTables[P * HANDLES_PER_PROCESS + H].
-Handle gHandleTables[32];   // 4 processes * 8 handles each
+// A genuine 2D array as of the `minic` compiler's multi-dimensional-
+// array support (added the same session this needed it) - was a
+// manually flattened `Handle gHandleTables[32]` before that, with
+// `gHandleTables[processIndex * HANDLES_PER_PROCESS + handle]` standing
+// in for `gHandleTables[processIndex][handle]`. Removed the workaround
+// once the real feature existed, same as this project always has.
+Handle gHandleTables[4][8];   // 4 processes * 8 handles each
 
 int allocObject(int type, int dataIndex) {
     int i = 0;
@@ -65,10 +69,9 @@ int allocObject(int type, int dataIndex) {
 int allocHandle(int processIndex, int objectIndex) {
     int i = 0;
     while (i < HANDLES_PER_PROCESS) {
-        int slot = processIndex * HANDLES_PER_PROCESS + i;
-        if (!gHandleTables[slot].used) {
-            gHandleTables[slot].used = true;
-            gHandleTables[slot].objectIndex = objectIndex;
+        if (!gHandleTables[processIndex][i].used) {
+            gHandleTables[processIndex][i].used = true;
+            gHandleTables[processIndex][i].objectIndex = objectIndex;
             return i;
         }
         i = i + 1;
@@ -86,9 +89,8 @@ int resolveHandle(int processIndex, int handle) {
     if (handle < 0 || handle >= HANDLES_PER_PROCESS) {
         return -1;
     }
-    int slot = processIndex * HANDLES_PER_PROCESS + handle;
-    if (!gHandleTables[slot].used) {
+    if (!gHandleTables[processIndex][handle].used) {
         return -1;
     }
-    return gHandleTables[slot].objectIndex;
+    return gHandleTables[processIndex][handle].objectIndex;
 }

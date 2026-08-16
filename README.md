@@ -20,7 +20,9 @@ schedules it as a genuine preemptible ring3 task (not a MiniC function
 pretending), a kernel object model with per-process handle tables (ring3
 code only ever sees a small integer, never a raw kernel pointer, and an
 out-of-range or never-allocated handle is rejected rather than trusted),
-and runs a minimal
+IPC channels between isolated processes with a real blocking receive
+(reusing the exact same scheduler mechanism `sleep()` already proved,
+just generalized to a second kind of wake condition), and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -77,16 +79,17 @@ isr/              interrupt dispatch
   isr.mc             interrupt_handler, called from interrupts.s's stubs
 sched/            preemptive task scheduler
   switch.s           hand-written context switch (below what asm(...) can express)
-  task.mc            Task table (each with its own CR3), createTask/yield/sleep,
-                     six demo tasks (two of them isolated processes)
+  task.mc            Task table (each with its own CR3), createTask/yield/sleep/
+                     channelReceive, seven demo tasks (three isolated processes)
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
   syscall.mc         syscall dispatcher
-proc/             process loading + the kernel object model
+proc/             process loading + the kernel object model + IPC
   testprog.s         hand-assembled, position-independent ring3 "program" -
                      an opaque blob, not a MiniC function
   process.mc         Process table + spawnProcess(): the real loader
   object.mc          KernelObject table + per-process handle tables
+  channel.mc         Channel table + channelSend/channelHasMessage
 shell/            the interactive shell
   shell.mc           cmd* functions + runCommand dispatch
 ```
@@ -256,11 +259,35 @@ shell/            the interactive shell
   handle) returns a process object's `taskIndex` - arbitrary but real
   ground truth, independently checkable against the `ps` shell command's
   own output - or the same `-1` sentinel `resolveHandle` returns
-  whenever the handle doesn't check out. `shell/shell.mc`
+  whenever the handle doesn't check out. Writing this surfaced two more
+  real MiniC language gaps (multi-dimensional array declarations,
+  `const`) - fixed the same session in the `minic` repo, then used here
+  to remove `gHandleTables`' manual flattening and `OBJ_PROCESS`'s
+  only-by-convention constness, the same "go back and remove the
+  workaround once the real feature exists" discipline this project
+  always follows. **Milestone 15** added `proc/channel.mc`: a `Channel`
+  is a single-slot mailbox (one `u64` message) - `channelSend()` is
+  non-blocking (fails outright if the mailbox is already full, rather
+  than overwriting an unread message or blocking the sender too - a
+  second hard problem, deliberately not tackled here). The one genuinely
+  new mechanism is `sched/task.mc`'s `channelReceive()`: it blocks the
+  calling task exactly the way `sleep()` already does - marks itself
+  blocked, this time with the new `waitingChannel` field set instead of
+  a `wakeTick`, and yields away. `yield()`'s blocked-task scan gained a
+  second wake condition alongside the tick check
+  (`channelHasMessage(waitingChannel)`) - the exact generalization the
+  roadmap called for, reusing milestone 10's blocking mechanism for IPC
+  rather than inventing a second one next to it. A real bug surfaced
+  immediately: `gTasks[8]` was already fully subscribed by task 0 +
+  task1-4 + procA/procB + the one spawned ring3 process, so the two new
+  demo tasks silently failed to create (`createTaskWithCr3` returning
+  `false`, unchecked) - fixed by growing the table to 16 with headroom,
+  not just enough for today. `shell/shell.mc`
   is the interactive
   shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
   `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/
-  `objs`/`echo <text>`) built on `drivers/keyboard.mc`'s line buffer.
+  `objs`/`chan`/`send`/`echo <text>`) built on `drivers/keyboard.mc`'s
+  line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -356,6 +383,14 @@ procA: 0xaaaaaaaa @phys 0x426000 procB: 0xbbbbbbbb @phys 0x429000
 processes: 0x1 proc0 task=0x7 cr3=0x426000
 > objs
 objects: 0x1 obj0 type=0x1 dataIndex=0x0
+> chan
+receiver got: 0x0 value=0x0
+> chan
+receiver got: 0x0 value=0x0
+> send
+sent 0xc0ffee1234
+> chan
+receiver got: 0x1 value=0xc0ffee1234
 ```
 
 Those first `alloc` addresses aren't right at the heap's base address
@@ -421,6 +456,27 @@ is real, not decorative. `objs`' `obj0 type=0x1 dataIndex=0x0` confirms
 the object side directly: exactly one `KernelObject` exists, its type is
 `OBJ_PROCESS` (`1`), and it points at `gProcesses[0]` - the same process
 `ps` and the ring3 self-handle both already agreed on.
+
+The `chan`/`send`/`chan` sequence is the milestone 15 proof, and it's
+deliberately operator-controlled rather than timed - QEMU/TCG's timer
+runs at wildly varying effective rates across sessions (the same gotcha
+`kernel-qemu-test` already documents for `gTickCount` comparisons), so a
+demo that raced a fixed `sleep()` duration against a fixed real-time
+delay turned out unreliable during development, caught before it ever
+shipped. The first two `chan` reads (`receiver got: 0x0 value=0x0`),
+run with an arbitrary number of other commands in between, show the
+receiver task genuinely still blocked on an empty channel for as long
+as nobody sends anything - not a short timeout, not a no-op. `send`
+calls `channelSend()` directly from the shell's own context (task 0,
+the *kernel's* address space) - the instant it succeeds, the third
+`chan` shows `receiver got: 0x1 value=0xc0ffee1234`: the exact value
+just sent, and the receiver (a `createIsolatedTask()` process with its
+own private `cr3`, same as `procA`/`procB`) woke up on its own, without
+ever being polled from the shell - `yield()`'s scan found
+`channelHasMessage()` true and cleared `blocked` the same way it already
+does for an expired `sleep()`. The message genuinely crossed from one
+isolated address space to another through the channel, not shared
+memory.
 
 That `procs` result is the milestone 12 proof: `procA` and `procB` both
 map the identical virtual address (`0x80000000`) in their own private
@@ -509,11 +565,31 @@ milestones 1-10 were each scoped just before starting them:
    different paths landing on the identical number, not a coincidence -
    while an invalid handle (99, never allocated) comes back as the same
    `-1` sentinel every failure path uses, not garbage or a crash.~~
-5. **IPC channels** (next up) between isolated processes - reuses milestone 10's
-   `sleep()`/blocking mechanism for blocking `receive()`.
-6. **Storage + VFS + a first filesystem** - ATA PIO driver, a minimal
-   custom filesystem, then a VFS layer above it (FAT32/ext2 as later
-   backends).
+5. ~~**IPC channels** (milestone 15) between isolated processes -
+   `proc/channel.mc`'s `Channel` is a single-slot mailbox; `channelSend()`
+   is non-blocking (fails if already full - a blocking send is a
+   separate hard problem, not tackled here). `sched/task.mc`'s
+   `channelReceive()` is the one genuinely new mechanism: it blocks the
+   calling task exactly the way `sleep()` already did, just with
+   `waitingChannel` set instead of a `wakeTick` - `yield()`'s
+   blocked-task scan gained a second wake condition
+   (`channelHasMessage()`) alongside the tick check, reusing milestone
+   10's blocking mechanism for IPC rather than inventing a second one,
+   exactly as planned. Verified in QEMU: an isolated process blocked on
+   `channelReceive()` since boot read back "still empty" across an
+   arbitrary number of other shell commands, then woke up with the exact
+   value the instant a `send` shell command (running in the kernel's own
+   address space) delivered it - proving both a real, unbounded block and
+   a real cross-address-space delivery, not shared memory. Along the way:
+   a real bug (`gTasks[8]` was already fully subscribed, so the two new
+   demo tasks silently failed `createTaskWithCr3` - grown to `gTasks[16]`
+   with headroom) and two more real MiniC language gaps found and fixed
+   in the `minic` repo (multi-dimensional array declarations, `const`),
+   then used here to remove `proc/object.mc`'s manually-flattened handle
+   table and only-by-convention-const globals.~~
+6. **Storage + VFS + a first filesystem** (next up) - ATA PIO driver, a
+   minimal custom filesystem, then a VFS layer above it (FAT32/ext2 as
+   later backends).
 7. **Real `Process.spawn()` from disk**, once 3 and 6 both exist.
 8. **Method-call syntax in MiniC itself** (a compiler milestone in the
    `minic` repo, not this one) - before building a native `File`/
@@ -572,7 +648,32 @@ around phase 7-8.
   scheduler's own thread-of-control concept) isn't a kernel object in
   its own right yet, unlike real NT where Process and Thread are
   separate object types. Not a gap so much as not-yet-needed: nothing
-  today creates more than one thread per process to distinguish.
+  today creates more than one thread per process to distinguish. A
+  `Channel` (milestone 15) isn't wrapped as a `KernelObject`/handle
+  either yet - `channelSend`/`channelReceive` take a plain `gChannels[]`
+  index, called directly by kernel-mode tasks, the same way
+  `procA`/`procB` call `mapPageIn` directly rather than through a
+  handle. Ring3 code has no way to reach a channel at all right now (no
+  syscall exposes one) - deliberately deferred rather than shipped
+  untested, since exercising it would need a *second* concurrently
+  ring3-capable process, which needs the per-task `RSP0` fix above
+  first.
+- `channelSend()` is non-blocking and single-slot: a sender that finds
+  the mailbox already full just gets `false` back, with no queue, no
+  backpressure, and no way to wait for room - fine for today's one
+  sender/one receiver demo, not a real MPSC/SPSC queue. A blocking send
+  (the sender waiting the same way `channelReceive()`'s caller does) is
+  a separate hard problem, deliberately not tackled this milestone.
+  `proc/channel.mc`'s `gChannels[4]` cap is an arbitrary constant, same
+  reasoning as `proc/object.mc`'s tables above.
+- Task/process/object/channel creation failures are silently ignored in
+  `kmain.mc` - `createTask`/`createIsolatedTask`/`spawnProcess`/
+  `createChannel` all return a success flag or index, but none of their
+  boot-time call sites check it. Harmless today (none of them are
+  anywhere near their fixed caps at boot), but a real bug class waiting
+  to happen once boot-time setup grows enough to actually hit one - this
+  is exactly how milestone 15's own `gTasks[8]` capacity bug went
+  unnoticed until a live QEMU test caught it, rather than a build error.
 - Only one `int 0x80` syscall gate, two syscall numbers (1 = print, 3 =
   resolve a handle) - no real syscall table, no arguments beyond three
   plain integers, no pointer validation (a ring3 caller can pass any

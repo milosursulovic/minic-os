@@ -13,6 +13,7 @@ import "../sched/task.mc";
 import "../syscall/syscall.mc";
 import "../proc/process.mc";
 import "../proc/object.mc";
+import "../proc/channel.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -20,8 +21,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send echo <text>\n");
 }
 
 void cmdClear() {
@@ -198,6 +199,26 @@ void cmdTasks() {
     printHex(gTickCount);
 }
 
+void cmdChan() {
+    vgaPrint("receiver got: 0x");
+    serialPrint("receiver got: 0x");
+    printHex((u64) gReceiverGotMessage);
+    vgaPrint(" value=0x");
+    serialPrint(" value=0x");
+    printHex(gReceiverValue);
+}
+
+void cmdSend() {
+    bool ok = channelSend(gChannelDemo, 0xC0FFEE1234);
+    if (!ok) {
+        vgaPrint("send failed - channel full");
+        serialPrint("send failed - channel full\n");
+        return;
+    }
+    vgaPrint("sent 0xc0ffee1234");
+    serialPrint("sent 0xc0ffee1234\n");
+}
+
 void cmdProcs() {
     vgaPrint("procA: 0x");
     serialPrint("procA: 0x");
@@ -277,6 +298,10 @@ void runCommand() {
         cmdPs();
     } else if (streq(gLineBuffer, "objs")) {
         cmdObjs();
+    } else if (streq(gLineBuffer, "chan")) {
+        cmdChan();
+    } else if (streq(gLineBuffer, "send")) {
+        cmdSend();
     } else if (startsWith(gLineBuffer, "echo ")) {
         cmdEcho();
     } else if (gLineLen > 0) {

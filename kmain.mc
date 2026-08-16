@@ -52,6 +52,8 @@ void _start() {
     createIsolatedTask(&procAEntry);
     createIsolatedTask(&procBEntry);
     spawnProcess(&gTestProgStart, &gTestProgEnd, 0x80000000, 0x80001000);
+    gChannelDemo = createChannel();
+    createIsolatedTask(&procReceiverEntry);
     asm("sti");
 
     serialPrint("interrupts live\n");

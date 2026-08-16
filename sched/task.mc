@@ -21,6 +21,7 @@ import "../mm/heap.mc";
 import "../mm/frames.mc";
 import "../mm/paging.mc";
 import "../isr/isr.mc";
+import "../proc/channel.mc";
 
 extern void switch_context(u64* oldRspOut, u64 newRsp);
 
@@ -33,9 +34,15 @@ struct Task {
     u64 ring3EntryVaddr;    // 0 = plain kernel task; else jump here via run_ring3_test (milestone 13)
     u64 ring3UserStackTop;  // only meaningful when ring3EntryVaddr != 0
     int processIndex;       // -1 = plain kernel task; else an index into gProcesses[] (milestone 14)
+    int waitingChannel;     // -1 = blocked on a tick (wakeTick), else blocked on gChannels[this] (milestone 15)
 }
 
-Task gTasks[8];
+// Sized with headroom past what boots today (task 0 + task1-4 + procA/
+// procB + the spawned ring3 process + the channel demo's sender/
+// receiver = 10) - task structs are cheap (no heap cost, each task's
+// real 16KB stack is a separate kalloc()), so oversizing this array
+// costs nothing but a few dozen bytes of zeroed .bss.
+Task gTasks[16];
 int gTaskCount;
 int gCurrentTask;
 
@@ -47,7 +54,7 @@ void schedulerInit() {
 }
 
 bool createTaskWithCr3(fn() -> void entry, u64 cr3) {
-    if (gTaskCount >= 8) {
+    if (gTaskCount >= 16) {
         return false;
     }
     u8* stackMem = (u8*) kalloc(16384);
@@ -70,6 +77,7 @@ bool createTaskWithCr3(fn() -> void entry, u64 cr3) {
     t->used = true;
     t->cr3 = cr3;
     t->processIndex = -1;   // plain kernel task by default - 0 would wrongly look like gProcesses[0]
+    t->waitingChannel = -1;   // not waiting on a channel by default - 0 would wrongly look like gChannels[0]
     gTaskCount = gTaskCount + 1;
     return true;
 }
@@ -97,16 +105,32 @@ void yield() {
     int next = prev;
     int scanned = 0;
     // Walk the ring looking for a runnable task, waking up anything
-    // whose sleep has expired as we pass it - task 0 (the shell/main
-    // loop) never blocks itself, so this is guaranteed to terminate with
-    // *something* runnable (at worst, right back at `prev`) rather than
-    // looping forever with nothing to switch to.
+    // whose wake condition is satisfied as we pass it - task 0 (the
+    // shell/main loop) never blocks itself, so this is guaranteed to
+    // terminate with *something* runnable (at worst, right back at
+    // `prev`) rather than looping forever with nothing to switch to.
+    //
+    // Two different wake conditions share this one scan (milestone 15):
+    // a plain sleep() waits for a tick, a channelReceive() waits for a
+    // message - waitingChannel is how a blocked task says which one it
+    // means. This is the exact generalization the roadmap called for:
+    // reusing sleep()'s blocking mechanism for IPC, not inventing a
+    // second one next to it.
     while (scanned < gTaskCount) {
         next = (next + 1) % gTaskCount;
         scanned = scanned + 1;
         Task* candidate = &gTasks[next];
-        if (candidate->blocked && gTickCount >= candidate->wakeTick) {
-            candidate->blocked = false;
+        if (candidate->blocked) {
+            bool wake = false;
+            if (candidate->waitingChannel >= 0) {
+                wake = channelHasMessage(candidate->waitingChannel);
+            } else {
+                wake = gTickCount >= candidate->wakeTick;
+            }
+            if (wake) {
+                candidate->blocked = false;
+                candidate->waitingChannel = -1;
+            }
         }
         if (!candidate->blocked) {
             break;
@@ -139,6 +163,26 @@ void sleep(u64 ticks) {
     self->blocked = true;
     self->wakeTick = gTickCount + ticks;
     yield();
+}
+
+// Blocks the calling task until a message arrives on channelIndex -
+// marks itself blocked with waitingChannel set (instead of sleep()'s
+// wakeTick) and yields away, exactly the shape sleep() already has just
+// above. Never returns until a message is actually available; the
+// `while` (not `if`) is defensive rather than load-bearing on this
+// single-core scheduler - yield()'s scan only ever clears `blocked`
+// once channelHasMessage() is already true, so by the time control
+// returns here the condition has always already been met.
+u64 channelReceive(int channelIndex) {
+    while (!channelHasMessage(channelIndex)) {
+        Task* self = &gTasks[gCurrentTask];
+        self->blocked = true;
+        self->waitingChannel = channelIndex;
+        yield();
+    }
+    u64 value = gChannels[channelIndex].message;
+    gChannels[channelIndex].full = false;
+    return value;
 }
 
 // ---- Demo tasks - just enough to prove real switching is happening,
@@ -234,6 +278,40 @@ void procBEntry() {
     while (true) {
         gProcBValue = *p;
         gProcBPhys = translateIn(gTasks[gCurrentTask].cr3, gDemoVaddr);
+        yield();
+    }
+}
+
+// ---- Milestone 15 demo: an isolated process blocked on channelReceive()
+// since boot, with the shell itself as the sender (the `send` command,
+// shell.mc) rather than a second task on a timer - deliberately, so the
+// "still blocked" and "just woke up" states are operator-triggered and
+// exactly reproducible instead of racing QEMU/TCG's timer (observed to
+// run at wildly varying effective rates across sessions - the same
+// gotcha the kernel-qemu-test skill already documents for gTickCount
+// comparisons, now hit for a fixed sleep() duration too, not just a
+// ticks-elapsed reading). procReceiverEntry calls channelReceive()
+// immediately at boot, long before any `send` is ever typed - it
+// genuinely blocks (every yield() scan skips it while the channel stays
+// empty), for as long as an operator chooses to run other commands
+// first, not just briefly. gReceiverGotMessage/gReceiverValue are only
+// ever written after channelReceive() actually returns, so `chan`
+// reading false across an arbitrary number of other commands, then true
+// with the exact sent value the instant `send` runs, is the whole
+// proof: genuinely still blocked (not a no-op, not a short timeout),
+// and the message really crossed from the shell's own address space
+// into this isolated process's (a separate cr3, same as procA/procB)
+// through the channel, not shared memory.
+
+int gChannelDemo;
+bool gReceiverGotMessage;
+u64 gReceiverValue;
+
+void procReceiverEntry() {
+    u64 value = channelReceive(gChannelDemo);
+    gReceiverValue = value;
+    gReceiverGotMessage = true;
+    while (true) {
         yield();
     }
 }
