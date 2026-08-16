@@ -890,10 +890,21 @@ milestones 1-10 were each scoped just before starting them:
    values, and the system stayed stable across extended repeated
    spawn/inspect cycles specifically hunting for any recurrence of the
    collision this fix was meant to close.~~
-8. **Method-call syntax in MiniC itself** (next up - a compiler
-   milestone in the `minic` repo, not this one) - before building a
-   native `File`/`Process`/`Socket`-style system API with real methods,
-   then a thin POSIX compatibility shim over it.
+8. ~~**Method-call syntax in MiniC itself** (milestone 20, a compiler
+   milestone in the `minic` repo, not this one) - `<ReturnType>
+   <StructName>.<methodName>(<StructName>* self, ...)` declarations,
+   mangled internally as `"StructName.methodName"` functions. Needed zero
+   parser changes at call sites: `p.move(...)` already parsed as a struct
+   field access being called, so the new logic lives entirely in
+   codegen - recognize when the accessed field name matches a declared
+   method and dispatch there, falling back to the pre-existing
+   "function-pointer struct field" path unchanged when it doesn't. Pure
+   syntax sugar, not a new dispatch mechanism - no vtables, no
+   inheritance, no operator overloading; this kernel's own tag+if/else
+   "polymorphic" routing (`proc/object.mc`, `disk/vfs.mc`) is untouched
+   by it. See `minic`'s `examples/methods_demo.mc`.~~ Next up: a native
+   `File`/`Process`/`Socket`-style system API with real methods, then a
+   thin POSIX compatibility shim over it.
 9. **Capability/permission system** on top of the handle table, then
    security hardening (NX/ASLR/sandboxing).
 10. **A real driver framework (PCI enumeration) + networking** (NIC
