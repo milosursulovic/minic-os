@@ -46,7 +46,10 @@ native File API, no kernel changes needed, a real capability/permission
 system on top of the handle table (a handle carries fixed rights,
 granted once at open time - a ring3 process handed a receive-only
 channel handle genuinely cannot use it to send, not just "isn't
-expected to"), real memory-protection hardening on the shared kernel
+expected to"; the same real enforcement now covers `Process` handles
+too, including a ring3 process opening a genuinely rights-less handle
+to ANOTHER process and having every query through it correctly
+rejected), real memory-protection hardening on the shared kernel
 region (a cloned, ring3-capable address space's copy of the kernel's
 own identity-map/heap PDPT entries has the user bit stripped, so a
 deliberate ring3 write into that region takes a real page fault instead
@@ -127,7 +130,13 @@ syscall/          ring0/ring3 boundary
                      ordinary nested call within the calling ring3
                      task's own context), and openChannel (milestone 25,
                      number 9) - numbers 7/8 now take a real, rights-
-                     checked HANDLE instead of a raw channel index
+                     checked HANDLE instead of a raw channel index.
+                     Milestone 27: number 3 (query) now checks
+                     RIGHT_QUERY too (previously granted but never
+                     verified), and new number 10 (openProcess) mints a
+                     handle to ANOTHER process with caller-requested
+                     rights intersected against what's actually
+                     grantable
 proc/             process loading + the kernel object model + IPC
   ring3prog.mc       a real, minicc-compiled MiniC ring3 "program" -
                      the loaded blob; see ring3.ld/ring3blob.s for how a
@@ -165,7 +174,10 @@ proc/             process loading + the kernel object model + IPC
                      milestone 25 gave each `Handle` a real `rights`
                      bitmask, fixed forever at grant time - the first
                      step of the roadmap's Phase IX (capability/
-                     permission work)
+                     permission work). Milestone 27 removed
+                     resolveHandle() (unused once every caller also
+                     needed the handle's rights, not just its object
+                     index - each syscall inlines its own check now)
   channel.mc         Channel table + channelSend/channelHasMessage
 disk/             storage
   ata.mc             legacy ATA PIO driver - real sector read/write
@@ -352,10 +364,13 @@ shell/            the interactive shell
   per-process handle table (`gHandleTables`, flattened to one array since
   MiniC has no 2D array declarations - process P's handle H lives at
   `gHandleTables[P * HANDLES_PER_PROCESS + H]`), the NT-style piece of
-  the long-term plan. `resolveHandle(processIndex, handle)` is the one
-  place a small ring3-supplied integer gets turned into an object index
-  - bounds-checked and existence-checked, never trusted as a raw array
-  index. `spawnProcess()` gives every new process a handle to itself for
+  the long-term plan. `resolveHandle(processIndex, handle)` (removed in
+  milestone 27 - see below - once every caller also needed the handle's
+  `rights` field, not just its object index, and inlined the same
+  bounds/existence check directly) was the one place a small
+  ring3-supplied integer got turned into an object index - bounds-
+  checked and existence-checked, never trusted as a raw array index.
+  `spawnProcess()` gives every new process a handle to itself for
   free, guaranteed to land in slot 0 (a fresh handle table is empty, so
   the first allocation into it always takes slot 0) - "handle 0 =
   myself," no syscall needed just to discover it. `sched/task.mc`'s
@@ -364,8 +379,7 @@ shell/            the interactive shell
   argument should be resolved against. New syscall number 3 (query
   handle) returns a process object's `taskIndex` - arbitrary but real
   ground truth, independently checkable against the `ps` shell command's
-  own output - or the same `-1` sentinel `resolveHandle` returns
-  whenever the handle doesn't check out. Writing this surfaced two more
+  own output - or the same `-1` sentinel any invalid handle produces. Writing this surfaced two more
   real MiniC language gaps (multi-dimensional array declarations,
   `const`) - fixed the same session in the `minic` repo, then used here
   to remove `gHandleTables`' manual flattening and `OBJ_PROCESS`'s
@@ -655,12 +669,16 @@ its own child this time):
 
 ```
 Channel.receive() got trigger 0x1
+hello from a LOADED process! 0xc0ffee
 Process.spawn() launched taskIndex 0x9
 hello from a LOADED process! 0xc0ffee
-hello from a LOADED process! 0xc0ffee
+ProcessHandle.open(rights=0) ok=0x1
+unauthorized ProcessHandle.query() got 0xffffffffffffffff
+ProcessHandle.open(RIGHT_QUERY) ok=0x1
 handle 0 (self) -> taskIndex 0x9
+authorized ProcessHandle.query() got taskIndex 0x9
 handle 99 (invalid) -> 0xffffffffffffffff
-File.write() wrote 0xffffffffffffffff
+File.write() wrote 0x36
 File.read() got back 0x36
 hello from ring3, via a real File.write() method call!0
 POSIX read() 1: 0
@@ -671,18 +689,50 @@ Channel.open() ok=0x1
 unauthorized Channel.send() succeeded=0x0
 ```
 
-The last fourteen lines are the *spawned child* - the exact same
-`ring3prog.mc` blob, running from `_start()` again from scratch in its
-own freshly cloned address space, with its own distinct `taskIndex`
-(`0x9`, not the parent's `0x7`) and its own independent handle table -
-its `Channel.open()` call gets a brand-new handle, resolved through
-*its own* `gHandleTables[1][...]`, never the parent's. It reaches its
-own `Channel.receive()` call too, but the channel's single-slot mailbox
-is already empty again (the parent's `receive()` consumed the one
-message `ring3go` sent), so it just blocks there - never reaching *its
-own* `Process.spawn()` call,
-which is what stops this from spawning a second, third, fourth
-generation automatically.
+Everything from the first `hello from a LOADED process!` onward is the
+*spawned child* - the exact same `ring3prog.mc` blob, running from
+`_start()` again from scratch in its own freshly cloned address space,
+with its own distinct `taskIndex` (`0x9`, not the parent's `0x7`) and its
+own independent handle table - except now it's genuinely INTERLEAVED
+with the parent's own remaining code (milestone 27's `ProcessHandle`
+demo, still running in the parent's own `_start()` after its
+`Process.spawn()` call returns), not simply "runs after." The exact
+interleave point isn't guaranteed run to run - a real preemptive
+scheduler, same one milestone 9 proved - which is why the child's own
+first print lands *before* the parent's own `Process.spawn() launched
+taskIndex 0x9` line in this particular capture, not after, unlike some
+earlier transcripts. What's NOT allowed to vary is which VALUES each
+side reports, and they don't: the child's own `handle 0 (self) ->
+taskIndex 0x9` is still exactly its own taskIndex, and the parent's
+`ProcessHandle` lines (see below) are unaffected by whatever the child
+happens to be doing concurrently. The child reaches its own
+`Channel.receive()` call too, but the channel's single-slot mailbox is
+already empty again (the parent's `receive()` consumed the one message
+`ring3go` sent), so it just blocks there - never reaching its own
+`Process.spawn()` call, which is what stops this from spawning a second,
+third, fourth generation automatically.
+
+`ProcessHandle.open(rights=0) ok=0x1` through `authorized
+ProcessHandle.query() got taskIndex 0x9` are milestone 27's proof, run by
+the *parent* right after its own `Process.spawn()` call, using the
+child's just-returned `taskIndex` (`0x9`) as the target. `open(rights=0)`
+deliberately requests NO rights and still gets back a real, valid handle
+(`ok=0x1`) - proving a handle's existence and its rights are two
+separate things now, same distinction milestone 25 established for
+`Channel`. The next line, `unauthorized ProcessHandle.query() got
+0xffffffffffffffff`, is the actual point: querying through that
+rights-less handle is correctly rejected, the same `-1` sentinel every
+other invalid-handle path in this kernel already uses. The second
+`open()`, requesting `RIGHT_QUERY` this time, succeeds and its
+`.query()` returns `0x9` - the exact taskIndex `Process.spawn()` already
+reported two lines earlier, an independent cross-check that this is
+real ground truth, not a hardcoded echo of what was requested. The
+`handle 0 (self) -> taskIndex 0x9` line in between (the child's own,
+pre-existing self-query, unaffected by any of this) is the built-in
+regression check: `RIGHT_QUERY` was already being granted to every
+self-handle since milestone 14, just never *verified* until this
+milestone - if enforcing the check had broken something, this exact
+line would have shown `-1` instead of `0x9`.
 
 Milestone 26's proof is a separate, dedicated session - deliberately not
 folded into the transcript above, since it ends by halting the kernel on
@@ -853,9 +903,8 @@ on the identical number, meaning the handle genuinely resolved through
 `gObjects`/`gProcesses` rather than being hardcoded or coincidental. The
 second shows a handle number that was never allocated (99, past the
 8-per-process limit *and* never assigned even if it weren't) coming back
-as the same `-1` sentinel `resolveHandle()` returns for any invalid
-handle - not garbage, not a crash - proving the bounds/existence check
-is real, not decorative. `objs`' `obj0 type=0x1 dataIndex=0x0` confirms
+as the same `-1` sentinel any invalid handle produces - not garbage, not
+a crash - proving the bounds/existence check is real, not decorative. `objs`' `obj0 type=0x1 dataIndex=0x0` confirms
 the object side directly: exactly one `KernelObject` exists, its type is
 `OBJ_PROCESS` (`1`), and it points at `gProcesses[0]` - the same process
 `ps` and the ring3 self-handle both already agreed on.
@@ -1038,9 +1087,9 @@ milestones 1-10 were each scoped just before starting them:
    the fix).~~
 4. ~~**Kernel object model + per-process handle tables** (milestone 14,
    the NT-style piece) - `proc/object.mc`'s `KernelObject` table plus a
-   *separate* per-process handle table (`resolveHandle(processIndex,
-   handle)` is the one place a ring3-supplied integer becomes an object
-   index - bounds-checked, never trusted directly). Every process gets a
+   *separate* per-process handle table (a ring3-supplied handle integer
+   is always bounds-checked and existence-checked before use, never
+   trusted directly). Every process gets a
    handle to itself for free in the well-known slot 0. New syscall number
    3 resolves a handle within the *calling* process's own table.
    Verified in QEMU: a loaded process resolving its own handle 0 gets
@@ -1362,10 +1411,39 @@ milestones 1-10 were each scoped just before starting them:
    (BUG!)" line written specifically to catch a silent failure never
    prints. A full regression pass (heap, `map`, the scheduler,
    `mkfs`/`install`/`ring3go`'s spawn and isolation, milestone 25's
-   capability rights) confirmed nothing legitimate broke.~~ Next up:
-   extending real per-handle rights to `Process` handles too, or further
-   security hardening (NX/ASLR/sandboxing) - whichever the user picks up
-   first.
+   capability rights) confirmed nothing legitimate broke.~~
+   ~~**Milestone 27: real per-handle rights on Process** - Phase IX's
+   third step, closing the gap milestone 25's own account left explicitly
+   open. The real, concrete gap turned out to be narrower and more
+   interesting than "Process has no rights at all": `RIGHT_QUERY` already
+   existed (`proc/object.mc`, since milestone 25) and was already granted
+   to every process's own self-handle (`spawnProcess()`, since milestone
+   14) - but syscall 3 (query) never actually checked it, resolving any
+   valid `OBJ_PROCESS` handle regardless of its rights bitmask. Fixed by
+   inlining the same handle-table/rights-check style syscalls 7/8/9
+   already use (replacing the now-dead `resolveHandle()`, removed). New
+   syscall 10 (`openProcess`) is the first real CROSS-process capability:
+   given another task's index, it mints a handle to that process in the
+   caller's own table, granting the intersection of a caller-REQUESTED
+   rights bitmask and what's actually grantable (`requested &
+   RIGHT_QUERY` today) - a real, caller-controllable mechanism for the
+   negative-space proof, not a testing-only backdoor. Verified in QEMU:
+   after `Process.spawn()` launches a child, the parent opens a handle to
+   that CHILD with rights=0 (`ProcessHandle.open(rights=0) ok=0x1` - a
+   real, valid handle that can do nothing) and its `.query()` is
+   correctly rejected (`0xffffffffffffffff`); a second handle requesting
+   `RIGHT_QUERY` succeeds and its `.query()` returns `0x9` - the exact
+   taskIndex `Process.spawn()` already reported, an independent
+   cross-check. The pre-existing self-handle query (already granted
+   `RIGHT_QUERY` since milestone 14, now actually verified for the first
+   time) still returns the correct value too, confirming the newly-real
+   check doesn't break the one path that's used it all along. A full
+   regression pass (heap, `map`, the scheduler, milestone 26's
+   `ring3fault` hardening, milestone 25's Channel rights) confirmed
+   nothing broke.~~ Next up: further security hardening (NX/ASLR/
+   sandboxing) is the last known-open Phase IX item, though its own scope
+   still needs settling - could also be a good point to consider Phase IX
+   substantially complete and move to Phase X (drivers/networking).
 10. **A real driver framework (PCI enumeration) + networking** (NIC
     driver, a from-scratch TCP/IP stack) - deliberately last: the
     largest remaining subsystem, with the fewest things depending on it.
@@ -1413,6 +1491,18 @@ around phase 7-8.
   regression pass (heap, the `map` demo, the scheduler, `mkfs`/`install`/
   `ring3go`'s process spawn and isolation, milestone 25's capability
   rights) confirmed nothing legitimate broke.
+- ~~`Process` handles carried no real rights enforcement - `RIGHT_QUERY`
+  existed and was granted, but nothing ever checked it~~ - **fixed in
+  milestone 27**: syscall 3 (query) now checks `RIGHT_QUERY` before
+  resolving a handle, the same inline handle-table/rights style syscalls
+  7/8/9 already used (`resolveHandle()`, which had no rights concept,
+  removed as dead code once every caller needed one). New syscall 10
+  (`openProcess`) mints a handle to ANY process (not just yourself) with
+  a caller-requested rights bitmask intersected against what's actually
+  grantable - verified by opening a rights-less handle to a freshly
+  spawned child and watching its `.query()` get rejected, then opening a
+  second, properly-rights handle and watching it succeed with the exact
+  taskIndex `Process.spawn()` already reported.
 - ~~Only one ring3 process was safe to run at a time~~ - **fixed in
   milestone 19**: `sched/task.mc`'s `Task` gained a `kernelStackTop`
   field (each task's own already-`kalloc`'d kernel stack, reused as its

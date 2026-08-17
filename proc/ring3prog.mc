@@ -66,6 +66,33 @@
 // EXPECTED to fail, and is exercised for the first time specifically
 // to prove that failure is real, not just untested.
 //
+// Milestone 26 added the `triggerValue == 2` branch below - a deliberate
+// forbidden write into the shared kernel region, the negative-space
+// proof for that milestone's `cloneAddressSpace()` fix. See mm/paging.mc
+// for the kernel-side change; this file just needed a way to TRIGGER the
+// attempt on command.
+//
+// Milestone 27 (Phase IX's second capability step): extends real
+// per-handle rights to `Process` objects, the same way milestone 25 did
+// for `Channel`. The gap here was narrower and more concrete than it
+// first looked - `RIGHT_QUERY` already existed and was already granted
+// to every process's own self-handle (milestone 14's `spawnProcess()`),
+// but syscall 3 (query) never actually CHECKED it - any valid OBJ_PROCESS
+// handle could query regardless of its rights bitmask. New syscall 10
+// (`openProcess`) is the first real CROSS-process capability: given
+// another task's index, it mints a handle to THAT process in the
+// caller's own table, with the caller REQUESTING a rights bitmask that
+// the kernel intersects against what's actually grantable
+// (`requested & RIGHT_QUERY` - still the only real Process operation).
+// `ProcessHandle` (new, below) wraps this - `.open(taskIndex, rights)`/
+// `.query()`. Requesting 0 gives a handle that's real and valid but can
+// do nothing, which is the actual proof exercised in `_start()`: open a
+// handle to the just-spawned child with rights=0, show its `.query()` is
+// rejected, then open a SECOND handle with RIGHT_QUERY and show that one
+// succeeds - and returns the exact same taskIndex `Process.spawn()`
+// already reported, a real cross-check like milestone 14's original
+// handle-0-self-query proof.
+//
 // _start MUST be the first FUNCTION declared in this file: ring3.ld's
 // .text starts at address 0 with no reordering, and this codegen emits
 // function bodies into .text in program-declaration order (no
@@ -91,6 +118,22 @@ struct Channel {
 struct Process {
     char* path;
 }
+
+// Milestone 27: a handle-based counterpart to `Process` (which is
+// path-based, spawn-only) - wraps syscalls 10/3, the same shape
+// `Channel` wraps 9/7/8. Kept as a separate struct rather than adding
+// fields to `Process` since the two represent genuinely different
+// things: `Process.path` names a FILE to spawn from, `ProcessHandle`
+// names an ALREADY-RUNNING task to query.
+struct ProcessHandle {
+    int handle;
+}
+
+// Mirrors object.mc's real ABI constant - duplicated here because this
+// file is compiled standalone (--freestanding, no import of kernel
+// internals) and only knows the syscall ABI, same reason doSyscall()'s
+// numbers themselves are just written as literals.
+const int RIGHT_QUERY = 1;
 
 struct FileDescriptor {
     bool used;
@@ -208,6 +251,22 @@ void _start() {
         childImage.path = "/system/testprog.bin";
         u64 childTaskIndex = childImage.spawn(0x80000000, 0x80020000);
         doSyscall(1, (u64) "Process.spawn() launched taskIndex 0x", childTaskIndex, 0);
+
+        // Milestone 27's proof, only reachable once the spawn above
+        // actually succeeded (a real taskIndex, not the -1 sentinel).
+        if (childTaskIndex != (u64) -1) {
+            ProcessHandle noRights;
+            bool openedNoRights = noRights.open((int) childTaskIndex, 0);
+            doSyscall(1, (u64) "ProcessHandle.open(rights=0) ok=0x", (u64) openedNoRights, 0);
+            u64 unauthorizedQuery = noRights.query();
+            doSyscall(1, (u64) "unauthorized ProcessHandle.query() got 0x", unauthorizedQuery, 0);
+
+            ProcessHandle queryRights;
+            bool openedQuery = queryRights.open((int) childTaskIndex, RIGHT_QUERY);
+            doSyscall(1, (u64) "ProcessHandle.open(RIGHT_QUERY) ok=0x", (u64) openedQuery, 0);
+            u64 authorizedQuery = queryRights.query();
+            doSyscall(1, (u64) "authorized ProcessHandle.query() got taskIndex 0x", authorizedQuery, 0);
+        }
     }
 
     while (true) {
@@ -289,6 +348,26 @@ u64 Channel.receive(Channel* self) {
 
 u64 Process.spawn(Process* self, u64 loadVaddr, u64 stackVaddr) {
     return doSyscall(6, (u64) self->path, loadVaddr, stackVaddr);
+}
+
+// Milestone 27: ProcessHandle.open() requests a rights bitmask (syscall
+// 10) rather than being handed a fixed one the way Channel.open() is -
+// the kernel still decides the real policy (intersecting the request
+// against RIGHT_QUERY, the only grantable Process right today), but the
+// REQUEST itself is what lets this file demonstrate both an
+// intentionally rights-less handle and a genuinely authorized one from
+// the same call site, rather than needing a kernel-side testing backdoor.
+bool ProcessHandle.open(ProcessHandle* self, int taskIndex, int requestedRights) {
+    u64 result = doSyscall(10, (u64) taskIndex, (u64) requestedRights, 0);
+    if (result == (u64) -1) {
+        return false;
+    }
+    self->handle = (int) result;
+    return true;
+}
+
+u64 ProcessHandle.query(ProcessHandle* self) {
+    return doSyscall(3, (u64) self->handle, 0, 0);
 }
 
 // Milestone 24's POSIX shim - see the file header comment for the

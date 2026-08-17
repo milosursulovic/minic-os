@@ -100,6 +100,24 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // A handle's rights are fixed forever at grant time (see object.mc's
 // allocHandle) - there's no way to widen one later, only to open a new
 // one under whatever policy the kernel chooses at that call site.
+//
+// Milestone 27: num 3 (query) used to resolve a handle via resolveHandle()
+// and return ground truth with NO rights check at all - object.mc's own
+// RIGHT_QUERY comment even named this exact syscall as the right's
+// purpose, but nothing ever verified it. A real, if narrow, enforcement
+// gap: any valid OBJ_PROCESS handle could be queried regardless of its
+// rights bitmask. Fixed by inlining the same handle-table/rights-check
+// style syscalls 7/8/9 already use, replacing the old resolveHandle()
+// call. New num 10 (openProcess) is the first real cross-process
+// capability: given another task's index (not necessarily the caller's
+// own), it mints a handle to THAT process in the caller's own table -
+// the caller REQUESTS a rights bitmask (arg2), and the kernel grants the
+// intersection of what was requested and what's actually grantable for
+// an OBJ_PROCESS handle today (`requested & RIGHT_QUERY` - the only real
+// Process operation that exists). Requesting 0 (or any bits outside
+// RIGHT_QUERY) yields a handle that's real and valid but can do nothing
+// - the actual negative-space proof this milestone needed, using a real
+// caller-controllable mechanism rather than a testing-only backdoor.
 u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     if (num == 1) {
         char* s = (char*) arg1;
@@ -114,10 +132,17 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
         if (callerProcess < 0) {
             return (u64) -1;
         }
-        int objIndex = resolveHandle(callerProcess, (int) arg1);
-        if (objIndex < 0) {
+        int handle = (int) arg1;
+        if (handle < 0 || handle >= HANDLES_PER_PROCESS) {
             return (u64) -1;
         }
+        if (!gHandleTables[callerProcess][handle].used) {
+            return (u64) -1;
+        }
+        if ((gHandleTables[callerProcess][handle].rights & RIGHT_QUERY) == 0) {
+            return (u64) -1;
+        }
+        int objIndex = gHandleTables[callerProcess][handle].objectIndex;
         if (gObjects[objIndex].type == OBJ_PROCESS) {
             int procIdx = gObjects[objIndex].dataIndex;
             return (u64) gProcesses[procIdx].taskIndex;
@@ -212,6 +237,30 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
             return (u64) -1;
         }
         int handle = allocHandle(callerProcess, objIndex, RIGHT_RECEIVE);
+        if (handle < 0) {
+            return (u64) -1;
+        }
+        return (u64) handle;
+    }
+    if (num == 10) {
+        int callerProcess = gTasks[gCurrentTask].processIndex;
+        if (callerProcess < 0) {
+            return (u64) -1;
+        }
+        int targetTask = (int) arg1;
+        if (targetTask < 0 || targetTask >= gTaskCount) {
+            return (u64) -1;
+        }
+        int targetProcess = gTasks[targetTask].processIndex;
+        if (targetProcess < 0) {
+            return (u64) -1;
+        }
+        int objIndex = allocObject(OBJ_PROCESS, targetProcess);
+        if (objIndex < 0) {
+            return (u64) -1;
+        }
+        int grantedRights = ((int) arg2) & RIGHT_QUERY;
+        int handle = allocHandle(callerProcess, objIndex, grantedRights);
         if (handle < 0) {
             return (u64) -1;
         }

@@ -10,9 +10,13 @@
 // kernel-wide object table (gObjects) holding the actual objects, and a
 // SEPARATE table per process (gHandleTables) of small integers that
 // index into it. Ring3 code only ever sees the small integer - it can
-// never walk straight into gObjects[] itself, since resolveHandle() is
-// the one place that decides whether a given process's handle N refers
-// to anything at all.
+// never walk straight into gObjects[] itself; every syscall that
+// resolves a handle (syscall.mc's num 3/7/8) does its own inline
+// bounds/existence/rights check directly against gHandleTables rather
+// than through a shared helper, since milestone 27 made every one of
+// those checks also need the handle's `rights` field, not just its
+// objectIndex - a single "resolve to object index" helper stopped being
+// the natural shared shape once rights entered the picture.
 
 // A real `const` as of the `minic` compiler's const support (added the
 // same session this needed it) - was a plain, only-by-convention-const
@@ -101,20 +105,4 @@ int allocHandle(int processIndex, int objectIndex, int rights) {
         i = i + 1;
     }
     return -1;
-}
-
-// Resolves a handle within one specific process's OWN table to the
-// underlying object's index, or -1 if it's out of range or was never
-// allocated. `handle` is the one value in this whole path that's
-// attacker/ring3-controlled (a syscall argument) - bounds-checking it
-// here, not trusting it as a bare array index, is the actual point of
-// having a handle table at all rather than exposing gObjects[] directly.
-int resolveHandle(int processIndex, int handle) {
-    if (handle < 0 || handle >= HANDLES_PER_PROCESS) {
-        return -1;
-    }
-    if (!gHandleTables[processIndex][handle].used) {
-        return -1;
-    }
-    return gHandleTables[processIndex][handle].objectIndex;
 }
