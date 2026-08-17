@@ -27,6 +27,36 @@
 // there forever instead of spawning a second generation. No taskIndex-
 // checking or other recursion-guard hack needed.
 //
+// Milestone 24 added a thin POSIX-shaped shim - open/read/write/close,
+// plain free functions (not methods, deliberately - the whole point is
+// looking like the real POSIX API for anything ported against it, not
+// extending the native OO-style API) implemented ENTIRELY in this
+// ring3 program, with no new kernel syscalls or kernel changes at all.
+// The native File API is whole-file only (no seek/position, no
+// incremental read/write) - a real fd's read()/write() need to serve
+// PARTIAL requests and track a cursor across multiple calls, so
+// open() reads (or starts) the whole file into a per-fd in-memory
+// buffer once, read()/write() serve out of that buffer while advancing
+// a position, and close() flushes a written buffer back out through
+// File.write() in one shot. A real, if small, gap from true POSIX:
+// only one open-for-write "session" can safely target a given path (a
+// second concurrent writer would each hold its own buffer and the last
+// close() to run wins) - fine for this demo's single-fd-at-a-time use,
+// a real note for anyone building on this later.
+//
+// This milestone also grew the compiled image past 4096 bytes (one
+// page) for the first time - which exposed a real, separate bug in the
+// LOADER's fixed constants, not this file: kmain.mc/shell.mc/this
+// file's own Process.spawn() call all hardcoded loadVaddr=0x80000000/
+// stackVaddr=0x80001000, which was only ever safe because every ring3
+// program until now fit in exactly one page. Once this one needed a
+// second page, the image's own second page (0x80000000+4096..) and
+// the user stack (0x80001000..) landed on the SAME virtual address,
+// and whichever mapPageIn() call ran second silently won, leaving the
+// other one's backing memory unreachable at that address. Fixed by
+// moving stackVaddr out to 0x80020000 (128KB of headroom) at all three
+// call sites - see kmain.mc/shell.mc's own comments.
+//
 // _start MUST be the first FUNCTION declared in this file: ring3.ld's
 // .text starts at address 0 with no reordering, and this codegen emits
 // function bodies into .text in program-declaration order (no
@@ -51,6 +81,15 @@ struct Channel {
 
 struct Process {
     char* path;
+}
+
+struct FileDescriptor {
+    bool used;
+    bool forWriting;
+    char* path;
+    u64 position;
+    u64 length;
+    u8 buffer[256];
 }
 
 void _start() {
@@ -82,6 +121,30 @@ void _start() {
     doSyscall(1, (u64) "File.read() got back 0x", readBack, 0);
     doSyscall(1, (u64) &gReadBuf[0], 0, 0);
 
+    // Milestone 24: the POSIX shim, exercised with two separate write()
+    // calls (proving the buffer genuinely accumulates across calls, not
+    // just capturing one big write) and two separate read() calls
+    // (proving the position cursor genuinely advances between calls,
+    // not just replaying the whole buffer each time).
+    int wfd = open("/system/posix.txt", 1);
+    write(wfd, "POSIX ", 6);
+    write(wfd, "shim works!", 11);
+    close(wfd);
+
+    int rfd = open("/system/posix.txt", 0);
+    char posixBuf1[8];
+    int n1 = read(rfd, &posixBuf1[0], 6);
+    posixBuf1[n1] = 0;
+    char posixBuf2[16];
+    int n2 = read(rfd, &posixBuf2[0], 11);
+    posixBuf2[n2] = 0;
+    close(rfd);
+
+    doSyscall(1, (u64) "POSIX read() 1: ", 0, 0);
+    doSyscall(1, (u64) &posixBuf1[0], 0, 0);
+    doSyscall(1, (u64) "POSIX read() 2: ", 0, 0);
+    doSyscall(1, (u64) &posixBuf2[0], 0, 0);
+
     // Milestone 23: block on the ring3-dedicated channel (index 1 - a
     // fixed, documented convention matching kmain.mc's boot-time
     // createChannel() ordering, the same class of "fixed demo value"
@@ -97,10 +160,13 @@ void _start() {
 
     // Only reachable after receive() above unblocks - see the file
     // header comment for why this is what prevents infinite self-spawn
-    // rather than needing a recursion-guard flag.
+    // rather than needing a recursion-guard flag. loadVaddr/stackVaddr
+    // must match the exact same 0x80000000/0x80020000 pair every other
+    // call site uses - see the top-of-file comment for why stackVaddr
+    // moved off 0x80001000.
     Process childImage;
     childImage.path = "/system/testprog.bin";
-    u64 childTaskIndex = childImage.spawn(0x80000000, 0x80001000);
+    u64 childTaskIndex = childImage.spawn(0x80000000, 0x80020000);
     doSyscall(1, (u64) "Process.spawn() launched taskIndex 0x", childTaskIndex, 0);
 
     while (true) {
@@ -167,4 +233,91 @@ u64 Channel.receive(Channel* self) {
 
 u64 Process.spawn(Process* self, u64 loadVaddr, u64 stackVaddr) {
     return doSyscall(6, (u64) self->path, loadVaddr, stackVaddr);
+}
+
+// Milestone 24's POSIX shim - see the file header comment for the
+// design. mode 0 = read (load the file's existing content up front),
+// mode 1 = write (start an empty buffer, flushed as a new file on
+// close). Plain free functions, deliberately not methods - matching
+// POSIX's real API shape, not extending the native OO-style one.
+FileDescriptor gFdTable[4];
+
+int open(char* path, int mode) {
+    int fd = -1;
+    int i = 0;
+    while (i < 4) {
+        if (!gFdTable[i].used) {
+            fd = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if (fd < 0) {
+        return -1;
+    }
+    gFdTable[fd].used = true;
+    gFdTable[fd].forWriting = (mode == 1);
+    gFdTable[fd].path = path;
+    gFdTable[fd].position = 0;
+    if (mode == 1) {
+        gFdTable[fd].length = 0;
+    } else {
+        File f;
+        f.path = path;
+        u64 n = f.read((char*) &gFdTable[fd].buffer[0], 255);
+        if (n == (u64) -1) {
+            gFdTable[fd].used = false;
+            return -1;
+        }
+        gFdTable[fd].length = n;
+    }
+    return fd;
+}
+
+int read(int fd, char* buf, int len) {
+    if (fd < 0 || fd >= 4 || !gFdTable[fd].used) {
+        return -1;
+    }
+    u64 remaining = gFdTable[fd].length - gFdTable[fd].position;
+    u64 n = (u64) len;
+    if (n > remaining) {
+        n = remaining;
+    }
+    u64 i = 0;
+    while (i < n) {
+        buf[i] = (char) gFdTable[fd].buffer[gFdTable[fd].position + i];
+        i = i + 1;
+    }
+    gFdTable[fd].position = gFdTable[fd].position + n;
+    return (int) n;
+}
+
+int write(int fd, char* buf, int len) {
+    if (fd < 0 || fd >= 4 || !gFdTable[fd].used) {
+        return -1;
+    }
+    int i = 0;
+    while (i < len && gFdTable[fd].length < 256) {
+        gFdTable[fd].buffer[gFdTable[fd].length] = (u8) buf[i];
+        gFdTable[fd].length = gFdTable[fd].length + 1;
+        i = i + 1;
+    }
+    return i;
+}
+
+int close(int fd) {
+    if (fd < 0 || fd >= 4 || !gFdTable[fd].used) {
+        return -1;
+    }
+    int result = 0;
+    if (gFdTable[fd].forWriting) {
+        File f;
+        f.path = gFdTable[fd].path;
+        u64 written = f.write((char*) &gFdTable[fd].buffer[0], gFdTable[fd].length);
+        if (written == (u64) -1) {
+            result = -1;
+        }
+    }
+    gFdTable[fd].used = false;
+    return result;
 }

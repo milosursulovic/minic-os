@@ -69,7 +69,19 @@ void _start() {
     // `send` command and this milestone's spawn-trigger command would
     // race on the same mailbox.
     gRing3ChannelDemo = createChannel();
-    spawnProcess(&gTestProgStart, &gTestProgEnd, 0x80000000, 0x80001000);
+    // Milestone 24: stackVaddr moved from 0x80001000 to 0x80020000 (128KB
+    // of headroom past loadVaddr) - a real bug found this milestone, not
+    // a style change. The compiled ring3 image crossed 4096 bytes (one
+    // page) for the first time here; at the old stackVaddr, the image's
+    // own second page and the user stack landed on the identical virtual
+    // address, and whichever mapPageIn() call ran second silently won,
+    // leaving the other unreachable at that address. See proc/ring3prog.mc's
+    // header comment for the full account. Every spawnProcess()/
+    // spawnProcessFromPath() call site (here, shell.mc's cmdSpawn, and
+    // ring3prog.mc's own Process.spawn() call) must keep using this same
+    // stackVaddr, not just this one - a mismatched constant would silently
+    // reintroduce the exact same class of collision.
+    spawnProcess(&gTestProgStart, &gTestProgEnd, 0x80000000, 0x80020000);
     createIsolatedTask(&procReceiverEntry);
     vfsMount("/system", BACKEND_MINIFS);
     vfsMount("/devices", BACKEND_DEVICE);

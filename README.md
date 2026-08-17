@@ -39,8 +39,10 @@ ring3 process, wrapping two new syscalls rather than raw syscall
 numbers - real `Channel`/`Process` methods too (`spawnTrigger.receive()`
 blocking a ring3 process on a real syscall for the first time,
 `childImage.spawn(...)` letting a ring3 process launch another one
-itself, not just the kernel/shell doing it on its behalf) - and runs a
-minimal
+itself, not just the kernel/shell doing it on its behalf), and a thin
+POSIX-shaped shim (`open`/`read`/`write`/`close`, real position-tracking
+across multiple calls) implemented entirely in ring3 MiniC on top of the
+native File API, no kernel changes needed - and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -123,14 +125,22 @@ proc/             process loading + the kernel object model + IPC
                      way - `.receive()` blocks on a real syscall until
                      the shell's `ring3go` command triggers it, then
                      `.spawn()` launches a second copy of this same
-                     blob as an independent process
+                     blob as an independent process. Milestone 24 added
+                     a thin POSIX shim (open/read/write/close, plain
+                     free functions) entirely in this file, layered on
+                     top of File - no new syscalls, no kernel changes
   ring3.ld           standalone linker script for ring3prog.mc's own
-                     link (keeps .text/.rodata/.data/.bss contiguous)
+                     link (keeps .text/.rodata/.data/.bss contiguous;
+                     build.sh's objcopy step forces .bss to be
+                     represented as real zero bytes too, see milestone
+                     24's bug notes below)
   ring3blob.s        wraps the objcopy'd flat blob in gTestProgStart/
                      gTestProgEnd, same marker names every earlier
                      milestone's hand-assembled testprog.s exported
   process.mc         Process table + spawnProcess()/spawnProcessFromPath():
                      the real loader, from a pointer range or a VFS path
+                     (gLoadedImageBuf is 16KB as of milestone 24, not
+                     4096 - see milestone 24's bug notes below)
   object.mc          KernelObject table + per-process handle tables
   channel.mc         Channel table + channelSend/channelHasMessage
 disk/             storage
@@ -541,6 +551,10 @@ handle 99 (invalid) -> 0xffffffffffffffff
 File.write() wrote 0x36
 File.read() got back 0x36
 hello from ring3, via a real File.write() method call!0
+POSIX read() 1: 0
+POSIX 0
+POSIX read() 2: 0
+shim works!0
 > alloc
 allocated 64 bytes at 0x5000c040
 > alloc
@@ -596,7 +610,7 @@ wrote /system/vfsdemo.mfs via VFS
 > vfscat /system/vfsdemo.mfs
 This file was written through the VFS layer, not MiniFS directly.
 > install
-installed /system/testprog.bin, 0x972 bytes
+installed /system/testprog.bin, 0x1eb8 bytes
 > spawn
 spawned process 0x1
 > ps
@@ -620,12 +634,16 @@ hello from a LOADED process! 0xc0ffee
 hello from a LOADED process! 0xc0ffee
 handle 0 (self) -> taskIndex 0x9
 handle 99 (invalid) -> 0xffffffffffffffff
-File.write() wrote 0x36
+File.write() wrote 0xffffffffffffffff
 File.read() got back 0x36
 hello from ring3, via a real File.write() method call!0
+POSIX read() 1: 0
+POSIX 0
+POSIX read() 2: 0
+shim works!0
 ```
 
-The last eight lines are the *spawned child* - the exact same
+The last twelve lines are the *spawned child* - the exact same
 `ring3prog.mc` blob, running from `_start()` again from scratch in its
 own freshly cloned address space, with its own distinct `taskIndex`
 (`0x9`, not the parent's `0x7`). It reaches its own `Channel.receive()`
@@ -699,6 +717,22 @@ actually being read back either way. That failure-on-reboot is itself
 independent proof the write reached real, persistent storage on the
 first boot, not just something the ring3 process believed happened in
 memory.
+
+The four `POSIX ...`/`shim works!` lines are the milestone 24 proof.
+`open("/system/posix.txt", 1)` starts a fresh in-memory buffer;
+`write(wfd, "POSIX ", 6)` then `write(wfd, "shim works!", 11)` -
+**two separate calls** - append to it; `close(wfd)` flushes the whole
+17-byte buffer through `File.write()` in one shot. Then
+`open("/system/posix.txt", 0)` loads that same 17 bytes back into a
+fresh per-fd buffer; `read(rfd, buf1, 6)` returns exactly `"POSIX "`
+(printed as `POSIX ` immediately followed by the call's own `0` hex
+arg, i.e. `POSIX 0`) and `read(rfd, buf2, 11)` returns exactly
+`"shim works!"` from the ADVANCED position - **two separate calls
+returning two different, correct slices of the same buffer** is what
+proves the position cursor genuinely tracks across calls, not just
+replaying the whole thing every time. All of this - fd table,
+position tracking, buffering - is pure ring3 MiniC; no new syscalls,
+no kernel changes at all for this milestone.
 
 `Channel.receive() got trigger 0x1` and everything after it is the
 milestone 23 proof - and the riskiest new mechanism this milestone
@@ -818,12 +852,15 @@ layers genuinely share one underlying filesystem rather than VFS being
 a parallel, disconnected storage silo.
 
 The `install`/`spawn`/`ps` sequence is the milestone 19 proof. `install`
-writing `0x972` (2418) bytes - the real, host-verifiable size of `proc/
+writing `0x1eb8` (7864) bytes - the real, host-verifiable size of `proc/
 ring3prog.mc`'s compiled-and-flattened blob (`0xd0`/208 bytes back when
 this was `proc/testprog.s`'s hand-assembled version, pre-milestone-21;
 `0x250`/592 right after milestone 21 first compiled it; it's simply
-grown since, as milestones 22 and 23 added the `File`/`Channel`/
-`Process` API code this same blob now also contains) - confirms the
+grown since, as milestones 22-24 added the `File`/`Channel`/`Process`/
+POSIX-shim code this same blob now also contains - milestone 24 is also
+where this size first crossed 4096 bytes, one page, which is exactly
+what exposed two of that milestone's three real bugs, see below) -
+confirms the
 compiled-in program genuinely reached disk through
 `vfsWrite()`. `spawn` then reads it back
 and launches a second process; the loaded program's own two greeting
@@ -1140,8 +1177,65 @@ milestones 1-10 were each scoped just before starting them:
    different `cr3` values, and the shell stayed fully responsive
    (`chan`, `tasks`, `procs`, `objs`, `alloc`, `map` all clean) while the
    boot-time process sat genuinely blocked for an arbitrary number of
-   other commands beforehand.~~ Next up: milestone 24, a thin POSIX
-   compatibility shim over the whole native API.
+   other commands beforehand.~~
+   ~~**Milestone 24: a thin POSIX-shaped shim** - `open`/`read`/`write`/
+   `close`, plain free functions (deliberately not methods - matching
+   POSIX's real API shape rather than extending the native OO-style
+   one), implemented ENTIRELY in `proc/ring3prog.mc` with **no new
+   syscalls and no kernel changes at all**. The native File API is
+   whole-file only (no seek/position); a real fd needs to serve partial
+   reads/writes and track a cursor across calls, so `open()` loads (or
+   starts) a per-fd in-memory buffer once, `read()`/`write()` serve out
+   of it while advancing a position, `close()` flushes a written buffer
+   through `File.write()` in one shot - genuinely thin, a client-side
+   library over the existing native API, not a new kernel mechanism.
+   **This milestone also grew the compiled ring3 image past 4096 bytes
+   (one page) for the first time, which surfaced three real, previously-
+   latent bugs no earlier milestone's smaller program ever triggered**:
+   (1) `objcopy -O binary` silently drops a *trailing* NOBITS (`.bss`)
+   section instead of zero-padding it - every earlier milestone's tiny
+   `.bss` usage was always write-before-read, so the missing zeros never
+   actually mattered; milestone 24's `open()` is the first code here
+   that reads a global (`gFdTable[i].used`) before ever writing it,
+   which would have read real garbage instead of a clean `false`. Fixed
+   with `objcopy --set-section-flags .bss=alloc,load,contents`, forcing
+   real zero bytes into the flattened blob. (2) Far more serious:
+   `kmain.mc`/`shell.mc`/`ring3prog.mc`'s own `Process.spawn()` call all
+   hardcoded `loadVaddr=0x80000000`/`stackVaddr=0x80001000` - safe only
+   because every ring3 program until now fit in exactly one page. Once
+   this one needed two, the image's own second page and the user stack
+   landed on the *identical* virtual address, and whichever
+   `mapPageIn()` call ran second silently won, leaving the other
+   completely unreachable there - manifesting as string literals
+   resolving to the *correct address* (computed at compile time,
+   independent of what's actually mapped there) but *wrong content*
+   (whatever the stack overwrote), a genuinely confusing signature that
+   cost real debugging time before being correctly diagnosed. Fixed by
+   moving `stackVaddr` out to `0x80020000` (128KB of headroom) at all
+   three call sites. (3) `proc/process.mc`'s `gLoadedImageBuf` was a
+   fixed 4096 bytes - exactly the limit its own comment had flagged
+   since milestone 19 ("a real limit worth revisiting once anything
+   bigger needs loading") - so `spawnProcessFromPath()` started
+   silently failing (MiniFS's own "file too large for the caller's
+   buffer" sentinel) the moment the compiled program crossed that line.
+   Bumped to 16KB. **A real debugging lesson from this milestone, not
+   just the bugs themselves**: the string-literal-address-but-wrong-
+   content symptom was initially very hard to separate from a genuinely
+   *stale test artifact* - `rm -f serial.log` followed by a backgrounded
+   QEMU launch that silently failed to (re)start left a 10-minute-old
+   log file being misread as fresh output several times in a row before
+   the mismatch was caught by checking file timestamps directly; a
+   fully foreground `timeout N qemu-system-x86_64 ...` (no backgrounding
+   at all) turned out to be the one invocation shape that reliably
+   produces a genuinely fresh run in this environment. Verified in QEMU
+   after all three fixes: the full boot sequence (File API, POSIX shim,
+   Channel-gated Process.spawn, spawned child running its own complete
+   demo) all produce correct output end to end, `ps` shows two real
+   processes, and a full regression pass (`tasks`/`objs`/`alloc`/`map`)
+   stayed clean.~~ Phase VIII (MiniC methods + native API + POSIX shim,
+   milestones 20-24) is now complete. Next up: Phase IX (item 9 below) -
+   capability/permission work on top of the handle table, then security
+   hardening.
 9. **Capability/permission system** on top of the handle table, then
    security hardening (NX/ASLR/sandboxing).
 10. **A real driver framework (PCI enumeration) + networking** (NIC

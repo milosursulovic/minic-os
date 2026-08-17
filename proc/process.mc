@@ -130,13 +130,20 @@ int spawnProcess(u8* imageStart, u8* imageEnd, u64 loadVaddr, u64 stackVaddr) {
 // is spawnProcess() completely unchanged: loading from disk is only
 // ever "get the bytes into RAM," never a second loader.
 //
-// One page (4096 bytes) is generously more than proc/testprog.s needs
-// today - fine for this milestone's demo program, a real limit worth
-// revisiting once anything bigger needs loading.
-u8 gLoadedImageBuf[4096];
+// Milestone 24 hit the exact "anything bigger" case this comment always
+// warned about: proc/ring3prog.mc grew past 4096 bytes once it gained
+// real File/Channel/Process/POSIX-shim code, and spawnProcessFromPath()
+// silently failed (fsReadFile's own milestone-19 "too large for the
+// caller's buffer" sentinel, indistinguishable at this call site from
+// any other failure) the moment the compiled program crossed that
+// line. Bumped to 16384 (16KB) - generous headroom for this program's
+// current size (~8KB) and near-future growth, the same "give it real
+// room, not just exactly enough" reasoning already applied to
+// stackVaddr's own milestone-24 fix.
+u8 gLoadedImageBuf[16384];
 
 int spawnProcessFromPath(char* path, u64 loadVaddr, u64 stackVaddr) {
-    int n = vfsRead(path, &gLoadedImageBuf[0], 4096);
+    int n = vfsRead(path, &gLoadedImageBuf[0], 16384);
     if (n < 0) {
         return -1;
     }

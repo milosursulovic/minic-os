@@ -44,7 +44,21 @@ as --32 syscall/usermode.s -o usermode.o
 "$MINICC" proc/ring3prog.mc -S --freestanding -o proc/ring3prog.s
 { echo ".code64"; cat proc/ring3prog.s; } | as --32 -o proc/ring3prog_raw.o
 ld -m elf_i386 -T proc/ring3.ld -o proc/ring3prog_linked.elf proc/ring3prog_raw.o
-objcopy -O binary proc/ring3prog_linked.elf proc/ring3prog.bin
+# Milestone 24 found a real, latent bug in this pipeline: `objcopy -O
+# binary` drops a *trailing* NOBITS section (.bss) entirely rather than
+# padding it with zeros, since a raw binary format has no way to
+# represent "this is zero-filled" - it can only include bytes it
+# actually has. Every milestone before this one got away with it purely
+# by luck (globals were always written before ever being read, so
+# whatever garbage sat in that unbacked memory never actually showed
+# up) - milestone 24's open() is the first code here that reads a
+# global (gFdTable[i].used) before writing it, which exposed real
+# garbage there and produced a GPF. --set-section-flags forces objcopy
+# to treat .bss as real, zero-filled content instead of skipping it,
+# so the flattened blob's on-disk size (and therefore how many bytes/
+# pages spawnProcess() copies and maps) actually covers the program's
+# real memory footprint.
+objcopy -O binary --set-section-flags .bss=alloc,load,contents proc/ring3prog_linked.elf proc/ring3prog.bin
 (cd proc && as --32 ring3blob.s -o ../testprog.o)
 
 "$MINICC" kmain.mc -S --freestanding -o kmain.s

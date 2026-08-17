@@ -450,8 +450,11 @@ void cmdInstall() {
 // exact same load virtual address procA/procB/the milestone-13 process
 // all use (0x80000000) - safe, since this process gets its own freshly
 // cloned address space, same as every isolated task before it.
+// stackVaddr is 0x80020000, not 0x80001000 - see kmain.mc's comment on
+// its own spawnProcess() call for the real milestone-24 bug this fixes;
+// every spawn call site must agree on this same constant.
 void cmdSpawn() {
-    int idx = spawnProcessFromPath("/system/testprog.bin", 0x80000000, 0x80001000);
+    int idx = spawnProcessFromPath("/system/testprog.bin", 0x80000000, 0x80020000);
     if (idx < 0) {
         vgaPrint("spawn failed");
         serialPrint("spawn failed\n");
