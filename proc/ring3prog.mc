@@ -93,6 +93,13 @@
 // already reported, a real cross-check like milestone 14's original
 // handle-0-self-query proof.
 //
+// Milestone 28 (Phase IX's remaining item, security hardening) added
+// the `triggerValue == 3` branch below - NX enforcement on this
+// process's own user stack. See mm/paging.mc's PAGE_NX and boot.s's
+// EFER.NXE for the kernel-side change; this file just needed a way to
+// TRIGGER a deliberate stack-execution attempt on command, the same
+// shape milestone 26's `triggerValue == 2` branch already established.
+//
 // _start MUST be the first FUNCTION declared in this file: ring3.ld's
 // .text starts at address 0 with no reordering, and this codegen emits
 // function bodies into .text in program-declaration order (no
@@ -240,6 +247,24 @@ void _start() {
         u64* forbidden = (u64*) 0x100000;
         *forbidden = 0xDEADBEEF;
         doSyscall(1, (u64) "forbidden write succeeded (BUG!) at 0x", 0x100000, 0);
+    } else if (triggerValue == 3) {
+        // Milestone 28: trigger value 0x3 (shell's `ring3nx` command) is
+        // the negative-space proof for NX enforcement on this process's
+        // own user stack. 0x80020000 is the well-known stackVaddr every
+        // spawn call site uses (see the top-of-file comment) - the very
+        // BOTTOM of the stack page, safely below wherever this shallow
+        // call chain's real RSP currently sits, so writing one byte
+        // there doesn't corrupt the live call stack. 0xC3 is a real x86
+        // `ret` opcode - harmless if it somehow DID execute (it would
+        // just pop the return address `call` below is about to push and
+        // jump straight back), so this is a benign proof-of-concept, not
+        // something that could do damage if NX were somehow broken.
+        doSyscall(1, (u64) "attempting to execute ring3 stack byte at 0x", 0x80020000, 0);
+        u8* stackCode = (u8*) 0x80020000;
+        *stackCode = 0xC3;
+        gStackExecAddr = 0x80020000;
+        asm("mov rax, [rip+gStackExecAddr]\ncall rax");
+        doSyscall(1, (u64) "stack execution succeeded (BUG!) at 0x", 0x80020000, 0);
     } else {
         // Only reachable after receive() above unblocks - see the file
         // header comment for why this is what prevents infinite self-spawn
@@ -288,6 +313,12 @@ u64 gArg0;
 u64 gArg1;
 u64 gArg2;
 u64 gSyscallResult;
+
+// Milestone 28's NX test needs the exact same global-staging trick for
+// its own bare `call rax` - not a syscall, but the same underlying
+// reason: asm(...) can't read a param/local straight into a register,
+// only a global via [rip+name].
+u64 gStackExecAddr;
 
 u64 doSyscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     gSyscallNum = num;

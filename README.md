@@ -53,7 +53,12 @@ rejected), real memory-protection hardening on the shared kernel
 region (a cloned, ring3-capable address space's copy of the kernel's
 own identity-map/heap PDPT entries has the user bit stripped, so a
 deliberate ring3 write into that region takes a real page fault instead
-of silently succeeding), and runs a minimal
+of silently succeeding), real NX (no-execute) enforcement on every
+dynamically-mapped data region including each ring3 process's own user
+stack (EFER.NXE set once at boot, the classic stack-hardening win - a
+`ret` opcode written onto a process's own stack and jumped to takes a
+real page fault with the CPU's own instruction-fetch bit set in its
+error code, not a silent execution), and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -93,7 +98,11 @@ vector) rather than everything staying flat in a single file:
 ```
 kmain.mc          entry point (_start) + the imports wiring everything together
 boot/             hand-written assembly - below what asm(...) can express
-  boot.s            multiboot header, 32-to-64-bit transition
+  boot.s            multiboot header, 32-to-64-bit transition. Milestone
+                     28: also sets EFER.NXE (bit 11) alongside the
+                     existing EFER.LME, in the same rdmsr/wrmsr round
+                     trip - required before any page table entry
+                     anywhere can safely set the NX bit
   interrupts.s       ISR/IRQ entry stubs (save/restore, call into MiniC)
   linker.ld          places the multiboot header + code at the 1MB load address
 drivers/          hardware setup and I/O
@@ -101,7 +110,8 @@ drivers/          hardware setup and I/O
   interrupts_init.mc IDT + 8259 PIC remap + PIT reconfiguration
   keyboard.mc        scancode table + the shell's line buffer
 mm/               memory management
-  heap.mc            kalloc/kfree free-list allocator, grows on demand via mm/paging.mc
+  heap.mc            kalloc/kfree free-list allocator, grows on demand via
+                     mm/paging.mc; every grown page is PAGE_NX (milestone 28)
   frames.mc          multiboot memory map parser + physical frame bitmap allocator
   paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address
                      spaces, per-task TSS.RSP0 (setTssRsp0). Milestone 26:
@@ -109,11 +119,22 @@ mm/               memory management
                      copy of the kernel's shared PDPT[0]/[1] entries -
                      boot.s's own static map and gPML4Phys (never run in
                      ring3) are untouched, only the copy a cloned,
-                     ring3-capable address space gets
+                     ring3-capable address space gets. Milestone 28:
+                     PAGE_NX (PTE bit 63), OR'd across levels (unlike the
+                     user bit's AND) so only the leaf entry ever needs it -
+                     mapPageIn()'s flags mask widened to pass it through,
+                     translateIn()'s own physical-address extraction fixed
+                     to mask it back out (a real bug this milestone found:
+                     it only cleared the low 12 bits before, so a
+                     PAGE_NX-marked page's reported physical address came
+                     back with bit 63 still stuck in it)
 lib/              no-libc helpers
   strings.mc         streq/startsWith/strlen/parseHex/printHex/formatHex
 isr/              interrupt dispatch
-  isr.mc             interrupt_handler, called from interrupts.s's stubs
+  isr.mc             interrupt_handler, called from interrupts.s's stubs.
+                     Milestone 28: vector 14 (page fault) now also prints
+                     the raw error code - bit 4 distinguishes an
+                     instruction-fetch (NX) violation from a read/write one
 sched/            preemptive task scheduler
   switch.s           hand-written context switch (below what asm(...) can express)
   task.mc            Task table (each with its own CR3 + TSS.RSP0), createTask/
@@ -745,7 +766,7 @@ this test only needs the boot-time ring3 process and the existing
 sent ring3 forbidden-write trigger - expect a page fault
 Channel.receive() got trigger 0x2
 attempting forbidden ring3 write to 0x100000
-page fault at 0x100000, halting
+page fault at 0x100000, errorCode=0x7, halting
 ```
 
 That's the whole point: `attempting forbidden ring3 write to 0x100000` is
@@ -754,17 +775,52 @@ printed - `proc/ring3prog.mc`'s `_start()` really did reach the `*forbidden
 that process ever prints again. Specifically, the line right after it in
 the source, `"forbidden write succeeded (BUG!) at 0x..."`, never appears -
 the CPU faulted on the write itself, before that next syscall could even
-be staged. `page fault at 0x100000, halting` is `isr/isr.mc`'s existing
-vector-14 handler independently confirming the exact faulting address
-(read from CR2, not something the ring3 process reported about itself) is
-`0x100000` - the kernel's own multiboot load address, definitely present
-in the shared identity map, definitely never something this process
-mapped for itself. Before the milestone 26 fix, this same command would
-have printed the "(BUG!)" line and kept running (the write silently
-landing in live kernel memory) instead of faulting - the *absence* of
-that line, replaced by a page fault at exactly the address that was
-written to, is what makes this a genuine negative-space proof rather than
-a topology change nobody actually exercised.
+be staged. `page fault at 0x100000, errorCode=0x7, halting` is
+`isr/isr.mc`'s existing vector-14 handler independently confirming the
+exact faulting address (read from CR2, not something the ring3 process
+reported about itself) is `0x100000` - the kernel's own multiboot load
+address, definitely present in the shared identity map, definitely never
+something this process mapped for itself. Before the milestone 26 fix,
+this same command would have printed the "(BUG!)" line and kept running
+(the write silently landing in live kernel memory) instead of faulting -
+the *absence* of that line, replaced by a page fault at exactly the
+address that was written to, is what makes this a genuine negative-space
+proof rather than a topology change nobody actually exercised.
+`errorCode=0x7` (present + write + user, milestone 28's addition to this
+handler) confirms it specifically as a WRITE violation - worth comparing
+directly against milestone 28's own `ring3nx` proof below, which faults
+with a *different* error code for a different reason.
+
+Milestone 28's proof is likewise a separate, dedicated session (same
+one-shot, kernel-halting caveat) - a fresh boot, `ring3nx` typed with no
+`mkfs`/`install` needed, same as `ring3fault`:
+
+```
+> ring3nx
+sent ring3 stack-execution trigger - expect a page fault
+Channel.receive() got trigger 0x3
+attempting to execute ring3 stack byte at 0x80020000
+page fault at 0x80020000, errorCode=0x15, halting
+```
+
+`proc/ring3prog.mc`'s `_start()` writes a real `0xC3` (`ret`) opcode to
+`0x80020000` - the well-known base of this process's own user stack -
+then attempts `call rax` on that exact address via a raw `asm(...)`
+block. If `PAGE_NX` (`mm/paging.mc`) weren't actually being enforced on
+the stack mapping, this would be entirely harmless (the `ret` would just
+pop the return address `call` pushed and jump straight back) and the
+`"stack execution succeeded (BUG!)"` line right after would print. It
+never does. Instead, `page fault at 0x80020000, errorCode=0x15, halting`
+fires - and `0x15` (binary `10101`: present + user + **bit 4, instruction
+fetch**) is the actual proof, not just "a page fault happened somewhere."
+Bit 4 is the CPU's own signal that this specific access was an
+*instruction fetch*, set by hardware only when EFER.NXE is live and the
+translated entry's NX bit is set - directly comparable against
+`ring3fault`'s own `errorCode=0x7` (bit 4 clear, a write violation)
+captured moments above. Two different deliberate violations, two
+different, independently-checkable error-code signatures - exactly the
+kind of concrete assertion this project has held itself to since
+milestone 1, not "didn't crash" or even just "a fault happened."
 
 Those first `alloc` addresses aren't right at the heap's base address
 anymore, the way they were before milestone 8 - `sched/task.mc`'s four
@@ -1440,10 +1496,65 @@ milestones 1-10 were each scoped just before starting them:
    check doesn't break the one path that's used it all along. A full
    regression pass (heap, `map`, the scheduler, milestone 26's
    `ring3fault` hardening, milestone 25's Channel rights) confirmed
-   nothing broke.~~ Next up: further security hardening (NX/ASLR/
-   sandboxing) is the last known-open Phase IX item, though its own scope
-   still needs settling - could also be a good point to consider Phase IX
-   substantially complete and move to Phase X (drivers/networking).
+   nothing broke.~~
+   ~~**Milestone 28: NX enforcement on dynamically-mapped data regions**
+   - Phase IX's fourth step, and the "security hardening (NX/ASLR/
+   sandboxing)" item scoped down from three genuinely different
+   mechanisms to just the first: NX/DEP, the classic W^X (write-xor-
+   execute) protection real OSes use to stop injected shellcode from
+   being jumped to and run. `boot.s` now sets EFER.NXE (bit 11) in the
+   same rdmsr/wrmsr round trip as the existing EFER.LME - order matters,
+   since setting a page table entry's NX bit (PTE bit 63) with NXE still
+   off is a *reserved-bit* violation on every access to that page, not an
+   execute-only restriction. `mm/paging.mc` gained `PAGE_NX` and widened
+   `mapPageIn()`'s flags mask to let it through to the leaf entry - and
+   only the leaf, since the CPU **ORs** the NX bit across every
+   translation level (the opposite of the "user" bit's AND semantics
+   milestone 26 had to work around at an intermediate PDPT entry), so no
+   intermediate-table change was needed this time. Applied to every
+   dynamically-mapped region that's genuinely pure data: the heap
+   (`mm/heap.mc`), the `map` shell demo, `procA`/`procB`'s private demo
+   mapping (`sched/task.mc`), and - the real point - every ring3
+   process's own user stack (`proc/process.mc`). Deliberately NOT applied
+   to a loaded ring3 program's own code+data image: the loader still
+   flattens a whole compiled program into one contiguous blob with no
+   tracked code/data boundary (milestone 21's design), so a real W^X
+   split *within* a loaded image remains a separate, larger, not-yet-
+   tackled problem - noted explicitly, not silently left out.
+   `isr/isr.mc`'s page-fault handler now also prints the raw error code -
+   bit 4 distinguishes an instruction-fetch violation from a read/write
+   one, letting this milestone's proof and milestone 26's `ring3fault`
+   proof be told apart by their error codes alone (`0x15` vs `0x7`), not
+   just by which shell command ran. New shell command `ring3nx` (same
+   one-shot, kernel-halting shape as `ring3fault`) sends a third trigger
+   value, causing the boot-time ring3 process to write a real `ret`
+   opcode onto its own user stack and attempt to `call` it via a raw
+   `asm(...)` block - if NX weren't enforced, this is completely benign
+   (the `ret` just pops the pushed return address and jumps straight
+   back), so the test is a real proof of a real mechanism, not a
+   destructive one. Verified in QEMU: `page fault at 0x80020000,
+   errorCode=0x15, halting` - `0x15` (present + user + instruction-fetch)
+   is the CPU's own hardware signal that this specific access was an
+   execute attempt, not a coincidental fault. **A real bug found and
+   fixed during this milestone's own regression pass**: `translateIn()`'s
+   physical-address extraction only ever cleared the low 12 bits of a PTE
+   before this, so a `PAGE_NX`-marked leaf's reported physical address
+   came back with bit 63 still stuck in it - caught immediately by
+   `procs`' own existing regression check (`@phys 0x8000000000440000`
+   instead of `0x440000`) the moment `sched/task.mc`'s demo mapping
+   started getting mapped with `PAGE_NX`, fixed by widening that
+   function's own extraction mask the same way `mapPageIn()`'s was
+   already widened. A full regression pass after the fix (heap, `map`,
+   the scheduler, `procs`' physical-address check specifically re-verified
+   correct, `mkfs`/`install`/`ring3go`'s spawn+isolation+milestone-27
+   rights, `ring3fault` re-verified with its own now-distinguishable
+   error code) confirmed everything else stayed clean.~~ **Phase IX is
+   now considered substantially complete** - ASLR and true process
+   sandboxing remain open, unscoped ideas for a future phase revisit
+   (see Known limitations), but the concrete gaps this phase set out to
+   close (capability rights on both `Channel` and `Process`, and real
+   memory-protection hardening on the shared kernel region, including
+   NX) are all done. Next up: Phase X (driver framework + networking).
 10. **A real driver framework (PCI enumeration) + networking** (NIC
     driver, a from-scratch TCP/IP stack) - deliberately last: the
     largest remaining subsystem, with the fewest things depending on it.
@@ -1503,6 +1614,31 @@ around phase 7-8.
   spawned child and watching its `.query()` get rejected, then opening a
   second, properly-rights handle and watching it succeed with the exact
   taskIndex `Process.spawn()` already reported.
+- ~~No NX (no-execute) enforcement anywhere - every writable mapping was
+  also executable~~ - **fixed in milestone 28**: `boot.s` sets EFER.NXE
+  at boot, `mm/paging.mc` gained `PAGE_NX` (PTE bit 63, OR'd across
+  translation levels - only the leaf entry ever needs it, unlike the
+  user bit), and every dynamically-mapped pure-data region (the heap,
+  the `map` demo, `procA`/`procB`'s demo mapping, and - the real
+  point - every ring3 process's own user stack) is marked non-
+  executable. Verified with a real negative-space proof: the shell's
+  new `ring3nx` command has the boot-time ring3 process write a `ret`
+  opcode onto its own stack and attempt to execute it - the resulting
+  page fault's error code (`0x15`) has the CPU's own instruction-fetch
+  bit set, distinguishing it from an ordinary read/write fault
+  (`ring3fault`'s own `0x7`). **Deliberately still open**: a loaded
+  ring3 program's own code+data image is NOT split - the loader still
+  flattens a whole compiled program (code, rodata, data, bss) into one
+  contiguous blob with no tracked boundary between them (milestone
+  21's design), so the WHOLE image stays executable, same as before.
+  A real W^X split within a loaded image (tracking where `.text` ends
+  so only that part stays executable) is a separate, larger problem -
+  the loader would need to learn a real boundary, not just a start/end
+  byte range - not tackled here. ASLR and real process sandboxing
+  (beyond address-space isolation, which has existed since milestone
+  12) are two more genuinely different mechanisms this same "security
+  hardening" label used to bundle together - both remain completely
+  unscoped, open ideas for a future phase, not silently forgotten.
 - ~~Only one ring3 process was safe to run at a time~~ - **fixed in
   milestone 19**: `sched/task.mc`'s `Task` gained a `kernelStackTop`
   field (each task's own already-`kalloc`'d kernel stack, reused as its

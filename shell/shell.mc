@@ -24,8 +24,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
 }
 
 void cmdClear() {
@@ -161,7 +161,7 @@ void cmdMap() {
         return;
     }
     u64 vaddr = 0x40000000;   // 1GB - just past boot.s's static identity map
-    bool ok = mapPage(vaddr, (u64) frame, 0x02);   // writable
+    bool ok = mapPage(vaddr, (u64) frame, 0x02 | PAGE_NX);   // writable, non-executable (milestone 28)
     if (!ok) {
         vgaPrint("map failed");
         serialPrint("map failed\n");
@@ -522,6 +522,23 @@ void cmdRing3Fault() {
     serialPrint("sent ring3 forbidden-write trigger - expect a page fault\n");
 }
 
+// Milestone 28: sends trigger value 0x3 (distinct from ring3go's 0x1 and
+// ring3fault's 0x2) on the same mailbox - the boot-time ring3 process
+// branches on this to write a `ret` opcode onto its own user stack and
+// attempt to execute it, proving PAGE_NX (mm/paging.mc) really is
+// enforced there. Also ONE-SHOT and KERNEL-HALTING, same caveat as
+// ring3fault - run it in its own dedicated session.
+void cmdRing3Nx() {
+    bool ok = channelSend(gRing3ChannelDemo, 0x3);
+    if (!ok) {
+        vgaPrint("ring3nx failed - channel full");
+        serialPrint("ring3nx failed - channel full\n");
+        return;
+    }
+    vgaPrint("sent ring3 stack-execution trigger - expect a page fault");
+    serialPrint("sent ring3 stack-execution trigger - expect a page fault\n");
+}
+
 void cmdProcs() {
     vgaPrint("procA: 0x");
     serialPrint("procA: 0x");
@@ -619,6 +636,8 @@ void runCommand() {
         cmdRing3Go();
     } else if (streq(gLineBuffer, "ring3fault")) {
         cmdRing3Fault();
+    } else if (streq(gLineBuffer, "ring3nx")) {
+        cmdRing3Nx();
     } else if (streq(gLineBuffer, "disk")) {
         cmdDisk();
     } else if (streq(gLineBuffer, "diskwrite")) {

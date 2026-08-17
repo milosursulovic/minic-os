@@ -92,7 +92,15 @@ int spawnProcess(u8* imageStart, u8* imageEnd, u64 loadVaddr, u64 stackVaddr) {
     if (stackFrame == null) {
         return -1;
     }
-    if (!mapPageIn(cr3, stackVaddr, (u64) stackFrame, 0x06)) {   // writable + user
+    // Milestone 28: PAGE_NX - the classic stack-hardening win (injected
+    // "shellcode" on the stack can no longer be jumped to and executed).
+    // Deliberately NOT applied to the image mapping above: this loader
+    // still flattens a whole program (code + rodata/data/bss) into one
+    // contiguous copyable blob with no tracked code/data boundary (see
+    // ring3.ld/build.sh) - marking the WHOLE image NX would block the
+    // process's own legitimate code too. A real W^X split within a
+    // loaded image is a separate, larger problem, not tackled here.
+    if (!mapPageIn(cr3, stackVaddr, (u64) stackFrame, 0x06 | PAGE_NX)) {   // writable + user, non-executable
         freeFrame(stackFrame);
         return -1;
     }

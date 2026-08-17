@@ -281,7 +281,7 @@ u64 gProcBPhys;
 
 void procAEntry() {
     void* frame = allocFrame();
-    mapPageIn(gTasks[gCurrentTask].cr3, gDemoVaddr, (u64) frame, 0x06);   // writable + user
+    mapPageIn(gTasks[gCurrentTask].cr3, gDemoVaddr, (u64) frame, 0x06 | PAGE_NX);   // writable + user, non-executable (milestone 28)
     u32* p = (u32*) gDemoVaddr;
     *p = 0xAAAAAAAA;
     while (true) {
@@ -293,7 +293,7 @@ void procAEntry() {
 
 void procBEntry() {
     void* frame = allocFrame();
-    mapPageIn(gTasks[gCurrentTask].cr3, gDemoVaddr, (u64) frame, 0x06);   // writable + user
+    mapPageIn(gTasks[gCurrentTask].cr3, gDemoVaddr, (u64) frame, 0x06 | PAGE_NX);   // writable + user, non-executable (milestone 28)
     u32* p = (u32*) gDemoVaddr;
     *p = 0xBBBBBBBB;
     while (true) {

@@ -17,6 +17,20 @@
 
 import "frames.mc";
 
+// Milestone 28: the NX (no-execute) bit, PTE bit 63 - EFER.NXE was
+// enabled once, at boot (boot.s), which is what makes setting this bit
+// on a leaf entry mean "disallow instruction fetch here" instead of
+// "reserved bit, fault on every access." Unlike the "user" bit milestone
+// 26 fixed (which the CPU ANDs across every level from PML4 down to the
+// leaf - a single supervisor-only entry ANYWHERE in the chain blocks
+// ring3 access), the CPU ORs the NX bit across every level - execution
+// is disabled if ANY entry in the translation has it set. Concretely:
+// tableGetOrCreate()'s intermediate tables never set NX (see its own
+// 0x07 grant below, unchanged), so marking ONLY the final leaf PT entry
+// is both necessary and sufficient - no intermediate-table change needed
+// for this one, the opposite lesson from milestone 26's fix.
+const u64 PAGE_NX = 0x8000000000000000;
+
 u64 gPML4Phys;
 
 void readPML4() {
@@ -77,7 +91,8 @@ u64* tableGetOrCreate(u64* table, u32 index) {
 // Maps one 4KB page: vaddr -> paddr in an EXPLICITLY given address
 // space, creating any missing PDPT/PD/PT tables along the way. `flags`
 // is OR'd into the final PT entry on top of the present bit (e.g. 0x02
-// for writable). Every page-table frame allocFrame() hands out lives
+// for writable, or PAGE_NX as of milestone 28 for non-executable).
+// Every page-table frame allocFrame() hands out lives
 // inside the flat 1GB identity map every address space shares, so this
 // is a plain pointer walk regardless of which CR3 is currently loaded -
 // kernel code can build up a process's private mappings without ever
@@ -102,7 +117,7 @@ bool mapPageIn(u64 pml4Phys, u64 vaddr, u64 paddr, u64 flags) {
         return false;
     }
 
-    pt[i1] = (paddr & ~((u64) 0xFFF)) | (flags & 0xFFF) | 0x01;
+    pt[i1] = (paddr & ~((u64) 0xFFF)) | (flags & (((u64) 0xFFF) | PAGE_NX)) | 0x01;
     if (pml4Phys == gPML4Phys) {
         invalidatePage(vaddr);   // only meaningful for the currently-loaded space
     }
@@ -145,7 +160,13 @@ u64 translateIn(u64 pml4Phys, u64 vaddr) {
     if ((pt[i1] & 1) == 0) {
         return 0;
     }
-    return (pt[i1] & ~((u64) 0xFFF)) | (vaddr & 0xFFF);
+    // Milestone 28 bug: PAGE_NX (bit 63) can now be set on a real leaf
+    // entry, and this mask used to only clear the low 12 flag bits -
+    // caught by `procs`' own regression check reporting a physical
+    // address with 0x8000000000000000 stuck in the top after gDemoVaddr
+    // (sched/task.mc) started getting mapped with PAGE_NX. Must also
+    // clear PAGE_NX here, same reasoning as mapPageIn's own widened mask.
+    return (pt[i1] & ~(((u64) 0xFFF) | PAGE_NX)) | (vaddr & 0xFFF);
 }
 
 // Builds a brand-new address space for a process: a fresh PML4 whose

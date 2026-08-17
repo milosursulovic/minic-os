@@ -75,6 +75,15 @@ void interrupt_handler(u64 vector, u64 errorCode) {
         readCr2();
         serialPrint("page fault at 0x");
         printHex(gCr2Value);
+        // Milestone 28: also print the raw error code - bit 4 (0x10) is
+        // set specifically for an instruction-fetch violation (an NX
+        // check failing), distinct from bit 1 (write) or a not-present
+        // fault. Was always available (interrupt_handler's own errorCode
+        // parameter) but never surfaced for vector 14 before - only
+        // vector 13 (GPF) printed it, since nothing needed to tell a
+        // page fault's flavor apart from just "which address" until now.
+        serialPrint(", errorCode=0x");
+        printHex(errorCode);
         serialPrint(", halting\n");
     } else {
         serialPrint("unhandled exception, halting\n");

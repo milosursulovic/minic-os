@@ -122,10 +122,17 @@ _boot_start:
     or eax, 0x20
     mov cr4, eax
 
-    # Set the Long Mode Enable bit in EFER (MSR 0xC0000080).
+    # Set the Long Mode Enable bit (bit 8) and, as of milestone 28, the
+    # No-Execute Enable bit (bit 11) too, in EFER (MSR 0xC0000080) - same
+    # rdmsr/wrmsr round trip, since NXE must be live before ANY page
+    # table entry anywhere ever sets the NX bit (PTE bit 63): with
+    # NXE=0, that bit is a *reserved* bit instead, and setting it faults
+    # on every access to the page (not just execution attempts) with a
+    # reserved-bit violation - getting the ordering right here is what
+    # makes every later NX-marked mapping (mm/paging.mc's PAGE_NX) safe.
     mov ecx, 0xC0000080
     rdmsr
-    or eax, 0x100
+    or eax, 0x900                # bit 8 (LME) | bit 11 (NXE)
     wrmsr
 
     # Enable paging (CR0 bit 31) - activates long mode, though we're still

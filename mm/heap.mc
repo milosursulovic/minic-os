@@ -55,7 +55,9 @@ bool heapGrow(u64 minExtra) {
             return false;
         }
         u64 vaddr = gHeapBase + gHeapSize + mapped;
-        if (!mapPage(vaddr, (u64) frame, 0x02)) {
+        // Milestone 28: PAGE_NX - the heap is data, never code; nothing
+        // legitimate ever executes from it.
+        if (!mapPage(vaddr, (u64) frame, 0x02 | PAGE_NX)) {
             freeFrame(frame);
             return false;
         }
