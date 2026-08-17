@@ -17,7 +17,7 @@ wsl.exe -e bash -c "cd /mnt/d/Projects/minic/os && ./build.sh iso"    # + minic-
 
 Needs a Linux-built `minicc` (`../compiler/build-linux/minicc` by default — rebuild that first if the compiler changed). `./build.sh iso` additionally needs `grub-mkrescue`/`xorriso`/`mtools` (`sudo apt install grub-pc-bin grub-common xorriso mtools`).
 
-A `warning: unused function 'interrupt_handler'`/`'syscall_dispatch'` on every build is expected, not a bug — both are called only from hand-written assembly (`interrupts.s`), which `minicc` never parses, so it can't see the call. Same blind spot gcc's own `-Wunused-function` has for non-`static` functions.
+A `warning: unused function 'interrupt_handler'`/`'syscall_dispatch'` on every build is expected, not a bug — both are called only from hand-written assembly (`interrupts.s`), which `minicc` never parses, so it can't see the call. Same blind spot gcc's own `-Wunused-function` has for non-`static` functions. A `LOAD segment with RWX permissions` warning from `ld` while linking `proc/ring3prog_linked.elf` (milestone 21+) is also expected — that standalone link's only purpose is to get `objcopy -O binary`'d into a flat blob immediately afterward (see `proc/ring3.ld`), so the intermediate ELF's segment permission bits are never actually enforced by anything and don't matter.
 
 ## Testing — always in QEMU, always with a concrete assertion
 

@@ -32,8 +32,11 @@ disk I/O) or a live-kernel-state device backend through the identical
 function call, real `Process.spawn()` from disk (a second, independently
 loaded ring3 process, its image bytes read through the VFS from a real
 MiniFS file rather than a pointer into the kernel's own image, running
-concurrently with the first thanks to a per-task `TSS.RSP0` fix), and
-runs a minimal
+concurrently with the first thanks to a per-task `TSS.RSP0` fix), a real
+native "File" API - `msgFile.write(...)`/`msgFile.read(...)`, real
+method calls (MiniC's own `obj.method()` syntax) from inside an actual
+ring3 process, wrapping two new syscalls rather than raw syscall
+numbers - and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -95,13 +98,19 @@ sched/            preemptive task scheduler
                      yield/sleep/channelReceive, eight demo tasks (four processes)
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
-  syscall.mc         syscall dispatcher
+  syscall.mc         syscall dispatcher: print, handle-query, and (as of
+                     milestone 22) vfsRead/vfsWrite (numbers 4/5) - the
+                     first syscalls giving ring3 code access to
+                     something beyond print/handle-query
 proc/             process loading + the kernel object model + IPC
   ring3prog.mc       a real, minicc-compiled MiniC ring3 "program" -
                      the loaded blob; see ring3.ld/ring3blob.s for how a
                      compiled program's separate ELF sections get
                      flattened into the one contiguous blob the loader
-                     below expects
+                     below expects. As of milestone 22, also the first
+                     real use of MiniC's method-call syntax for
+                     something real: a `File` struct with `.write()`/
+                     `.read()` methods wrapping the new syscalls
   ring3.ld           standalone linker script for ring3prog.mc's own
                      link (keeps .text/.rodata/.data/.bss contiguous)
   ring3blob.s        wraps the objcopy'd flat blob in gTestProgStart/
@@ -516,6 +525,9 @@ interrupts live
 hello from a LOADED process! 0xc0ffee
 handle 0 (self) -> taskIndex 0x7
 handle 99 (invalid) -> 0xffffffffffffffff
+File.write() wrote 0x36
+File.read() got back 0x36
+hello from ring3, via a real File.write() method call!0
 > alloc
 allocated 64 bytes at 0x5000c040
 > alloc
@@ -623,6 +635,25 @@ scheduled like any other task, interleaved with the boot sequence and
 the rest of the demo tasks without any `cli` wrapping, and `ps`'s
 `proc0 task=0x7 cr3=0x426000` confirms it's a real, queryable process
 object, not just something that ran once and vanished.
+
+The next three lines are the milestone 22 proof: `File.write() wrote
+0x36` (54, the real byte count of the message literal) followed by
+`File.read() got back 0x36` and the message printed back verbatim -
+`proc/ring3prog.mc`'s `_start()` creates a real `File` struct
+(`msgFile.path = "/system/ring3msg.txt"`) and calls
+`msgFile.write(...)`/`msgFile.read(...)` - genuine method calls
+(`obj.method()`, milestone 20's syntax) from inside a ring3 process,
+wrapping the new vfsRead/vfsWrite syscalls (numbers 4/5) rather than
+raw syscall numbers. A rebooted VM reusing the same `disk.img` shows
+`File.write() wrote 0xffffffffffffffff` instead (MiniFS's "fails
+outright if the name already exists" rule, from milestone 17, firing
+correctly against a file the *previous* boot's write already created) -
+while `File.read()` still succeeds with the identical byte count and
+content, since the file's real, persisted-to-disk content is what's
+actually being read back either way. That failure-on-reboot is itself
+independent proof the write reached real, persistent storage on the
+first boot, not just something the ring3 process believed happened in
+memory.
 
 The `handle 0 (self) -> taskIndex 0x7` / `handle 99 (invalid) ->
 0xffffffffffffffff` lines are the milestone 14 proof, and they're a
@@ -962,11 +993,38 @@ milestones 1-10 were each scoped just before starting them:
    a correctly distinct `taskIndex` for the second process). Full
    regression pass (`tasks`/`procs`/`ps`/`objs`/`chan`+`send`/`disk`/
    `diskwrite`/`mkfs`/`mkfile`/`cat`/`ls`/`vfscat`/`vfswrite`/`alloc`/
-   `map`) stayed clean.~~ Next up: milestone 22, a native
-   `File`/`Process`/`Socket`-style system API with real methods (built on
-   milestone 20's syntax and milestone 21's now-proven compiled-ring3-
-   program pipeline), then milestone 23, a thin POSIX compatibility shim
-   over it.
+   `map`) stayed clean.~~
+   ~~**Milestone 22: a real native "File" API with real methods** -
+   the first slice of the native System API, scoped to just `File`
+   (`Process`/`Channel` wrappers are a later milestone - the point of
+   this one was proving the whole pattern: new syscall + struct + real
+   method, not building every resource type at once). Two new syscalls
+   (`syscall/syscall.mc` numbers 4/5) expose the existing
+   `disk/vfs.mc`'s `vfsRead`/`vfsWrite` to ring3 for the first time -
+   syscalls 1 and 3 only ever did print/handle-query before this. Since
+   a syscall runs with the caller's own CR3 still loaded, dereferencing
+   a ring3-supplied path/buffer pointer needed no new mechanism, the
+   same as syscall 1's message pointer always has been. `doSyscall()`
+   (`proc/ring3prog.mc`, from milestone 21) grew a third argument
+   (`rdx`) to carry a buffer length alongside the existing path/buffer
+   pointer pair. The `File` struct itself is deliberately minimal - just
+   a `path`, since the underlying `vfsRead`/`vfsWrite` are already
+   whole-file, stateless operations with no open/close/seek - so
+   `File.write(self, buf, len)`/`File.read(self, buf, maxLen)` are real
+   methods (milestone 20's syntax) wrapping `doSyscall()` internally,
+   the first time this kernel's method-call syntax is used for
+   something real rather than a language demo. Verified in QEMU: a
+   fresh boot's `msgFile.write(...)` reports the exact real byte count
+   of the message literal (`0x36`/54), `msgFile.read(...)` reads back
+   the identical count and content, and a *second* boot reusing the
+   same `disk.img` gets `0xffffffffffffffff` from `write()` (MiniFS's
+   existing "fails if the name already exists" rule correctly firing
+   against the first boot's file) while `read()` still succeeds with
+   the same content - independent proof the first write reached real,
+   persisted storage, not just something the ring3 process believed
+   happened in memory.~~ Next up: milestone 23, wrapping `Process`/
+   `Channel` the same way `File` was wrapped here, then milestone 24, a
+   thin POSIX compatibility shim over the whole native API.
 9. **Capability/permission system** on top of the handle table, then
    security hardening (NX/ASLR/sandboxing).
 10. **A real driver framework (PCI enumeration) + networking** (NIC

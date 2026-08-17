@@ -17,6 +17,7 @@ import "../mm/paging.mc";
 import "../sched/task.mc";
 import "../proc/process.mc";
 import "../proc/object.mc";
+import "../disk/vfs.mc";
 
 extern void run_ring3_test(u64 entry, u64 userStack);
 
@@ -54,6 +55,18 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // arg1 is caller-controlled) all return the same -1 sentinel rather than
 // trusting the index or crashing - the entire point of a handle table
 // over a raw array index.
+// num 4/5 (milestone 22): vfsRead/vfsWrite, the first syscalls giving
+// ring3 code access to something beyond print/handle-query - a real
+// slice of the native "File" API's job, not the whole thing (Process/
+// Channel wrappers are a later milestone). arg1/arg2 are a caller-owned
+// char*/buffer pointer pair; since a syscall runs with the caller's own
+// CR3 still loaded (no address-space switch happens on entry), these
+// are safe to dereference directly, same as syscall 1's message pointer
+// always has been - no new mechanism needed for that part. Neither
+// direction validates that arg1/arg2 point at memory the calling
+// process actually owns (the same "no real memory-safety enforcement
+// yet" gap every ring3 syscall here has had since milestone 11 -
+// capability/security work is roadmap phase IX, not this one).
 u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     if (num == 1) {
         char* s = (char*) arg1;
@@ -77,6 +90,24 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
             return (u64) gProcesses[procIdx].taskIndex;
         }
         return (u64) -1;
+    }
+    if (num == 4) {
+        char* path = (char*) arg1;
+        u8* buf = (u8*) arg2;
+        int n = vfsRead(path, buf, (u32) arg3);
+        if (n < 0) {
+            return (u64) -1;
+        }
+        return (u64) n;
+    }
+    if (num == 5) {
+        char* path = (char*) arg1;
+        u8* buf = (u8*) arg2;
+        bool ok = vfsWrite(path, buf, (u32) arg3);
+        if (!ok) {
+            return (u64) -1;
+        }
+        return arg3;
     }
     return (u64) -1;   // unknown syscall
 }
