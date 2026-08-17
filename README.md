@@ -42,7 +42,11 @@ blocking a ring3 process on a real syscall for the first time,
 itself, not just the kernel/shell doing it on its behalf), and a thin
 POSIX-shaped shim (`open`/`read`/`write`/`close`, real position-tracking
 across multiple calls) implemented entirely in ring3 MiniC on top of the
-native File API, no kernel changes needed - and runs a minimal
+native File API, no kernel changes needed, a real capability/permission
+system on top of the handle table (a handle carries fixed rights,
+granted once at open time - a ring3 process handed a receive-only
+channel handle genuinely cannot use it to send, not just "isn't
+expected to"), and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -105,13 +109,16 @@ sched/            preemptive task scheduler
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
   syscall.mc         syscall dispatcher: print, handle-query, vfsRead/
-                     vfsWrite (milestone 22, numbers 4/5), and (milestone
-                     23) spawn/channelSend/channelReceive (numbers 6/7/8)
-                     - channelReceive is this kernel's first BLOCKING
-                     syscall, reusing channelReceive()'s existing
-                     yield()/switch_context() mechanism unchanged since
-                     syscall_dispatch runs as an ordinary nested call
-                     within the calling ring3 task's own context
+                     vfsWrite (milestone 22, numbers 4/5), spawn/
+                     channelSend/channelReceive (milestone 23, numbers
+                     6/7/8 - channelReceive is this kernel's first
+                     BLOCKING syscall, reusing channelReceive()'s
+                     existing yield()/switch_context() mechanism
+                     unchanged since syscall_dispatch runs as an
+                     ordinary nested call within the calling ring3
+                     task's own context), and openChannel (milestone 25,
+                     number 9) - numbers 7/8 now take a real, rights-
+                     checked HANDLE instead of a raw channel index
 proc/             process loading + the kernel object model + IPC
   ring3prog.mc       a real, minicc-compiled MiniC ring3 "program" -
                      the loaded blob; see ring3.ld/ring3blob.s for how a
@@ -128,7 +135,11 @@ proc/             process loading + the kernel object model + IPC
                      blob as an independent process. Milestone 24 added
                      a thin POSIX shim (open/read/write/close, plain
                      free functions) entirely in this file, layered on
-                     top of File - no new syscalls, no kernel changes
+                     top of File - no new syscalls, no kernel changes.
+                     Milestone 25 added `Channel.open()`, and deliberately
+                     exercises an unauthorized `Channel.send()` on the
+                     resulting receive-only handle to prove real rights
+                     enforcement, not just handle-vs-index indirection
   ring3.ld           standalone linker script for ring3prog.mc's own
                      link (keeps .text/.rodata/.data/.bss contiguous;
                      build.sh's objcopy step forces .bss to be
@@ -141,7 +152,11 @@ proc/             process loading + the kernel object model + IPC
                      the real loader, from a pointer range or a VFS path
                      (gLoadedImageBuf is 16KB as of milestone 24, not
                      4096 - see milestone 24's bug notes below)
-  object.mc          KernelObject table + per-process handle tables
+  object.mc          KernelObject table + per-process handle tables;
+                     milestone 25 gave each `Handle` a real `rights`
+                     bitmask, fixed forever at grant time - the first
+                     step of the roadmap's Phase IX (capability/
+                     permission work)
   channel.mc         Channel table + channelSend/channelHasMessage
 disk/             storage
   ata.mc             legacy ATA PIO driver - real sector read/write
@@ -555,6 +570,8 @@ POSIX read() 1: 0
 POSIX 0
 POSIX read() 2: 0
 shim works!0
+Channel.open() ok=0x1
+unauthorized Channel.send() succeeded=0x0
 > alloc
 allocated 64 bytes at 0x5000c040
 > alloc
@@ -576,7 +593,7 @@ procA: 0xaaaaaaaa @phys 0x426000 procB: 0xbbbbbbbb @phys 0x429000
 > ps
 processes: 0x1 proc0 task=0x7 cr3=0x426000
 > objs
-objects: 0x1 obj0 type=0x1 dataIndex=0x0
+objects: 0x2 obj0 type=0x1 dataIndex=0x0
 > chan
 receiver got: 0x0 value=0x0
 > chan
@@ -610,7 +627,7 @@ wrote /system/vfsdemo.mfs via VFS
 > vfscat /system/vfsdemo.mfs
 This file was written through the VFS layer, not MiniFS directly.
 > install
-installed /system/testprog.bin, 0x1eb8 bytes
+installed /system/testprog.bin, 0x20c0 bytes
 > spawn
 spawned process 0x1
 > ps
@@ -641,15 +658,20 @@ POSIX read() 1: 0
 POSIX 0
 POSIX read() 2: 0
 shim works!0
+Channel.open() ok=0x1
+unauthorized Channel.send() succeeded=0x0
 ```
 
-The last twelve lines are the *spawned child* - the exact same
+The last fourteen lines are the *spawned child* - the exact same
 `ring3prog.mc` blob, running from `_start()` again from scratch in its
 own freshly cloned address space, with its own distinct `taskIndex`
-(`0x9`, not the parent's `0x7`). It reaches its own `Channel.receive()`
-call too, but the channel's single-slot mailbox is already empty again
-(the parent's `receive()` consumed the one message `ring3go` sent), so
-it just blocks there - never reaching *its own* `Process.spawn()` call,
+(`0x9`, not the parent's `0x7`) and its own independent handle table -
+its `Channel.open()` call gets a brand-new handle, resolved through
+*its own* `gHandleTables[1][...]`, never the parent's. It reaches its
+own `Channel.receive()` call too, but the channel's single-slot mailbox
+is already empty again (the parent's `receive()` consumed the one
+message `ring3go` sent), so it just blocks there - never reaching *its
+own* `Process.spawn()` call,
 which is what stops this from spawning a second, third, fourth
 generation automatically.
 
@@ -733,6 +755,25 @@ proves the position cursor genuinely tracks across calls, not just
 replaying the whole thing every time. All of this - fd table,
 position tracking, buffering - is pure ring3 MiniC; no new syscalls,
 no kernel changes at all for this milestone.
+
+`Channel.open() ok=0x1` and `unauthorized Channel.send() succeeded=0x0`
+are the milestone 25 proof - and the second line is the one that
+actually matters. `spawnTrigger.open(1)` (a new syscall, number 9)
+turns the ring3-dedicated channel's raw index into a real handle,
+resolved through this process's own handle table - `ok=0x1` just shows
+the kernel granted *something*. The real test is what happens next:
+`spawnTrigger.send(0xDEADBEEF)` through that exact same handle -
+deliberately attempting an operation the kernel's own policy (`open()`
+always grants `RIGHT_RECEIVE`, never `RIGHT_SEND`) never authorized.
+`succeeded=0x0` (false) is the whole point: without real per-handle
+rights enforcement, checked at the syscall boundary before the
+underlying channel is ever touched, this call would have silently
+succeeded - a receive-only handle would have been able to send anyway,
+exactly the "any valid handle can do anything the object supports" gap
+Phase IX exists to close. The very next line,
+`Channel.receive() got trigger 0x1`, proves the fix isn't overzealous
+either - the *authorized* operation on that same handle still works
+correctly, unaffected.
 
 `Channel.receive() got trigger 0x1` and everything after it is the
 milestone 23 proof - and the riskiest new mechanism this milestone
@@ -1233,11 +1274,35 @@ milestones 1-10 were each scoped just before starting them:
    demo) all produce correct output end to end, `ps` shows two real
    processes, and a full regression pass (`tasks`/`objs`/`alloc`/`map`)
    stayed clean.~~ Phase VIII (MiniC methods + native API + POSIX shim,
-   milestones 20-24) is now complete. Next up: Phase IX (item 9 below) -
-   capability/permission work on top of the handle table, then security
-   hardening.
+   milestones 20-24) is now complete.
 9. **Capability/permission system** on top of the handle table, then
    security hardening (NX/ASLR/sandboxing).
+   ~~**Milestone 25: real per-handle rights on `Channel`** - Phase IX's
+   first step. A new `Handle.rights` bitmask (`proc/object.mc`), fixed
+   forever at grant time, and a new `OBJ_CHANNEL` object type wrap
+   `Channel` in the handle table for the first time - `channelSend`/
+   `channelReceive` (syscalls 7/8) now take a real, rights-checked
+   handle instead of a bare channel index, and a new `openChannel`
+   syscall (number 9) is the one place a ring3 process can turn an index
+   into a handle. Deliberately narrow policy: `openChannel` only ever
+   grants `RIGHT_RECEIVE`, never `RIGHT_SEND` - nothing in this kernel
+   today needs a ring3-initiated send (the shell/kernel side always
+   sends directly), so this is a real, meaningful restriction, not a
+   contrived one. `Channel.open()` (real method, milestone 20 syntax) is
+   new in `proc/ring3prog.mc`; `.send()`/`.receive()` unchanged in shape,
+   just now handle-based underneath. Verified in QEMU: a fresh boot's
+   `Channel.open()` succeeds, an immediate `Channel.send()` attempt
+   through that exact handle is correctly REJECTED (`succeeded=0x0`) -
+   the actual proof rights are enforced, not just present - while
+   `Channel.receive()` through the same handle still works normally
+   afterward (blocks until `ring3go`, then unblocks with the right
+   value). The independently spawned child process repeats the whole
+   sequence correctly through its OWN separate handle table, and a full
+   shell regression pass (`chan`/`send`/`procs`/`alloc`/`map`/`mkfile`/
+   `vfscat`) stayed clean.~~ Next up: broader security hardening
+   (NX/ASLR/sandboxing on the still-user-accessible shared PDPT region),
+   or extending real per-handle rights to `Process` handles too -
+   whichever the user picks up first.
 10. **A real driver framework (PCI enumeration) + networking** (NIC
     driver, a from-scratch TCP/IP stack) - deliberately last: the
     largest remaining subsystem, with the fewest things depending on it.
@@ -1303,24 +1368,29 @@ around phase 7-8.
   4-process cap) - fine for today's one loaded process, would need real
   sizing (or dynamic growth) once more than a handful of objects/
   processes exist at once.
-- Only one kernel object type exists (`OBJ_PROCESS`) - a `Task` (the
-  scheduler's own thread-of-control concept) isn't a kernel object in
-  its own right yet, unlike real NT where Process and Thread are
-  separate object types. Not a gap so much as not-yet-needed: nothing
-  today creates more than one thread per process to distinguish. A
-  `Channel` (milestone 15) isn't wrapped as a `KernelObject`/handle
-  either yet - `channelSend`/`channelReceive` (and now, as of milestone
-  23, the syscalls exposing them to ring3) take a plain integer
-  `gChannels[]` index, bounds-checked at the syscall boundary but not
-  otherwise access-controlled - any ring3 process that knows (or
-  guesses) a valid index can send/receive on any channel, not just one
-  it was actually given. ~~Ring3 code has no way to reach a channel at
-  all right now (no syscall exposes one)~~ - **fixed in milestone 23**:
-  `channelSend`/`channelReceive` are real syscalls now (numbers 7/8),
-  and `Channel.send()`/`Channel.receive()` are real methods wrapping
-  them. Real per-channel access control (a handle instead of a bare
-  index) is still open, deferred to the same capability/security pass
-  (roadmap phase IX) as the shared-PDPT memory-protection gap above.
+- Only two kernel object types exist (`OBJ_PROCESS`, `OBJ_CHANNEL` as of
+  milestone 25) - a `Task` (the scheduler's own thread-of-control
+  concept) isn't a kernel object in its own right yet, unlike real NT
+  where Process and Thread are separate object types. Not a gap so much
+  as not-yet-needed: nothing today creates more than one thread per
+  process to distinguish. ~~A `Channel` (milestone 15) isn't wrapped as
+  a `KernelObject`/handle either yet - `channelSend`/`channelReceive`
+  (and, as of milestone 23, the syscalls exposing them to ring3) take a
+  plain integer `gChannels[]` index, bounds-checked at the syscall
+  boundary but not otherwise access-controlled - any ring3 process that
+  knows (or guesses) a valid index can send/receive on any channel, not
+  just one it was actually given.~~ - **fixed in milestone 25**: a new
+  `openChannel` syscall (number 9) wraps a channel index in a real
+  `OBJ_CHANNEL` object and hands back a genuine handle, and syscalls 7/8
+  now take that handle (not a raw index), checking real per-handle
+  `rights` (a bitmask, fixed forever at grant time) before touching the
+  underlying channel at all - `openChannel` deliberately only ever
+  grants `RIGHT_RECEIVE`, so a handle obtained this way genuinely cannot
+  be used to send, verified by a real rejected `Channel.send()` attempt
+  in `proc/ring3prog.mc`'s own boot-time demo, not just assumed correct.
+  This is Phase IX's first real step (capability/permission work on top
+  of the handle table) - the shared-PDPT memory-protection gap above and
+  broader security hardening (NX/ASLR/sandboxing) are still open.
 - `channelSend()` is non-blocking and single-slot: a sender that finds
   the mailbox already full just gets `false` back, with no queue, no
   backpressure, and no way to wait for room - fine for today's one

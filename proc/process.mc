@@ -117,7 +117,7 @@ int spawnProcess(u8* imageStart, u8* imageEnd, u64 loadVaddr, u64 stackVaddr) {
     // guaranteed to land in slot 0. Ring3 code can rely on that without
     // needing a syscall just to discover its own handle.
     int selfObject = allocObject(OBJ_PROCESS, procIndex);
-    allocHandle(procIndex, selfObject);
+    allocHandle(procIndex, selfObject, RIGHT_QUERY);
 
     return procIndex;
 }

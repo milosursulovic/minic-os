@@ -57,6 +57,15 @@
 // moving stackVaddr out to 0x80020000 (128KB of headroom) at all three
 // call sites - see kmain.mc/shell.mc's own comments.
 //
+// Milestone 25 (Phase IX, capability/permission work): `Channel` no
+// longer takes a raw channel index directly - `Channel.open()` (new)
+// turns an index into a real, rights-checked handle via a new syscall
+// (number 9), and `.send()`/`.receive()` now pass that handle instead.
+// The kernel grants RIGHT_RECEIVE only from `open()`, never
+// RIGHT_SEND - so this file's own `Channel.send()` call is now
+// EXPECTED to fail, and is exercised for the first time specifically
+// to prove that failure is real, not just untested.
+//
 // _start MUST be the first FUNCTION declared in this file: ring3.ld's
 // .text starts at address 0 with no reordering, and this codegen emits
 // function bodies into .text in program-declaration order (no
@@ -76,7 +85,7 @@ struct File {
 }
 
 struct Channel {
-    int index;
+    int handle;
 }
 
 struct Process {
@@ -153,8 +162,21 @@ void _start() {
     // already-proven blocking mechanism, just called from a real ring3
     // syscall (number 8) for the first time instead of a kernel task
     // calling channelReceive() directly.
+    //
+    // Milestone 25: index 1 no longer goes straight into a syscall -
+    // open() turns it into a real handle first, and the kernel's own
+    // policy (syscall.mc's num 9) grants that handle RECEIVE rights
+    // only, never SEND. The unauthorized send() attempt right after is
+    // the actual proof this milestone exists: without real per-handle
+    // rights enforcement, nothing would stop a ring3 process from
+    // sending on a channel it was only ever given to listen on.
     Channel spawnTrigger;
-    spawnTrigger.index = 1;
+    bool opened = spawnTrigger.open(1);
+    doSyscall(1, (u64) "Channel.open() ok=0x", (u64) opened, 0);
+
+    bool unauthorizedSendOk = spawnTrigger.send(0xDEADBEEF);
+    doSyscall(1, (u64) "unauthorized Channel.send() succeeded=0x", (u64) unauthorizedSendOk, 0);
+
     u64 triggerValue = spawnTrigger.receive();
     doSyscall(1, (u64) "Channel.receive() got trigger 0x", triggerValue, 0);
 
@@ -215,20 +237,35 @@ u64 File.read(File* self, char* buf, u64 maxLen) {
 
 u8 gReadBuf[64];
 
-// Channel/Process: wrapping numbers 6/7/8 the same way File wrapped
+// Channel/Process: wrapping numbers 6/7/8/9 the same way File wrapped
 // 4/5 - real methods, not raw syscall numbers, over the same
-// doSyscall() staging helper. Channel.send() isn't exercised by this
-// file's own demo (the shell sends the spawn trigger, running in
-// kernel mode already - no syscall needed on that side), but exists
-// for completeness/symmetry with File's read+write pair, and for any
-// future ring3 program that needs to send, not just receive.
+// doSyscall() staging helper.
+//
+// Milestone 25: Channel.open() is new - turns a raw channel index into
+// a real, rights-checked handle (syscall 9), which is what send()/
+// receive() below now pass instead of the old raw index. The kernel
+// decides the actual rights granted (see syscall.mc's num 9), not this
+// call - open() just reports whether the kernel granted *something*.
+bool Channel.open(Channel* self, int channelIndex) {
+    u64 result = doSyscall(9, (u64) channelIndex, 0, 0);
+    if (result == (u64) -1) {
+        return false;
+    }
+    self->handle = (int) result;
+    return true;
+}
+
+// Deliberately exercised by this file's own demo now (milestone 25's
+// whole point): the boot-time process's own handle only ever has
+// RIGHT_RECEIVE, so this call is EXPECTED to fail (return false) - see
+// _start()'s comment for why that's the actual proof, not a bug.
 bool Channel.send(Channel* self, u64 value) {
-    u64 result = doSyscall(7, (u64) self->index, value, 0);
+    u64 result = doSyscall(7, (u64) self->handle, value, 0);
     return result != (u64) -1;
 }
 
 u64 Channel.receive(Channel* self) {
-    return doSyscall(8, (u64) self->index, 0, 0);
+    return doSyscall(8, (u64) self->handle, 0, 0);
 }
 
 u64 Process.spawn(Process* self, u64 loadVaddr, u64 stackVaddr) {

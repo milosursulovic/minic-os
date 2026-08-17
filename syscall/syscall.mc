@@ -67,28 +67,39 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // process actually owns (the same "no real memory-safety enforcement
 // yet" gap every ring3 syscall here has had since milestone 11 -
 // capability/security work is roadmap phase IX, not this one).
-// num 6/7/8 (milestone 23): spawn/channelSend/channelReceive - wrapping
-// Process/Channel the same way num 4/5 wrapped File. num 6 (spawn)
-// reuses spawnProcessFromPath() completely unchanged (the exact same
-// function the shell's `spawn` command already calls in kernel mode -
-// only the caller is new, not the mechanism) and returns the new
-// process's taskIndex, same convention syscall 3 already established.
-// num 7/8 (channelSend/channelReceive) are genuinely new territory: the
-// first BLOCKING syscall this kernel has ever had. channelReceive()
-// calls yield()/switch_context() same as it always has when called
-// from a kernel task directly (procReceiverEntry) - since syscall_dispatch
+// num 6 (milestone 23): spawn - wraps Process the same way num 4/5
+// wrapped File. Reuses spawnProcessFromPath() completely unchanged (the
+// exact same function the shell's `spawn` command already calls in
+// kernel mode - only the caller is new, not the mechanism) and returns
+// the new process's taskIndex, same convention syscall 3 already
+// established.
+// num 7/8/9 (milestone 23, reworked in milestone 25): channelSend/
+// channelReceive/openChannel. channelReceive is the first BLOCKING
+// syscall this kernel has ever had - channelReceive() calls
+// yield()/switch_context() same as it always has when called from a
+// kernel task directly (procReceiverEntry), and since syscall_dispatch
 // runs as an ordinary nested call within the *calling* ring3 task's own
-// context (gCurrentTask is that task; the interrupt didn't create a new
-// one), blocking here suspends the right task and correctly resumes
-// back through isr_syscall's iretq once woken, by the same mechanism
-// already proven for a pure-kernel-task caller. Unlike num 4/5's
-// pointer arguments (still unchecked, see above), num 7/8's channel
-// index IS bounds-checked here - `gChannels[4]` is a fixed-size array
-// with no existing bounds check anywhere in channel.mc (every caller
-// until now was trusted kernel code using a hardcoded index), so a
-// ring3-controlled out-of-range index would be a real out-of-bounds
-// array access, not just wrong data - the same reasoning that already
-// made syscall 3's handle lookup bounds-checked applies here too.
+// context, blocking here suspends the right task and correctly resumes
+// through isr_syscall's iretq once woken.
+//
+// Milestone 25: num 7/8's arg1 used to be a raw channel INDEX, bounds-
+// checked against gChannelCount but with no ownership concept at all -
+// any ring3 process that could guess a valid index (0-3, and every
+// index this kernel actually uses is baked into ring3prog.mc's own
+// source as a fixed constant, so "guess" barely undersells it) could
+// send/receive on ANY channel, not just one it was actually given. Now
+// arg1 is a real HANDLE, resolved through the calling process's own
+// handle table with real per-handle RIGHTS checked before the
+// underlying channel is touched at all - the actual "capability" in
+// "capability/permission system" (roadmap phase IX). num 9 (openChannel)
+// is the one place a ring3 process can turn a channel index into a
+// handle - and it's also the one place rights POLICY is decided: it
+// always grants RIGHT_RECEIVE only, never RIGHT_SEND, regardless of
+// what the caller might want, since nothing in this kernel today needs
+// a ring3-initiated send (the shell/kernel side always sends directly).
+// A handle's rights are fixed forever at grant time (see object.mc's
+// allocHandle) - there's no way to widen one later, only to open a new
+// one under whatever policy the kernel chooses at that call site.
 u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     if (num == 1) {
         char* s = (char*) arg1;
@@ -140,10 +151,25 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
         return (u64) gProcesses[procIndex].taskIndex;
     }
     if (num == 7) {
-        int channelIndex = (int) arg1;
-        if (channelIndex < 0 || channelIndex >= gChannelCount) {
+        int callerProcess = gTasks[gCurrentTask].processIndex;
+        if (callerProcess < 0) {
             return (u64) -1;
         }
+        int handle = (int) arg1;
+        if (handle < 0 || handle >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!gHandleTables[callerProcess][handle].used) {
+            return (u64) -1;
+        }
+        if ((gHandleTables[callerProcess][handle].rights & RIGHT_SEND) == 0) {
+            return (u64) -1;
+        }
+        int objIndex = gHandleTables[callerProcess][handle].objectIndex;
+        if (gObjects[objIndex].type != OBJ_CHANNEL) {
+            return (u64) -1;
+        }
+        int channelIndex = gObjects[objIndex].dataIndex;
         bool ok = channelSend(channelIndex, arg2);
         if (!ok) {
             return (u64) -1;
@@ -151,11 +177,45 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
         return 0;
     }
     if (num == 8) {
+        int callerProcess = gTasks[gCurrentTask].processIndex;
+        if (callerProcess < 0) {
+            return (u64) -1;
+        }
+        int handle = (int) arg1;
+        if (handle < 0 || handle >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!gHandleTables[callerProcess][handle].used) {
+            return (u64) -1;
+        }
+        if ((gHandleTables[callerProcess][handle].rights & RIGHT_RECEIVE) == 0) {
+            return (u64) -1;
+        }
+        int objIndex = gHandleTables[callerProcess][handle].objectIndex;
+        if (gObjects[objIndex].type != OBJ_CHANNEL) {
+            return (u64) -1;
+        }
+        int channelIndex = gObjects[objIndex].dataIndex;
+        return channelReceive(channelIndex);
+    }
+    if (num == 9) {
+        int callerProcess = gTasks[gCurrentTask].processIndex;
+        if (callerProcess < 0) {
+            return (u64) -1;
+        }
         int channelIndex = (int) arg1;
         if (channelIndex < 0 || channelIndex >= gChannelCount) {
             return (u64) -1;
         }
-        return channelReceive(channelIndex);
+        int objIndex = allocObject(OBJ_CHANNEL, channelIndex);
+        if (objIndex < 0) {
+            return (u64) -1;
+        }
+        int handle = allocHandle(callerProcess, objIndex, RIGHT_RECEIVE);
+        if (handle < 0) {
+            return (u64) -1;
+        }
+        return (u64) handle;
     }
     return (u64) -1;   // unknown syscall
 }

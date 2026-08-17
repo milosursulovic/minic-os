@@ -22,19 +22,39 @@
 // (guarded by `used` everywhere), so there's nothing for a "none" tag
 // to ever be compared against.
 const int OBJ_PROCESS = 1;
+// Milestone 25: the first object type actually wrapped by real,
+// enforced per-handle rights (see RIGHT_* below) rather than "any
+// handle to this object can do anything the object supports."
+const int OBJ_CHANNEL = 2;
 
 struct KernelObject {
     bool used;
     int type;
-    int dataIndex;   // meaning depends on type - for OBJ_PROCESS, an index into gProcesses[]
+    int dataIndex;   // meaning depends on type - for OBJ_PROCESS, an index into
+                      // gProcesses[]; for OBJ_CHANNEL, an index into gChannels[]
 }
 
 KernelObject gObjects[8];
 int gObjectCount;
 
+// Milestone 25: real per-handle rights, the actual "capability" in
+// "capability/permission system" - a bitmask of what operations THIS
+// handle specifically permits, checked at the syscall boundary before
+// the underlying object is touched at all. Before this, a handle only
+// answered "does this integer refer to anything real" (bounds/existence
+// checked since milestone 14) - never "is THIS process allowed to do
+// THIS operation with it." A single bit space is shared across object
+// types on purpose (simpler than a per-type rights enum) - safe in
+// practice since a handle's type is always checked first anyway (a
+// process handle's bits are never interpreted as channel rights).
+const int RIGHT_QUERY = 1;      // e.g. syscall 3's handle-query, on an OBJ_PROCESS handle
+const int RIGHT_SEND = 2;       // Channel.send(), on an OBJ_CHANNEL handle
+const int RIGHT_RECEIVE = 4;    // Channel.receive(), on an OBJ_CHANNEL handle
+
 struct Handle {
     bool used;
     int objectIndex;
+    int rights;
 }
 
 const int HANDLES_PER_PROCESS = 8;
@@ -65,13 +85,17 @@ int allocObject(int type, int dataIndex) {
 // Every process's handle table starts empty, so the FIRST handle ever
 // allocated into it always lands in slot 0 - spawnProcess() relies on
 // this to give every process a well-known "handle 0 = myself" without
-// needing a dedicated syscall just to look it up.
-int allocHandle(int processIndex, int objectIndex) {
+// needing a dedicated syscall just to look it up. `rights` (milestone
+// 25) is set once, here, at grant time - never widened later, so
+// whatever policy the granting code chooses (see syscall.mc's num 9)
+// is exactly what the handle can ever do for its whole lifetime.
+int allocHandle(int processIndex, int objectIndex, int rights) {
     int i = 0;
     while (i < HANDLES_PER_PROCESS) {
         if (!gHandleTables[processIndex][i].used) {
             gHandleTables[processIndex][i].used = true;
             gHandleTables[processIndex][i].objectIndex = objectIndex;
+            gHandleTables[processIndex][i].rights = rights;
             return i;
         }
         i = i + 1;
