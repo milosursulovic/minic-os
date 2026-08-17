@@ -17,6 +17,7 @@ import "../proc/channel.mc";
 import "../disk/ata.mc";
 import "../disk/minifs.mc";
 import "../disk/vfs.mc";
+import "../drivers/pci.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -24,8 +25,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
 }
 
 void cmdClear() {
@@ -200,6 +201,46 @@ void cmdTasks() {
     vgaPrint(" ticks: 0x");
     serialPrint(" ticks: 0x");
     printHex(gTickCount);
+}
+
+// Milestone 29: the first time this kernel discovers its own hardware
+// instead of trusting a hardcoded I/O port. Walks bus 0's 32 device
+// slots via the legacy CONFIG_ADDRESS/CONFIG_DATA mechanism and prints
+// every real device found - independently checkable against QEMU's own
+// default machine model (a host bridge, an ISA bridge, an IDE
+// controller, usually a VGA device and a default NIC), not something
+// this kernel can fake or hardcode its way into looking right.
+void cmdPci() {
+    pciEnumerate();
+    vgaPrint("pci devices: 0x");
+    serialPrint("pci devices: 0x");
+    printHex((u64) gPciDeviceCount);
+    int i = 0;
+    while (i < gPciDeviceCount) {
+        PciDevice* d = &gPciDevices[i];
+        vgaPrint(" ");
+        serialPrint(" ");
+        printHex((u64) d->bus);
+        vgaPrint(":");
+        serialPrint(":");
+        printHex((u64) d->device);
+        vgaPrint(".");
+        serialPrint(".");
+        printHex((u64) d->function);
+        vgaPrint(" vendor=0x");
+        serialPrint(" vendor=0x");
+        printHex((u64) d->vendorId);
+        vgaPrint(" device=0x");
+        serialPrint(" device=0x");
+        printHex((u64) d->deviceId);
+        vgaPrint(" class=0x");
+        serialPrint(" class=0x");
+        printHex((u64) d->classCode);
+        vgaPrint(" subclass=0x");
+        serialPrint(" subclass=0x");
+        printHex((u64) d->subclass);
+        i = i + 1;
+    }
 }
 
 // Reads LBA 1, a sector the disk image is pre-populated with (from the
@@ -638,6 +679,8 @@ void runCommand() {
         cmdRing3Fault();
     } else if (streq(gLineBuffer, "ring3nx")) {
         cmdRing3Nx();
+    } else if (streq(gLineBuffer, "pci")) {
+        cmdPci();
     } else if (streq(gLineBuffer, "disk")) {
         cmdDisk();
     } else if (streq(gLineBuffer, "diskwrite")) {

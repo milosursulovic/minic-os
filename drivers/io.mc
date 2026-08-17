@@ -48,6 +48,24 @@ u16 inw(u16 port) {
     return gInWord;
 }
 
+u32 gOutDword;
+u32 gInDword;
+
+// 32-bit port I/O - milestone 29's PCI config space access is the first
+// user: the legacy CONFIG_ADDRESS/CONFIG_DATA mechanism (ports 0xCF8/
+// 0xCFC) is defined in terms of whole 32-bit dwords, not bytes or words.
+void outl(u16 port, u32 value) {
+    gOutPort = port;
+    gOutDword = value;
+    asm("mov dx, [rip+gOutPort]\nmov eax, [rip+gOutDword]\nout dx, eax");
+}
+
+u32 inl(u16 port) {
+    gInPort = port;
+    asm("mov dx, [rip+gInPort]\nin eax, dx\nmov [rip+gInDword], eax");
+    return gInDword;
+}
+
 void serialPutc(u8 c) {
     outb(0x3F8, c);
 }

@@ -58,7 +58,12 @@ dynamically-mapped data region including each ring3 process's own user
 stack (EFER.NXE set once at boot, the classic stack-hardening win - a
 `ret` opcode written onto a process's own stack and jumped to takes a
 real page fault with the CPU's own instruction-fetch bit set in its
-error code, not a silent execution), and runs a minimal
+error code, not a silent execution), real PCI bus enumeration (walking
+the legacy CONFIG_ADDRESS/CONFIG_DATA config-space mechanism to discover
+its own hardware for the first time, rather than trusting a hardcoded
+I/O port - every device it finds checks out against QEMU's own default
+machine model, including the emulated NIC that networking will need),
+and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -106,9 +111,15 @@ boot/             hand-written assembly - below what asm(...) can express
   interrupts.s       ISR/IRQ entry stubs (save/restore, call into MiniC)
   linker.ld          places the multiboot header + code at the 1MB load address
 drivers/          hardware setup and I/O
-  io.mc              VGA text buffer, serial port, raw in/out port I/O
+  io.mc              VGA text buffer, serial port, raw in/out port I/O.
+                     Milestone 29: outl/inl (32-bit port I/O), PCI config
+                     space is dword-addressed
   interrupts_init.mc IDT + 8259 PIC remap + PIT reconfiguration
   keyboard.mc        scancode table + the shell's line buffer
+  pci.mc             Milestone 29 (Phase X's first step): PCI bus
+                     enumeration via the legacy CONFIG_ADDRESS/
+                     CONFIG_DATA mechanism - bus 0 only, no bridge
+                     recursion yet (see Known limitations)
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via
                      mm/paging.mc; every grown page is PAGE_NX (milestone 28)
@@ -646,6 +657,8 @@ receiver got: 0x0 value=0x0
 sent 0xc0ffee1234
 > chan
 receiver got: 0x1 value=0xc0ffee1234
+> pci
+pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 vendor=0x8086 device=0x7000 class=0x6 subclass=0x1 0:1.1 vendor=0x8086 device=0x7010 class=0x1 subclass=0x1 0:1.3 vendor=0x8086 device=0x7113 class=0x6 subclass=0x80 0:2.0 vendor=0x1234 device=0x1111 class=0x3 subclass=0x0 0:3.0 vendor=0x8086 device=0x100e class=0x2 subclass=0x0
 > disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 > diskwrite
@@ -852,6 +865,24 @@ grow further in one call - worth checking `frames`' free count is
 identical before and after a `reset` that follows a grow, since `reset`
 is specifically designed to reuse already-mapped pages rather than
 re-`mapPage`-ing them (which would leak a frame per byte remapped).
+
+That `pci` result is milestone 29's proof, and its strength comes from
+being checkable against something this kernel had no part in choosing:
+QEMU's own default machine model. `0x8086:0x1237` (Intel 82441FX PMC,
+the host bridge), `0x8086:0x7000`/`0x7010`/`0x7113` (Intel PIIX3 ISA
+bridge / IDE controller / PIIX4 ACPI bridge - `0x7010` is literally the
+same IDE controller `disk`/`diskwrite` above already talk to, just now
+independently *discovered* rather than assumed), `0x1234:0x1111`
+(the Bochs/QEMU standard VGA device), and `0x8086:0x100e` (an Intel
+82540EM - a real e1000 gigabit NIC, found with zero extra QEMU flags,
+future networking milestones' target device) - every single one of
+these is a publicly documented, real PCI vendor:device ID pair, not
+something this driver could fake its way into looking right. Getting
+a wrong answer here (a garbage vendor ID, a device that doesn't exist,
+a missing one) would be immediately, independently checkable against
+public PCI ID databases, the same "wrong answer is obviously wrong"
+property this project has looked for in every milestone's own
+verification since milestone 1.
 
 The two `hello from a LOADED process!` lines, printed automatically
 before the shell even shows its first prompt, are the milestone 13
@@ -1558,6 +1589,35 @@ milestones 1-10 were each scoped just before starting them:
 10. **A real driver framework (PCI enumeration) + networking** (NIC
     driver, a from-scratch TCP/IP stack) - deliberately last: the
     largest remaining subsystem, with the fewest things depending on it.
+    ~~**Milestone 29: PCI bus enumeration** - Phase X's first step, and
+    the necessary prerequisite for everything else in this phase: a NIC
+    driver can't be written against a hardcoded, assumed I/O port the
+    way the ATA driver's 0x1F0 was - it has to be *discovered*. New
+    `drivers/pci.mc` walks the legacy CONFIG_ADDRESS/CONFIG_DATA
+    mechanism (ports 0xCF8/0xCFC, `drivers/io.mc`'s new `outl`/`inl`
+    32-bit port I/O) across bus 0's 32 device slots, checking function 0
+    of each and recursing into functions 1-7 only for devices whose
+    header-type byte marks them multi-function. Deliberately scoped to
+    bus 0 only, no PCI-to-PCI bridge recursion - QEMU's default machine
+    has none, and walking one is a real but separate extension for
+    whenever a device beyond bus 0 actually needs finding. Verified with
+    a genuinely strong claim for this kind of low-level driver: every
+    device found (`0x8086:0x1237` host bridge, `0x8086:0x7000`/`0x7010`/
+    `0x7113` ISA/IDE/ACPI bridges, `0x1234:0x1111` Bochs VGA,
+    `0x8086:0x100e` an Intel e1000 NIC) is a real, publicly-documented
+    vendor:device ID pair matching QEMU's own default machine model
+    exactly - not something this driver could fake its way into looking
+    right, and `0x7010` is literally the same IDE controller the
+    existing ATA driver already talks to, now independently discovered
+    rather than assumed. Finding a real e1000 NIC with zero extra QEMU
+    flags is a useful, unplanned bonus: the next Phase X milestone (a
+    NIC driver) has a real, already-present target device to write
+    against. A regression pass (`disk`/`diskwrite` interleaved with
+    `pci`, confirming the new 32-bit port-I/O globals don't corrupt the
+    ATA driver's own shared port-I/O staging globals; heap; scheduler)
+    stayed clean.~~ Next up: an actual e1000 NIC driver (initialize the
+    device found here, get real packet TX/RX working) - the next real
+    hard problem in this phase, and a large one on its own.
 11. **Service architecture + a real `init`** - the current hardcoded
     `shell/shell.mc` loop migrates to an actual userspace program once
     processes/IPC/VFS exist to support that; async I/O as a cross-cutting
@@ -1795,8 +1855,24 @@ around phase 7-8.
   `0x1F0`, drive-select byte hardcoded to `0xE0 | ...`) - no secondary
   bus, no slave drive, no drive detection/identification (`IDENTIFY`
   command) to confirm a drive is even there before trying to use it. No
-  AHCI/NVMe, no PCI enumeration to find controllers dynamically - all
-  later work, see the roadmap.
+  AHCI/NVMe support. ~~No PCI enumeration to find controllers
+  dynamically~~ - **PCI enumeration itself now exists** (milestone 29,
+  `drivers/pci.mc`, bus 0 only - see the roadmap), and it correctly
+  finds the same IDE controller (`0x8086:0x7010`) this driver already
+  talks to by hardcoded port - but `disk/ata.mc` hasn't been retrofitted
+  to actually USE that discovery instead of its own fixed `0x1F0`. Two
+  separate gaps, only the first one closed so far.
+- `drivers/pci.mc`'s enumeration is bus 0 only - no recursion through a
+  PCI-to-PCI bridge's secondary bus (QEMU's default machine has none, so
+  nothing has needed this yet), and there's no general "driver
+  registration framework" beyond the one enumeration function itself -
+  finding a device by vendor:device ID today means a caller manually
+  scanning `gPciDevices[]`, not a real driver-matching/probe mechanism.
+  No NIC driver exists yet either - `pci` finds the emulated e1000
+  (`0x8086:0x100e`) QEMU provides by default, but nothing in this kernel
+  talks to it, initializes it, or sends/receives a single packet. The
+  rest of Phase X (a real NIC driver, then a from-scratch TCP/IP stack)
+  is still fully ahead.
 - The ATA driver is polling-only (busy-waits on the status register), not
   interrupt-driven - simpler to get right first, same reasoning PIO came
   before AHCI/NVMe, but it means a disk operation blocks whichever task
