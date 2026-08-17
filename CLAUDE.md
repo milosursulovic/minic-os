@@ -41,4 +41,4 @@ One folder per subsystem — see `README.md`'s "Project layout" section for the 
 
 ## Docs
 
-`README.md`'s roadmap section, plus `../compiler/README.md`'s roadmap entry and `../docs/roadmap.html`, all get a synced update in the same session a milestone ships — see the `kernel-milestone` skill.
+`README.md`'s roadmap section gets a full update in the same session a milestone ships. `../os-docs/` (the kernel's own docs site — getting started, shell guide, architecture, walkthrough, roadmap) gets the real, detailed sync; `../compiler/README.md` and `../docs/roadmap.html` only need a brief one-paragraph pointer update, not a full milestone write-up. See the `kernel-milestone` skill for the exact checklist.
