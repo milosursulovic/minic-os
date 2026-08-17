@@ -66,7 +66,12 @@ machine model, including the emulated NIC that networking will need), a
 real driver for that NIC (an Intel e1000, initialized over PCI and its
 memory-mapped register file mapped into the kernel's own address space
 for the first time - the real MAC address and link-up status read back
-match QEMU's own known-real hardware state, not fabricated numbers), and
+match QEMU's own known-real hardware state, not fabricated numbers), real
+DMA-based packet TX/RX through that driver (a hand-crafted ARP request
+transmitted, its completion confirmed by the hardware's own descriptor
+status bit, and a genuine reply received back from QEMU's real networking
+backend - the sender address in that reply is QEMU's own well-documented
+default gateway, not anything this kernel invented), and
 runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
@@ -128,8 +133,12 @@ drivers/          hardware setup and I/O
                      config space WRITE) and pciReadBar0()
 net/              networking (milestone 30 onward)
   e1000.mc           the e1000 NIC driver - PCI enable, MMIO register
-                     mapping, real MAC/link-status readback. No TX/RX
-                     yet (see Known limitations)
+                     mapping, real MAC/link-status readback. Milestone
+                     31: real TX/RX descriptor rings (packed structs
+                     matching the hardware's own 16-byte layout),
+                     e1000Send()/e1000Receive() - a genuine packet round
+                     trip, verified via a hand-crafted ARP request/reply
+                     (see Known limitations for what's still ahead)
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via
                      mm/paging.mc; every grown page is PAGE_NX (milestone 28)
@@ -671,6 +680,8 @@ receiver got: 0x1 value=0xc0ffee1234
 pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 vendor=0x8086 device=0x7000 class=0x6 subclass=0x1 0:1.1 vendor=0x8086 device=0x7010 class=0x1 subclass=0x1 0:1.3 vendor=0x8086 device=0x7113 class=0x6 subclass=0x80 0:2.0 vendor=0x1234 device=0x1111 class=0x3 subclass=0x0 0:3.0 vendor=0x8086 device=0x100e class=0x2 subclass=0x0
 > nic
 e1000 mac=52:54:0:12:34:56 linkUp=0x1
+> arp
+arp request sent=0x1 reply len=0x40 isArpReply=0x1 from=52:55:a:0:2:2 senderIp=a.0.2.2
 > disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 > diskwrite
@@ -912,6 +923,28 @@ either. Getting either of these wrong (a zeroed or garbage MAC, a
 stuck-low link bit) would have been immediately, independently
 checkable against a publicly known value, not just "the command didn't
 crash."
+
+That `arp` result is milestone 31's proof, and it's the strongest one
+this driver has produced yet: a genuine, external, two-way network round
+trip, not a loopback or anything this kernel could fake on its own.
+`sent=0x1` is the TX half - the e1000's own hardware set the descriptor's
+DD (descriptor done) status bit after genuinely transmitting the
+hand-crafted 60-byte Ethernet+ARP frame, not something software could
+claim on its own. `reply len=0x40` means something real arrived back in
+the RX ring within the polling window. `isArpReply=0x1` confirms it's
+genuinely an ARP reply (EtherType `0x0806`, opcode `0x0002`), not
+arbitrary noise. The strongest part is what it contains:
+`from=52:55:0a:00:02:02` and `senderIp=10.0.2.2` (shown in this kernel's
+usual hex-per-octet style, `a.0.2.2`) are QEMU's own well-known,
+publicly documented default gateway MAC and IP for its SLIRP user-mode
+networking backend - the exact address this test asked "who has
+10.0.2.2" - meaning QEMU's real network stack, running entirely outside
+this kernel, received the crafted request, parsed it, and replied, and
+this kernel's RX ring genuinely captured that reply. Getting any of this
+wrong (no reply at all, a reply that isn't really ARP, a sender address
+that doesn't match QEMU's documented default) would have been
+immediately, independently wrong against public knowledge neither this
+kernel nor its test scripts control.
 
 The two `hello from a LOADED process!` lines, printed automatically
 before the shell even shows its first prompt, are the milestone 13
@@ -1680,9 +1713,46 @@ milestones 1-10 were each scoped just before starting them:
     a second, separate piece of real hardware state. A regression pass
     (`pci` re-run after the new PCI config WRITE, confirming it didn't
     disturb other devices' config space; `disk`/`diskwrite`/`mkfs`;
-    heap; paging; scheduler) stayed clean.~~ Next up: setting up the
-    RX/TX descriptor rings and getting a real packet transmitted (and,
-    separately, received) - the next real hard problem in this phase.
+    heap; paging; scheduler) stayed clean.~~
+    ~~**Milestone 31: real TX/RX descriptor rings and a genuine packet
+    round trip** - Phase X's third step, building directly on milestone
+    30's own groundwork (MMIO already mapped, PCI bus-mastering already
+    enabled) rather than starting over. `net/e1000.mc` gained
+    `packed struct TxDescriptor`/`RxDescriptor` matching the hardware's
+    own 16-byte layout exactly, `e1000InitRings()` (allocates and
+    programs both rings - TDBAL/TDBAH/TDLEN/TDH/TDT and TCTL/TIPG for
+    TX, the RX equivalents plus RCTL for RX, using `allocFrame()`'s own
+    frames directly as physical DMA buffer addresses, the same
+    already-established convention `proc/process.mc`'s loader uses),
+    `e1000Send()` (copies into a buffer, hands a descriptor to the
+    hardware, polls its own DD status bit for real hardware confirmation
+    - the same bounded-poll, fail-clean discipline the ATA driver's
+    `ataWaitReady`/`ataWaitDrq` already established), and `e1000Receive()`.
+    Deliberately NOT a real ARP subsystem (no address resolution cache,
+    no general request/reply handling) - the new `arp` shell command
+    crafts exactly ONE hardcoded, valid Ethernet+ARP request asking "who
+    has 10.0.2.2" (QEMU SLIRP's own well-known default gateway), purely
+    as a real external stimulus to prove RX genuinely works, the same
+    "one hardcoded test case, not a general framework" scope milestone
+    26's `ring3fault` already used. **A real fix found during testing,
+    not assumed correct from the start**: the first attempt's RX poll
+    used a raw instruction-count spin bound, which returned `reply
+    len=0x0` - not a driver bug, but a measurement one: a tight spin
+    loop doesn't reliably correspond to any particular amount of real
+    wall-clock time, and a genuine external SLIRP round trip needs real
+    time to happen. Fixed by polling against `isr/isr.mc`'s own
+    `gTickCount` instead - the same lesson this project's own QEMU/TCG
+    timer-rate gotcha already taught, applied to a new context. Verified
+    with the strongest proof this driver has produced yet: TX confirmed
+    by the hardware's own descriptor-done bit, and RX confirmed by a
+    genuine reply from QEMU's real external network stack -
+    `from=52:55:0a:00:02:02`/`senderIp=10.0.2.2` are QEMU's own
+    documented default gateway MAC/IP, not anything this kernel could
+    have fabricated. A full regression pass (heap, paging, scheduler,
+    `nic`, `pci`, `disk`/`diskwrite`) stayed clean.~~ Next up: real ARP
+    (an actual address-resolution cache/request-reply mechanism, not one
+    hardcoded test packet), then IP, then UDP/TCP - each realistically
+    its own future milestone.
 11. **Service architecture + a real `init`** - the current hardcoded
     `shell/shell.mc` loop migrates to an actual userspace program once
     processes/IPC/VFS exist to support that; async I/O as a cross-cutting
@@ -1933,18 +2003,25 @@ around phase 7-8.
   registration framework" beyond the one enumeration function itself -
   finding a device by vendor:device ID today means a caller manually
   scanning `gPciDevices[]`, not a real driver-matching/probe mechanism.
-- ~~No NIC driver exists yet either~~ - **`net/e1000.mc` now exists**
-  (milestone 30): the e1000 is enabled over PCI, its MMIO register file
-  is mapped, and real hardware state (MAC address, link status) reads
-  back correctly. **Still fully open**: no RX/TX descriptor rings, so
-  no packet has ever actually been sent or received - `nic` proves the
-  driver can talk to the hardware, not that it can move a single byte
-  of real network traffic yet. `net/e1000.mc`'s register offsets and
-  init sequence are e1000-specific - no generic NIC abstraction exists
-  (nor would one make sense yet, with only one NIC driver in existence).
-  Once TX/RX exist: no ARP, no IP, no UDP/TCP - the entire protocol
-  stack above the device driver is still ahead, each realistically its
-  own future milestone rather than one large jump.
+- ~~No NIC driver exists yet either~~ - **`net/e1000.mc` now sends and
+  receives real packets** (milestones 30-31): the e1000 is enabled over
+  PCI, its MMIO register file is mapped, real hardware state reads back
+  correctly, and real TX/RX descriptor rings move genuine traffic -
+  verified with an actual external round trip through QEMU's own
+  network backend (`arp`), not a loopback. **Still fully open**: no real
+  ARP subsystem - `arp` crafts exactly one hardcoded request/reply pair
+  as a driver-level test vehicle, not a general address-resolution
+  mechanism (no cache, no arbitrary target address, no integration with
+  anything else). No IP, no UDP/TCP - the entire protocol stack above
+  the device driver is still ahead, each realistically its own future
+  milestone rather than one large jump. `net/e1000.mc`'s register
+  offsets and init sequence are e1000-specific - no generic NIC
+  abstraction exists (nor would one make sense yet, with only one NIC
+  driver in existence). The RX/TX rings are fixed-size (8 descriptors
+  each) with no dynamic growth, matching every other fixed-size table in
+  this kernel; `e1000Send()`/`e1000Receive()` both poll rather than
+  using the device's own interrupt capability, the same "poll first,
+  interrupts later" precedent the ATA driver already established.
 - The ATA driver is polling-only (busy-waits on the status register), not
   interrupt-driven - simpler to get right first, same reasoning PIO came
   before AHCI/NVMe, but it means a disk operation blocks whichever task

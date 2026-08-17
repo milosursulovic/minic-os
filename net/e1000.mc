@@ -133,3 +133,227 @@ bool e1000LinkUp() {
     u32 status = e1000ReadReg(E1000_REG_STATUS);
     return (status & E1000_STATUS_LU) != 0;
 }
+
+void e1000WriteReg(u32 offset, u32 value) {
+    volatile u32* reg = (volatile u32*) (gE1000MmioBase + (u64) offset);
+    *reg = value;
+}
+
+// Milestone 31: real TX/RX descriptor rings and a genuine, verified
+// packet round trip - the DMA-buffer-management work milestone 30
+// deliberately deferred. Everything below builds directly on milestone
+// 30's own groundwork (MMIO already mapped, PCI bus-mastering already
+// enabled) rather than starting over.
+//
+// A NIC doesn't move bytes through registers one at a time the way port
+// I/O devices do - the driver hands the hardware a ring of DESCRIPTORS
+// (each one a pointer to a real data buffer, plus length/status/command
+// fields) living in ordinary RAM, and the device DMAs to/from those
+// buffers itself once bus-mastering is enabled. `packed struct` (real
+// since the freestanding phase) guarantees these match the hardware's
+// own 16-byte layout exactly, no compiler-inserted padding.
+packed struct TxDescriptor {
+    u64 bufferAddr;
+    u16 length;
+    u8 cso;
+    u8 cmd;
+    u8 status;
+    u8 css;
+    u16 special;
+}
+
+packed struct RxDescriptor {
+    u64 bufferAddr;
+    u16 length;
+    u16 checksum;
+    u8 status;
+    u8 errors;
+    u16 special;
+}
+
+const u32 E1000_REG_TCTL = 0x0400;
+const u32 E1000_REG_TIPG = 0x0410;
+const u32 E1000_REG_TDBAL = 0x3800;
+const u32 E1000_REG_TDBAH = 0x3804;
+const u32 E1000_REG_TDLEN = 0x3808;
+const u32 E1000_REG_TDH = 0x3810;
+const u32 E1000_REG_TDT = 0x3818;
+
+const u32 E1000_REG_RCTL = 0x0100;
+const u32 E1000_REG_RDBAL = 0x2800;
+const u32 E1000_REG_RDBAH = 0x2804;
+const u32 E1000_REG_RDLEN = 0x2808;
+const u32 E1000_REG_RDH = 0x2810;
+const u32 E1000_REG_RDT = 0x2818;
+
+// TX descriptor CMD bits: EOP (end of packet), IFCS (hardware computes
+// and appends the real Ethernet CRC), RS (report status - without this
+// the hardware never sets DD, and polling for completion would spin
+// forever). STATUS bit 0 = DD (descriptor done) - set by the hardware
+// itself once it has genuinely finished transmitting, not something
+// software can fake.
+const u8 TX_CMD_EOP = 0x01;
+const u8 TX_CMD_IFCS = 0x02;
+const u8 TX_CMD_RS = 0x08;
+const u8 TX_STATUS_DD = 0x01;
+
+// TCTL: EN (enable) | PSP (pad short packets - our test frames are well
+// under the 60-byte Ethernet minimum) | CT=15 (collision threshold,
+// bits 11:4) | COLD=64 (collision distance for full duplex, bits 21:12)
+// | RTLC (retransmit on late collision, bit 24) - the standard
+// full-duplex configuration documented in Intel's own datasheet.
+const u32 E1000_TCTL_VALUE = 0x014000FA;
+// TIPG: IPGT=10 (bits 9:0) | IPGR1=8 (bits 19:10) | IPGR2=6 (bits
+// 29:20) - the datasheet's own recommended full-duplex spacing.
+const u32 E1000_TIPG_VALUE = 0x0060200A;
+
+// RCTL: EN (enable) | BAM (broadcast accept - harmless here, real
+// replies are unicast to us) | SECRC (strip the CRC before writing to
+// memory, so `length` reflects the real payload) - BSIZE left at its
+// default (00 = 2048 bytes/descriptor), comfortably under the full 4KB
+// frame each RX buffer actually gets (allocFrame()'s own granularity) -
+// hardware never writes more than BSIZE, so the larger real allocation
+// is just harmless headroom, not a mismatch.
+const u32 E1000_RCTL_VALUE = 0x0400800A;
+
+const u32 TX_RING_SIZE = 8;
+const u32 RX_RING_SIZE = 8;
+
+// One 4KB frame comfortably holds either ring (8 * 16 = 128 bytes) -
+// real headroom, not exactly enough, the same sizing philosophy every
+// other fixed-size table in this kernel uses.
+TxDescriptor* gTxRing;
+u32 gTxTail;
+u8* gTxBuffer;
+
+RxDescriptor* gRxRing;
+u8* gRxBuffers[8];   // must match RX_RING_SIZE - MiniC array sizes need a literal, not a const
+
+// Sets up both rings and enables the transmitter/receiver. Must run
+// after e1000Init() - needs gE1000MmioBase already mapped and PCI
+// bus-mastering already enabled, both milestone 30's own job.
+bool e1000InitRings() {
+    void* txRingFrame = allocFrame();
+    void* txBufFrame = allocFrame();
+    if (txRingFrame == null || txBufFrame == null) {
+        return false;
+    }
+    gTxRing = (TxDescriptor*) txRingFrame;
+    gTxBuffer = (u8*) txBufFrame;
+    u32 i = 0;
+    while (i < TX_RING_SIZE) {
+        gTxRing[i].bufferAddr = 0;
+        gTxRing[i].length = 0;
+        gTxRing[i].cmd = 0;
+        gTxRing[i].status = TX_STATUS_DD;   // every unused slot starts "done"
+        i = i + 1;
+    }
+    gTxTail = 0;
+
+    e1000WriteReg(E1000_REG_TDBAL, (u32) ((u64) txRingFrame));
+    e1000WriteReg(E1000_REG_TDBAH, 0);
+    e1000WriteReg(E1000_REG_TDLEN, TX_RING_SIZE * 16);
+    e1000WriteReg(E1000_REG_TDH, 0);
+    e1000WriteReg(E1000_REG_TDT, 0);
+    e1000WriteReg(E1000_REG_TIPG, E1000_TIPG_VALUE);
+    e1000WriteReg(E1000_REG_TCTL, E1000_TCTL_VALUE);
+
+    void* rxRingFrame = allocFrame();
+    if (rxRingFrame == null) {
+        return false;
+    }
+    gRxRing = (RxDescriptor*) rxRingFrame;
+    i = 0;
+    while (i < RX_RING_SIZE) {
+        void* buf = allocFrame();
+        if (buf == null) {
+            return false;
+        }
+        gRxBuffers[i] = (u8*) buf;
+        gRxRing[i].bufferAddr = (u64) buf;
+        gRxRing[i].length = 0;
+        gRxRing[i].status = 0;
+        i = i + 1;
+    }
+
+    e1000WriteReg(E1000_REG_RDBAL, (u32) ((u64) rxRingFrame));
+    e1000WriteReg(E1000_REG_RDBAH, 0);
+    e1000WriteReg(E1000_REG_RDLEN, RX_RING_SIZE * 16);
+    e1000WriteReg(E1000_REG_RDH, 0);
+    // Every descriptor is immediately available to hardware, so the
+    // tail sits one past the last one - the same "head chases tail"
+    // convention as the TX ring, just starting from the opposite end.
+    e1000WriteReg(E1000_REG_RDT, RX_RING_SIZE - 1);
+    e1000WriteReg(E1000_REG_RCTL, E1000_RCTL_VALUE);
+
+    return true;
+}
+
+// Copies `len` bytes into the next TX slot, hands it to the hardware,
+// and polls (bounded, same "fail clean rather than hang forever"
+// discipline the ATA driver's ataWaitReady/ataWaitDrq already
+// established) for the descriptor's own DD bit - the hardware's own
+// confirmation it genuinely completed the transmission, not something
+// this driver could fake by just returning true.
+bool e1000Send(u8* data, u16 len) {
+    u32 i = 0;
+    while (i < (u32) len) {
+        gTxBuffer[i] = data[i];
+        i = i + 1;
+    }
+
+    u32 slot = gTxTail;
+    gTxRing[slot].bufferAddr = (u64) gTxBuffer;
+    gTxRing[slot].length = len;
+    gTxRing[slot].cmd = TX_CMD_EOP | TX_CMD_IFCS | TX_CMD_RS;
+    gTxRing[slot].status = 0;
+
+    gTxTail = (slot + 1) % TX_RING_SIZE;
+    e1000WriteReg(E1000_REG_TDT, gTxTail);
+
+    u32 spins = 0;
+    while (spins < 1000000) {
+        if ((gTxRing[slot].status & TX_STATUS_DD) != 0) {
+            return true;
+        }
+        spins = spins + 1;
+    }
+    return false;
+}
+
+// Polls the next expected RX slot (bounded, same reasoning as
+// e1000Send's own wait) for its DD bit. Returns the real received
+// length and copies the frame into `out`, or 0 if nothing arrived
+// within the wait window - a real, honest "no packet" result, not a
+// crash or a hang. Deliberately a SHORT spin bound per call, not a long
+// one - a real external reply (through QEMU's SLIRP backend) takes real
+// wall-clock time to arrive, which a tight instruction-count spin loop
+// doesn't reliably provide even at a huge iteration count (the loop can
+// finish in microseconds on real hardware). Callers needing to wait for
+// a genuine external reply should call this repeatedly against a real
+// tick-based timeout instead - see shell.mc's cmdArp().
+u32 gRxHead;
+
+u16 e1000Receive(u8* out, u16 maxLen) {
+    u32 spins = 0;
+    while (spins < 20000) {
+        if ((gRxRing[gRxHead].status & 0x01) != 0) {
+            u16 len = gRxRing[gRxHead].length;
+            u16 copyLen = len;
+            if (copyLen > maxLen) {
+                copyLen = maxLen;
+            }
+            u16 i = 0;
+            while (i < copyLen) {
+                out[i] = gRxBuffers[gRxHead][i];
+                i = i + 1;
+            }
+            gRxRing[gRxHead].status = 0;
+            e1000WriteReg(E1000_REG_RDT, gRxHead);
+            gRxHead = (gRxHead + 1) % RX_RING_SIZE;
+            return len;
+        }
+        spins = spins + 1;
+    }
+    return 0;
+}
