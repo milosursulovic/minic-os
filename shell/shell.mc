@@ -24,8 +24,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault echo <text>\n");
 }
 
 void cmdClear() {
@@ -503,6 +503,25 @@ void cmdRing3Go() {
     serialPrint("sent ring3 spawn trigger\n");
 }
 
+// Milestone 26: sends trigger value 0x2 (distinct from ring3go's 0x1) on
+// the same gRing3ChannelDemo mailbox - the boot-time ring3 process
+// branches on this to attempt a deliberate forbidden write instead of
+// spawning. This is a ONE-SHOT, KERNEL-HALTING command: if the fix in
+// mm/paging.mc's cloneAddressSpace() is working, the write takes a real
+// page fault and the kernel halts right there (isr.mc's existing
+// handler, no new kernel code needed) - run it in its own dedicated
+// session, never interleaved with other regression testing.
+void cmdRing3Fault() {
+    bool ok = channelSend(gRing3ChannelDemo, 0x2);
+    if (!ok) {
+        vgaPrint("ring3fault failed - channel full");
+        serialPrint("ring3fault failed - channel full\n");
+        return;
+    }
+    vgaPrint("sent ring3 forbidden-write trigger - expect a page fault");
+    serialPrint("sent ring3 forbidden-write trigger - expect a page fault\n");
+}
+
 void cmdProcs() {
     vgaPrint("procA: 0x");
     serialPrint("procA: 0x");
@@ -598,6 +617,8 @@ void runCommand() {
         cmdSend();
     } else if (streq(gLineBuffer, "ring3go")) {
         cmdRing3Go();
+    } else if (streq(gLineBuffer, "ring3fault")) {
+        cmdRing3Fault();
     } else if (streq(gLineBuffer, "disk")) {
         cmdDisk();
     } else if (streq(gLineBuffer, "diskwrite")) {

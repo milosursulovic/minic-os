@@ -180,16 +180,35 @@ void _start() {
     u64 triggerValue = spawnTrigger.receive();
     doSyscall(1, (u64) "Channel.receive() got trigger 0x", triggerValue, 0);
 
-    // Only reachable after receive() above unblocks - see the file
-    // header comment for why this is what prevents infinite self-spawn
-    // rather than needing a recursion-guard flag. loadVaddr/stackVaddr
-    // must match the exact same 0x80000000/0x80020000 pair every other
-    // call site uses - see the top-of-file comment for why stackVaddr
-    // moved off 0x80001000.
-    Process childImage;
-    childImage.path = "/system/testprog.bin";
-    u64 childTaskIndex = childImage.spawn(0x80000000, 0x80020000);
-    doSyscall(1, (u64) "Process.spawn() launched taskIndex 0x", childTaskIndex, 0);
+    // Milestone 26: trigger value 0x2 (shell's `ring3fault` command,
+    // distinct from `ring3go`'s 0x1) deliberately attempts a forbidden
+    // write instead of spawning - the negative-space proof that
+    // cloneAddressSpace() (mm/paging.mc) really does strip the user bit
+    // from a cloned address space's shared PDPT[0]/[1] entries. 0x100000
+    // is the kernel's own multiboot load address: definitely present
+    // (boot.s's static identity map), definitely inside PDPT[0], and
+    // definitely NOT something this process ever mapped for itself - if
+    // the fix works, this write takes a real page fault (CR2=0x100000)
+    // and the kernel's existing isr.mc handler halts before the line
+    // below ever runs; if it somehow succeeded, that line running at all
+    // - visible in the serial log - is the bug report.
+    if (triggerValue == 2) {
+        doSyscall(1, (u64) "attempting forbidden ring3 write to 0x", 0x100000, 0);
+        u64* forbidden = (u64*) 0x100000;
+        *forbidden = 0xDEADBEEF;
+        doSyscall(1, (u64) "forbidden write succeeded (BUG!) at 0x", 0x100000, 0);
+    } else {
+        // Only reachable after receive() above unblocks - see the file
+        // header comment for why this is what prevents infinite self-spawn
+        // rather than needing a recursion-guard flag. loadVaddr/stackVaddr
+        // must match the exact same 0x80000000/0x80020000 pair every other
+        // call site uses - see the top-of-file comment for why stackVaddr
+        // moved off 0x80001000.
+        Process childImage;
+        childImage.path = "/system/testprog.bin";
+        u64 childTaskIndex = childImage.spawn(0x80000000, 0x80020000);
+        doSyscall(1, (u64) "Process.spawn() launched taskIndex 0x", childTaskIndex, 0);
+    }
 
     while (true) {
     }

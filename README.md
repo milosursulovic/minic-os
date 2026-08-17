@@ -46,7 +46,11 @@ native File API, no kernel changes needed, a real capability/permission
 system on top of the handle table (a handle carries fixed rights,
 granted once at open time - a ring3 process handed a receive-only
 channel handle genuinely cannot use it to send, not just "isn't
-expected to"), and runs a minimal
+expected to"), real memory-protection hardening on the shared kernel
+region (a cloned, ring3-capable address space's copy of the kernel's
+own identity-map/heap PDPT entries has the user bit stripped, so a
+deliberate ring3 write into that region takes a real page fault instead
+of silently succeeding), and runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -97,7 +101,12 @@ mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via mm/paging.mc
   frames.mc          multiboot memory map parser + physical frame bitmap allocator
   paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address
-                     spaces, per-task TSS.RSP0 (setTssRsp0)
+                     spaces, per-task TSS.RSP0 (setTssRsp0). Milestone 26:
+                     cloneAddressSpace() strips the user bit from its
+                     copy of the kernel's shared PDPT[0]/[1] entries -
+                     boot.s's own static map and gPML4Phys (never run in
+                     ring3) are untouched, only the copy a cloned,
+                     ring3-capable address space gets
 lib/              no-libc helpers
   strings.mc         streq/startsWith/strlen/parseHex/printHex/formatHex
 isr/              interrupt dispatch
@@ -674,6 +683,38 @@ message `ring3go` sent), so it just blocks there - never reaching *its
 own* `Process.spawn()` call,
 which is what stops this from spawning a second, third, fourth
 generation automatically.
+
+Milestone 26's proof is a separate, dedicated session - deliberately not
+folded into the transcript above, since it ends by halting the kernel on
+purpose (a fresh boot, `ring3fault` typed with no `mkfs`/`install` first -
+this test only needs the boot-time ring3 process and the existing
+`gRing3ChannelDemo` channel, nothing disk-backed):
+
+```
+> ring3fault
+sent ring3 forbidden-write trigger - expect a page fault
+Channel.receive() got trigger 0x2
+attempting forbidden ring3 write to 0x100000
+page fault at 0x100000, halting
+```
+
+That's the whole point: `attempting forbidden ring3 write to 0x100000` is
+printed - `proc/ring3prog.mc`'s `_start()` really did reach the `*forbidden
+= 0xDEADBEEF;` line and attempt the write - and then nothing else from
+that process ever prints again. Specifically, the line right after it in
+the source, `"forbidden write succeeded (BUG!) at 0x..."`, never appears -
+the CPU faulted on the write itself, before that next syscall could even
+be staged. `page fault at 0x100000, halting` is `isr/isr.mc`'s existing
+vector-14 handler independently confirming the exact faulting address
+(read from CR2, not something the ring3 process reported about itself) is
+`0x100000` - the kernel's own multiboot load address, definitely present
+in the shared identity map, definitely never something this process
+mapped for itself. Before the milestone 26 fix, this same command would
+have printed the "(BUG!)" line and kept running (the write silently
+landing in live kernel memory) instead of faulting - the *absence* of
+that line, replaced by a page fault at exactly the address that was
+written to, is what makes this a genuine negative-space proof rather than
+a topology change nobody actually exercised.
 
 Those first `alloc` addresses aren't right at the heap's base address
 anymore, the way they were before milestone 8 - `sched/task.mc`'s four
@@ -1299,10 +1340,32 @@ milestones 1-10 were each scoped just before starting them:
    value). The independently spawned child process repeats the whole
    sequence correctly through its OWN separate handle table, and a full
    shell regression pass (`chan`/`send`/`procs`/`alloc`/`map`/`mkfile`/
-   `vfscat`) stayed clean.~~ Next up: broader security hardening
-   (NX/ASLR/sandboxing on the still-user-accessible shared PDPT region),
-   or extending real per-handle rights to `Process` handles too -
-   whichever the user picks up first.
+   `vfscat`) stayed clean.~~
+   ~~**Milestone 26: security hardening on the shared PDPT region** -
+   Phase IX's second step. Tracing every actual `mapPage`/`mapPageIn`
+   call site first showed the real, confirmed-vulnerable surface was
+   narrower than the milestone-12-era note implied - the heap and the
+   `map` demo already passed leaf flags without the user bit, so the gap
+   was specifically `boot.s`'s static 1GB identity map's 2MB huge-page
+   leaves (PDPT index 0). `mm/paging.mc`'s `cloneAddressSpace()` now
+   strips the user (0x04) bit from `newPdpt[0]`/`newPdpt[1]` when
+   copying them from the kernel's own PDPT into a freshly cloned
+   address space - `boot.s` and the original kernel-only `gPML4Phys`
+   space (never run in ring3) are untouched, only the cloned copy is.
+   Verified with a genuine negative-space proof: a new shell command,
+   `ring3fault`, sends a second trigger value on the existing ring3-demo
+   channel, causing the boot-time process to deliberately attempt a
+   forbidden write to `0x100000` - the kernel's own multiboot load
+   address, definitely present, definitely never mapped by that process
+   itself. The existing page-fault handler correctly reports
+   `page fault at 0x100000, halting`, and the "forbidden write succeeded
+   (BUG!)" line written specifically to catch a silent failure never
+   prints. A full regression pass (heap, `map`, the scheduler,
+   `mkfs`/`install`/`ring3go`'s spawn and isolation, milestone 25's
+   capability rights) confirmed nothing legitimate broke.~~ Next up:
+   extending real per-handle rights to `Process` handles too, or further
+   security hardening (NX/ASLR/sandboxing) - whichever the user picks up
+   first.
 10. **A real driver framework (PCI enumeration) + networking** (NIC
     driver, a from-scratch TCP/IP stack) - deliberately last: the
     largest remaining subsystem, with the fewest things depending on it.
@@ -1319,15 +1382,37 @@ around phase 7-8.
 
 ## Known limitations (on purpose, for now)
 
-- The shared region every address space carries (PDPT[0]/PDPT[1] - the
-  static identity map plus the heap) is still marked user-accessible
-  (`boot.s`'s PML4/PDPT/PD entries all carry the user bit), so ring3 code
-  can still read/write/execute the *whole kernel and every other task's
-  shared memory* - milestone 12 gave each task a genuinely private
-  region (`vaddr >= 0x80000000`), but didn't restrict what the *shared*
-  region looks like to unprivileged code. That needs a real memory-
-  protection pass once security/capability work is underway (roadmap
-  phase IX), not just an address-space topology change.
+- ~~The shared region every address space carries (PDPT[0]/PDPT[1] - the
+  static identity map plus the heap) is still marked user-accessible~~ -
+  **fixed in milestone 26**: `mm/paging.mc`'s `cloneAddressSpace()` now
+  strips the user (0x04) bit from `newPdpt[0]`/`newPdpt[1]` when copying
+  them from the kernel's own PDPT into a freshly cloned (ring3-capable)
+  address space, closing the gap this note flagged since milestone 12.
+  Tracing every actual leaf-level `mapPage`/`mapPageIn` call site first
+  showed the real, confirmed-vulnerable surface was narrower than this
+  note implied - the heap (`mm/heap.mc`) and the `map` demo command
+  already passed flags without the user bit at the leaf, so the gap was
+  specifically `boot.s`'s static 1GB identity map's 2MB huge-page leaves
+  (PDPT index 0), reachable only through the AND-across-levels PDPT-entry
+  permission this fix closes. `boot.s` itself and the original kernel-
+  only address space (`gPML4Phys`, used directly by plain kernel tasks
+  that never enter ring3) are untouched - the fix lives entirely in the
+  *copy* a cloned space gets, since x86 paging ANDs the user bit across
+  every level from PML4 down to the leaf, and every legitimate ring3
+  interaction with kernel code/the heap already goes through a syscall
+  (which raises CPL to 0 before touching that memory) rather than a
+  direct ring3 access. Verified with a genuine negative-space proof, not
+  just a topology change: a new shell command (`ring3fault`) sends a
+  second trigger value on the existing ring3-demo channel, causing
+  `proc/ring3prog.mc`'s boot-time process to deliberately attempt a
+  forbidden write to `0x100000` (the kernel's own multiboot load
+  address) - the existing page-fault handler correctly reports
+  `page fault at 0x100000, halting` and the kernel halts right there, the
+  "forbidden write succeeded (BUG!)" line specifically written to prove
+  this a real reject (never printed) rather than a silent no-op. A full
+  regression pass (heap, the `map` demo, the scheduler, `mkfs`/`install`/
+  `ring3go`'s process spawn and isolation, milestone 25's capability
+  rights) confirmed nothing legitimate broke.
 - ~~Only one ring3 process was safe to run at a time~~ - **fixed in
   milestone 19**: `sched/task.mc`'s `Task` gained a `kernelStackTop`
   field (each task's own already-`kalloc`'d kernel stack, reused as its

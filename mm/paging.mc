@@ -175,8 +175,28 @@ u64 cloneAddressSpace() {
     u64* kernelPml4 = (u64*) gPML4Phys;
     u64* kernelPdpt = (u64*) (kernelPml4[0] & ~((u64) 0xFFF));
     u64* newPdpt = (u64*) newPdptFrame;
-    newPdpt[0] = kernelPdpt[0];   // shared: static identity map
-    newPdpt[1] = kernelPdpt[1];   // shared: heap / dynamic-demo region
+    // Milestone 26: strip the user (0x04) bit when copying the shared
+    // entries into a NEW (potentially ring3-capable) address space -
+    // closes the gap flagged as a known limitation since milestone 12.
+    // A ring3 process never legitimately needs direct access to this
+    // region at all: every interaction with kernel code/data/the heap
+    // happens through a syscall (int 0x80), which raises CPL to 0 before
+    // any of that memory is touched - x86 paging permission checks use
+    // CPL, not "which segment the current instruction came from", so a
+    // syscall handler keeps working identically here regardless of this
+    // bit. Only the *copy* used by a cloned (ring3-capable) address
+    // space is touched - the original kernel address space (gPML4Phys,
+    // still used directly by plain kernel-mode tasks like task1-4) is
+    // untouched, since nothing ever runs those in ring3 anyway. PML4[0]
+    // itself deliberately keeps its own user bit (see cloneAddressSpace's
+    // own newPml4[0] line below) - it also covers this process's PRIVATE
+    // region (PDPT[2], vaddr >= 0x80000000), which the process DOES need
+    // ring3 access to; x86 permission is the AND of every level, so
+    // stripping the bit specifically at THIS PDPT entry is what blocks
+    // indices 0/1 while leaving index 2+ (populated later by mapPageIn,
+    // WITH the user bit, unaffected by this at all) fully accessible.
+    newPdpt[0] = kernelPdpt[0] & ~((u64) 0x04);   // shared: static identity map
+    newPdpt[1] = kernelPdpt[1] & ~((u64) 0x04);   // shared: heap / dynamic-demo region
 
     u64* newPml4 = (u64*) newPml4Frame;
     newPml4[0] = ((u64) newPdptFrame) | 0x07;   // present + writable + user
