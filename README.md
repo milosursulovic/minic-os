@@ -62,8 +62,12 @@ error code, not a silent execution), real PCI bus enumeration (walking
 the legacy CONFIG_ADDRESS/CONFIG_DATA config-space mechanism to discover
 its own hardware for the first time, rather than trusting a hardcoded
 I/O port - every device it finds checks out against QEMU's own default
-machine model, including the emulated NIC that networking will need),
-and runs a minimal
+machine model, including the emulated NIC that networking will need), a
+real driver for that NIC (an Intel e1000, initialized over PCI and its
+memory-mapped register file mapped into the kernel's own address space
+for the first time - the real MAC address and link-up status read back
+match QEMU's own known-real hardware state, not fabricated numbers), and
+runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -119,7 +123,13 @@ drivers/          hardware setup and I/O
   pci.mc             Milestone 29 (Phase X's first step): PCI bus
                      enumeration via the legacy CONFIG_ADDRESS/
                      CONFIG_DATA mechanism - bus 0 only, no bridge
-                     recursion yet (see Known limitations)
+                     recursion yet (see Known limitations). Milestone
+                     30: pciConfigWriteDword() (this kernel's first PCI
+                     config space WRITE) and pciReadBar0()
+net/              networking (milestone 30 onward)
+  e1000.mc           the e1000 NIC driver - PCI enable, MMIO register
+                     mapping, real MAC/link-status readback. No TX/RX
+                     yet (see Known limitations)
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via
                      mm/paging.mc; every grown page is PAGE_NX (milestone 28)
@@ -659,6 +669,8 @@ sent 0xc0ffee1234
 receiver got: 0x1 value=0xc0ffee1234
 > pci
 pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 vendor=0x8086 device=0x7000 class=0x6 subclass=0x1 0:1.1 vendor=0x8086 device=0x7010 class=0x1 subclass=0x1 0:1.3 vendor=0x8086 device=0x7113 class=0x6 subclass=0x80 0:2.0 vendor=0x1234 device=0x1111 class=0x3 subclass=0x0 0:3.0 vendor=0x8086 device=0x100e class=0x2 subclass=0x0
+> nic
+e1000 mac=52:54:0:12:34:56 linkUp=0x1
 > disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 > diskwrite
@@ -883,6 +895,23 @@ a missing one) would be immediately, independently checkable against
 public PCI ID databases, the same "wrong answer is obviously wrong"
 property this project has looked for in every milestone's own
 verification since milestone 1.
+
+That `nic` result is milestone 30's proof, and it's independently
+checkable the same way: `52:54:00:12:34:56` is QEMU's own well-known,
+publicly documented default NIC MAC address (`52:54:00` is QEMU's
+locally-administered OUI-style prefix) - reading it back correctly
+proves this driver genuinely mapped the e1000's real MMIO register file
+(not RAM - the first device-register mapping this kernel has ever done,
+via `mm/paging.mc`'s ordinary `mapPage()`, since the mapping mechanism
+itself doesn't care whether the target physical address is RAM or a
+device's registers) and read real hardware state out of it (`RAL0`/
+`RAH0`, pre-loaded by QEMU's own emulated EEPROM), not a fabricated
+number. `linkUp=0x1` is the second, separate confirmation - real
+hardware state a broken or unmapped driver couldn't have produced
+either. Getting either of these wrong (a zeroed or garbage MAC, a
+stuck-low link bit) would have been immediately, independently
+checkable against a publicly known value, not just "the command didn't
+crash."
 
 The two `hello from a LOADED process!` lines, printed automatically
 before the shell even shows its first prompt, are the milestone 13
@@ -1615,9 +1644,45 @@ milestones 1-10 were each scoped just before starting them:
     against. A regression pass (`disk`/`diskwrite` interleaved with
     `pci`, confirming the new 32-bit port-I/O globals don't corrupt the
     ATA driver's own shared port-I/O staging globals; heap; scheduler)
-    stayed clean.~~ Next up: an actual e1000 NIC driver (initialize the
-    device found here, get real packet TX/RX working) - the next real
-    hard problem in this phase, and a large one on its own.
+    stayed clean.~~
+    ~~**Milestone 30: a real e1000 NIC driver (initialization only)** -
+    Phase X's second step, deliberately scoped to just enabling the
+    device and reading back real hardware state, NOT sending or
+    receiving an actual packet yet - setting up the RX/TX descriptor
+    rings is a separably-sized hard problem of its own, the same
+    "narrowest safe first version" discipline milestone 29 used for bus
+    0 only. New `net/e1000.mc`: enables the device over PCI (Memory
+    Space + Bus Master, `drivers/pci.mc`'s new `pciConfigWriteDword()` -
+    this kernel's first PCI config space WRITE, every earlier use was
+    read-only), reads BAR0 (`pciReadBar0()`) to find its real physical
+    MMIO base, and maps 8 pages of it into the kernel's own address
+    space at a fixed convention (`0x60000000`) via `mm/paging.mc`'s
+    ordinary `mapPage()` - the first time this kernel has mapped device
+    registers rather than RAM, though the mapping mechanism itself
+    doesn't care which. A real, load-bearing assumption verified
+    correct rather than just hoped: BAR0 actually holds a valid,
+    already-assigned physical address, because QEMU's `-kernel` boot
+    still runs SeaBIOS first (multiboot loading is one of SeaBIOS's own
+    jobs, not a BIOS bypass) - real PCI bus enumeration and BAR
+    assignment already happened before this kernel ever got control,
+    confirmed empirically rather than assumed, since a genuinely
+    unassigned BAR would have meant mapping physical address 0 or
+    garbage. Reads the real MAC address straight from `RAL0`/`RAH0`
+    (pre-loaded by QEMU's own emulated EEPROM at power-on, same as real
+    hardware auto-loading its burned-in address) rather than
+    implementing the separate EEPROM-read protocol just to re-derive a
+    value already sitting in plain registers. Verified independently,
+    the same "checkable against something the kernel had no part in
+    choosing" property as milestone 29's own proof: the real MAC read
+    back, `52:54:00:12:34:56`, is QEMU's own well-known, publicly
+    documented default NIC MAC address - not a number this driver could
+    fake its way into producing by accident - and `linkUp=0x1` confirms
+    a second, separate piece of real hardware state. A regression pass
+    (`pci` re-run after the new PCI config WRITE, confirming it didn't
+    disturb other devices' config space; `disk`/`diskwrite`/`mkfs`;
+    heap; paging; scheduler) stayed clean.~~ Next up: setting up the
+    RX/TX descriptor rings and getting a real packet transmitted (and,
+    separately, received) - the next real hard problem in this phase.
 11. **Service architecture + a real `init`** - the current hardcoded
     `shell/shell.mc` loop migrates to an actual userspace program once
     processes/IPC/VFS exist to support that; async I/O as a cross-cutting
@@ -1868,11 +1933,18 @@ around phase 7-8.
   registration framework" beyond the one enumeration function itself -
   finding a device by vendor:device ID today means a caller manually
   scanning `gPciDevices[]`, not a real driver-matching/probe mechanism.
-  No NIC driver exists yet either - `pci` finds the emulated e1000
-  (`0x8086:0x100e`) QEMU provides by default, but nothing in this kernel
-  talks to it, initializes it, or sends/receives a single packet. The
-  rest of Phase X (a real NIC driver, then a from-scratch TCP/IP stack)
-  is still fully ahead.
+- ~~No NIC driver exists yet either~~ - **`net/e1000.mc` now exists**
+  (milestone 30): the e1000 is enabled over PCI, its MMIO register file
+  is mapped, and real hardware state (MAC address, link status) reads
+  back correctly. **Still fully open**: no RX/TX descriptor rings, so
+  no packet has ever actually been sent or received - `nic` proves the
+  driver can talk to the hardware, not that it can move a single byte
+  of real network traffic yet. `net/e1000.mc`'s register offsets and
+  init sequence are e1000-specific - no generic NIC abstraction exists
+  (nor would one make sense yet, with only one NIC driver in existence).
+  Once TX/RX exist: no ARP, no IP, no UDP/TCP - the entire protocol
+  stack above the device driver is still ahead, each realistically its
+  own future milestone rather than one large jump.
 - The ATA driver is polling-only (busy-waits on the status register), not
   interrupt-driven - simpler to get right first, same reasoning PIO came
   before AHCI/NVMe, but it means a disk operation blocks whichever task

@@ -18,6 +18,7 @@ import "../disk/ata.mc";
 import "../disk/minifs.mc";
 import "../disk/vfs.mc";
 import "../drivers/pci.mc";
+import "../net/e1000.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -25,8 +26,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
 }
 
 void cmdClear() {
@@ -241,6 +242,39 @@ void cmdPci() {
         printHex((u64) d->subclass);
         i = i + 1;
     }
+}
+
+// Milestone 30: initializes the e1000 NIC milestone 29's `pci` command
+// already found (enables it over PCI, maps its MMIO register file) and
+// reads back real hardware state - its actual MAC address (from RAL0/
+// RAH0, pre-loaded by QEMU's emulated EEPROM the same way real hardware
+// auto-loads its burned-in address) and its link-up status. Read-only
+// proof only - no packet has been sent or received yet, see the
+// roadmap for what's still ahead in this phase.
+void cmdNic() {
+    bool ok = e1000Init();
+    if (!ok) {
+        vgaPrint("e1000 init failed - device not found at 0:3.0");
+        serialPrint("e1000 init failed - device not found at 0:3.0\n");
+        return;
+    }
+    u8 mac[6];
+    e1000GetMac(&mac[0]);
+    vgaPrint("e1000 mac=");
+    serialPrint("e1000 mac=");
+    int i = 0;
+    while (i < 6) {
+        printHex((u64) mac[i]);
+        if (i < 5) {
+            vgaPrint(":");
+            serialPrint(":");
+        }
+        i = i + 1;
+    }
+    bool linkUp = e1000LinkUp();
+    vgaPrint(" linkUp=0x");
+    serialPrint(" linkUp=0x");
+    printHex((u64) linkUp);
 }
 
 // Reads LBA 1, a sector the disk image is pre-populated with (from the
@@ -681,6 +715,8 @@ void runCommand() {
         cmdRing3Nx();
     } else if (streq(gLineBuffer, "pci")) {
         cmdPci();
+    } else if (streq(gLineBuffer, "nic")) {
+        cmdNic();
     } else if (streq(gLineBuffer, "disk")) {
         cmdDisk();
     } else if (streq(gLineBuffer, "diskwrite")) {

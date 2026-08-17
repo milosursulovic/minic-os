@@ -59,6 +59,38 @@ u8 pciConfigReadByte(u8 bus, u8 device, u8 function, u8 offset) {
     return (u8) ((dword >> shift) & 0xFF);
 }
 
+// Milestone 30: the first PCI config space WRITE this kernel has ever
+// done - every prior use (milestone 29's enumeration) was read-only.
+// Needed to set the command register's bus-mastering bit before a NIC
+// can DMA descriptor rings to/from memory. Same addressing as the read
+// side; CONFIG_DATA becomes a write target instead of a read source.
+void pciConfigWriteDword(u8 bus, u8 device, u8 function, u8 offset, u32 value) {
+    u32 address = (((u32) 1) << 31)
+        | (((u32) bus) << 16)
+        | (((u32) device) << 11)
+        | (((u32) function) << 8)
+        | ((u32) (offset & 0xFC));
+    outl(PCI_CONFIG_ADDRESS, address);
+    outl(PCI_CONFIG_DATA, value);
+}
+
+// Reads BAR0 (offset 0x10) and masks off the low 4 bits (bit 0 = space
+// type, bits 2:1 = 32/64-bit, bit 3 = prefetchable for a memory BAR) to
+// get the actual physical base address. Deliberately NOT probing the
+// region's size via the standard "write all 1s, read back the size
+// mask" dance - this driver already knows its target device's layout
+// from the datasheet, and only needs the address, not to rediscover the
+// size. Assumes the BAR is already validly assigned, which is true here
+// specifically because QEMU's `-kernel` boot still runs SeaBIOS first
+// (multiboot loading is one of SeaBIOS's OWN jobs, not a BIOS bypass) -
+// real PCI bus enumeration and BAR assignment already happened before
+// this kernel ever got control, the same reason milestone 29's own
+// vendor/device ID reads already came back real and sane.
+u32 pciReadBar0(u8 bus, u8 device, u8 function) {
+    u32 bar0 = pciConfigReadDword(bus, device, function, 0x10);
+    return bar0 & ~((u32) 0xF);
+}
+
 struct PciDevice {
     u8 bus;
     u8 device;
