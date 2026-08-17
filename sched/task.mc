@@ -328,6 +328,11 @@ int gChannelDemo;
 bool gReceiverGotMessage;
 u64 gReceiverValue;
 
+// Milestone 23: a second, dedicated channel index for the ring3
+// program's own Channel.receive() - see kmain.mc's comment for why it
+// must stay separate from gChannelDemo above.
+int gRing3ChannelDemo;
+
 void procReceiverEntry() {
     u64 value = channelReceive(gChannelDemo);
     gReceiverValue = value;

@@ -36,7 +36,11 @@ concurrently with the first thanks to a per-task `TSS.RSP0` fix), a real
 native "File" API - `msgFile.write(...)`/`msgFile.read(...)`, real
 method calls (MiniC's own `obj.method()` syntax) from inside an actual
 ring3 process, wrapping two new syscalls rather than raw syscall
-numbers - and runs a minimal
+numbers - real `Channel`/`Process` methods too (`spawnTrigger.receive()`
+blocking a ring3 process on a real syscall for the first time,
+`childImage.spawn(...)` letting a ring3 process launch another one
+itself, not just the kernel/shell doing it on its behalf) - and runs a
+minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
@@ -98,10 +102,14 @@ sched/            preemptive task scheduler
                      yield/sleep/channelReceive, eight demo tasks (four processes)
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
-  syscall.mc         syscall dispatcher: print, handle-query, and (as of
-                     milestone 22) vfsRead/vfsWrite (numbers 4/5) - the
-                     first syscalls giving ring3 code access to
-                     something beyond print/handle-query
+  syscall.mc         syscall dispatcher: print, handle-query, vfsRead/
+                     vfsWrite (milestone 22, numbers 4/5), and (milestone
+                     23) spawn/channelSend/channelReceive (numbers 6/7/8)
+                     - channelReceive is this kernel's first BLOCKING
+                     syscall, reusing channelReceive()'s existing
+                     yield()/switch_context() mechanism unchanged since
+                     syscall_dispatch runs as an ordinary nested call
+                     within the calling ring3 task's own context
 proc/             process loading + the kernel object model + IPC
   ring3prog.mc       a real, minicc-compiled MiniC ring3 "program" -
                      the loaded blob; see ring3.ld/ring3blob.s for how a
@@ -110,7 +118,12 @@ proc/             process loading + the kernel object model + IPC
                      below expects. As of milestone 22, also the first
                      real use of MiniC's method-call syntax for
                      something real: a `File` struct with `.write()`/
-                     `.read()` methods wrapping the new syscalls
+                     `.read()` methods wrapping the new syscalls.
+                     Milestone 23 added `Channel`/`Process` the same
+                     way - `.receive()` blocks on a real syscall until
+                     the shell's `ring3go` command triggers it, then
+                     `.spawn()` launches a second copy of this same
+                     blob as an independent process
   ring3.ld           standalone linker script for ring3prog.mc's own
                      link (keeps .text/.rodata/.data/.bss contiguous)
   ring3blob.s        wraps the objcopy'd flat blob in gTestProgStart/
@@ -583,12 +596,44 @@ wrote /system/vfsdemo.mfs via VFS
 > vfscat /system/vfsdemo.mfs
 This file was written through the VFS layer, not MiniFS directly.
 > install
-installed /system/testprog.bin, 0x250 bytes
+installed /system/testprog.bin, 0x972 bytes
 > spawn
 spawned process 0x1
 > ps
 processes: 0x2 proc0 task=0x7 cr3=0x426000 proc1 task=0x9 cr3=0x444000
+> ring3go
+sent ring3 spawn trigger
 ```
+
+That last `ring3go` line wakes the boot-time ring3 process's own blocking
+`Channel.receive()` call - a completely different code path from
+`install`/`spawn` above, which the *shell* (kernel mode) drives directly.
+The ring3 process's own reaction (printed to serial, not shown by any
+shell command) looks like this on a fresh boot (`mkfs`, `install`,
+`ring3go`, in that order, no `spawn` needed - the ring3 process spawns
+its own child this time):
+
+```
+Channel.receive() got trigger 0x1
+Process.spawn() launched taskIndex 0x9
+hello from a LOADED process! 0xc0ffee
+hello from a LOADED process! 0xc0ffee
+handle 0 (self) -> taskIndex 0x9
+handle 99 (invalid) -> 0xffffffffffffffff
+File.write() wrote 0x36
+File.read() got back 0x36
+hello from ring3, via a real File.write() method call!0
+```
+
+The last eight lines are the *spawned child* - the exact same
+`ring3prog.mc` blob, running from `_start()` again from scratch in its
+own freshly cloned address space, with its own distinct `taskIndex`
+(`0x9`, not the parent's `0x7`). It reaches its own `Channel.receive()`
+call too, but the channel's single-slot mailbox is already empty again
+(the parent's `receive()` consumed the one message `ring3go` sent), so
+it just blocks there - never reaching *its own* `Process.spawn()` call,
+which is what stops this from spawning a second, third, fourth
+generation automatically.
 
 Those first `alloc` addresses aren't right at the heap's base address
 anymore, the way they were before milestone 8 - `sched/task.mc`'s four
@@ -654,6 +699,31 @@ actually being read back either way. That failure-on-reboot is itself
 independent proof the write reached real, persistent storage on the
 first boot, not just something the ring3 process believed happened in
 memory.
+
+`Channel.receive() got trigger 0x1` and everything after it is the
+milestone 23 proof - and the riskiest new mechanism this milestone
+added: `spawnTrigger.receive()` is a real, *blocking* ring3 syscall
+(number 8), the first one this kernel has ever had. Every syscall
+before this (print, handle-query, vfsRead/vfsWrite) returned
+immediately; this one suspends the calling task exactly the way
+`channelReceive()` already did for a plain kernel task
+(`procReceiverEntry`, milestone 15) - `yield()`/`switch_context()`
+underneath, unchanged - except now that suspension happens *while the
+task is mid-syscall*, with its `isr_syscall`/`syscall_dispatch`/
+`channelReceive` call frames still resident on its own kernel stack.
+That the shell stayed fully responsive (`chan` still worked, showing
+the *other*, unrelated milestone-15 channel) while this task sat
+blocked for an arbitrary number of other commands, then correctly
+resumed and printed the right value the instant `ring3go` ran, is what
+proves this actually works - a stale/corrupted resume here would have
+looked like a hang or a crash, not a wrong number. `Process.spawn()
+launched taskIndex 0x9` is the second half: a real ring3 syscall
+(number 6) reaching `spawnProcessFromPath()` - the exact same function
+the shell's own `spawn` command already calls, just reached from a
+completely different, ring3-initiated path this time. `ps` afterward
+shows two real, independent processes with different `cr3` values,
+same as milestone 19's original proof, now demonstrated with the
+*second* process created by the *first*, not by the shell.
 
 The `handle 0 (self) -> taskIndex 0x7` / `handle 99 (invalid) ->
 0xffffffffffffffff` lines are the milestone 14 proof, and they're a
@@ -748,10 +818,13 @@ layers genuinely share one underlying filesystem rather than VFS being
 a parallel, disconnected storage silo.
 
 The `install`/`spawn`/`ps` sequence is the milestone 19 proof. `install`
-writing `0x250` (592) bytes - the real, host-verifiable size of `proc/
+writing `0x972` (2418) bytes - the real, host-verifiable size of `proc/
 ring3prog.mc`'s compiled-and-flattened blob (`0xd0`/208 bytes back when
-this was `proc/testprog.s`'s hand-assembled version, pre-milestone-21) -
-confirms the compiled-in program genuinely reached disk through
+this was `proc/testprog.s`'s hand-assembled version, pre-milestone-21;
+`0x250`/592 right after milestone 21 first compiled it; it's simply
+grown since, as milestones 22 and 23 added the `File`/`Channel`/
+`Process` API code this same blob now also contains) - confirms the
+compiled-in program genuinely reached disk through
 `vfsWrite()`. `spawn` then reads it back
 and launches a second process; the loaded program's own two greeting
 prints appearing a second time in the log, followed by *its own* `handle
@@ -1022,9 +1095,53 @@ milestones 1-10 were each scoped just before starting them:
    against the first boot's file) while `read()` still succeeds with
    the same content - independent proof the first write reached real,
    persisted storage, not just something the ring3 process believed
-   happened in memory.~~ Next up: milestone 23, wrapping `Process`/
-   `Channel` the same way `File` was wrapped here, then milestone 24, a
-   thin POSIX compatibility shim over the whole native API.
+   happened in memory.~~
+   ~~**Milestone 23: real `Process`/`Channel` methods** - wrapping the
+   other two the same way `File` was wrapped in milestone 22. Three new
+   syscalls (numbers 6/7/8: spawn/channelSend/channelReceive) -
+   `channelReceive` is this kernel's first ever *blocking* syscall,
+   reusing `channelReceive()`'s existing `yield()`/`switch_context()`
+   mechanism unchanged, since `syscall_dispatch` runs as an ordinary
+   nested call within the calling ring3 task's own context (blocking
+   there suspends the right task and resumes correctly through
+   `isr_syscall`'s `iretq`, by the same mechanism already proven for a
+   plain kernel-task caller). `spawn` reuses `spawnProcessFromPath()`
+   completely unchanged - the exact function the shell's own `spawn`
+   command already called, just reached from ring3 for the first time.
+   `Channel.receive()`/`Process.spawn()` (real methods, milestone 20
+   syntax) let `proc/ring3prog.mc`'s own boot-time process block on an
+   operator-triggered channel (`ring3go`, a new shell command) and then
+   spawn a *second instance of itself* once triggered - deliberately
+   sequenced this way (block-then-spawn, not spawn-at-boot
+   unconditionally) specifically to avoid infinite self-replication: the
+   spawned child reaches its own `Channel.receive()` too, but the
+   single-slot mailbox is already empty again (consumed by the parent),
+   so it just blocks there forever instead of reaching its own `spawn()`
+   call - no recursion-guard flag needed, the mailbox being single-slot
+   already provides one for free. **A real bug found and fixed during
+   this milestone**: the two channels (`gChannelDemo`, milestone 15;
+   `gRing3ChannelDemo`, this milestone) initially got created in the
+   wrong order relative to each other - `createChannel()` just returns
+   the current count at call time, so which *global variable* a result
+   gets assigned to has nothing to do with which index it receives, and
+   the two milestones' hardcoded index assumptions (0 and 1) silently
+   swapped. Symptom: the ring3 process's `Channel.receive()` never woke
+   up after `ring3go` (blocked forever, `ps` never showing a second
+   process) - not a crash, just silent non-progress, since `gChannels[4]`
+   has no bounds/identity checking to catch a request landing on the
+   *wrong but still valid* index. Fixed by reordering the two
+   `createChannel()` calls to match each hardcoded assumption instead of
+   changing either constant. Verified in QEMU: `Channel.receive() got
+   trigger 0x1` and `Process.spawn() launched taskIndex 0x9` print in the
+   right order after `mkfs`/`install`/`ring3go`, the spawned child prints
+   its own distinct `taskIndex` and repeats the whole demo sequence
+   (including its own `File.write()`/`.read()` round trip) correctly in
+   its own isolated address space, `ps` shows two real processes with
+   different `cr3` values, and the shell stayed fully responsive
+   (`chan`, `tasks`, `procs`, `objs`, `alloc`, `map` all clean) while the
+   boot-time process sat genuinely blocked for an arbitrary number of
+   other commands beforehand.~~ Next up: milestone 24, a thin POSIX
+   compatibility shim over the whole native API.
 9. **Capability/permission system** on top of the handle table, then
    security hardening (NX/ASLR/sandboxing).
 10. **A real driver framework (PCI enumeration) + networking** (NIC
@@ -1098,14 +1215,18 @@ around phase 7-8.
   separate object types. Not a gap so much as not-yet-needed: nothing
   today creates more than one thread per process to distinguish. A
   `Channel` (milestone 15) isn't wrapped as a `KernelObject`/handle
-  either yet - `channelSend`/`channelReceive` take a plain `gChannels[]`
-  index, called directly by kernel-mode tasks, the same way
-  `procA`/`procB` call `mapPageIn` directly rather than through a
-  handle. Ring3 code has no way to reach a channel at all right now (no
-  syscall exposes one) - deliberately deferred rather than shipped
-  untested, since exercising it would need a *second* concurrently
-  ring3-capable process, which needs the per-task `RSP0` fix above
-  first.
+  either yet - `channelSend`/`channelReceive` (and now, as of milestone
+  23, the syscalls exposing them to ring3) take a plain integer
+  `gChannels[]` index, bounds-checked at the syscall boundary but not
+  otherwise access-controlled - any ring3 process that knows (or
+  guesses) a valid index can send/receive on any channel, not just one
+  it was actually given. ~~Ring3 code has no way to reach a channel at
+  all right now (no syscall exposes one)~~ - **fixed in milestone 23**:
+  `channelSend`/`channelReceive` are real syscalls now (numbers 7/8),
+  and `Channel.send()`/`Channel.receive()` are real methods wrapping
+  them. Real per-channel access control (a handle instead of a bare
+  index) is still open, deferred to the same capability/security pass
+  (roadmap phase IX) as the shared-PDPT memory-protection gap above.
 - `channelSend()` is non-blocking and single-slot: a sender that finds
   the mailbox already full just gets `false` back, with no queue, no
   backpressure, and no way to wait for room - fine for today's one

@@ -54,8 +54,22 @@ void _start() {
     createTask(&task4Entry);
     createIsolatedTask(&procAEntry);
     createIsolatedTask(&procBEntry);
-    spawnProcess(&gTestProgStart, &gTestProgEnd, 0x80000000, 0x80001000);
+    // gChannelDemo (milestone 15) MUST be created first so it keeps
+    // channel index 0, exactly as every existing test/transcript already
+    // assumes - createChannel() just returns gChannelCount at the time
+    // of the call, so creation ORDER is what fixes each channel's index,
+    // not which global variable it's assigned to.
     gChannelDemo = createChannel();
+    // Milestone 23: a second, dedicated channel for the ring3 program's
+    // own Channel.receive() call - index 1 by construction (the second
+    // createChannel() call overall), created before spawnProcess() so it
+    // already exists the instant that task starts running. Deliberately
+    // a *different* channel than gChannelDemo's - the M15 kernel-task
+    // demo and this ring3 demo must never share one, or the shell's
+    // `send` command and this milestone's spawn-trigger command would
+    // race on the same mailbox.
+    gRing3ChannelDemo = createChannel();
+    spawnProcess(&gTestProgStart, &gTestProgEnd, 0x80000000, 0x80001000);
     createIsolatedTask(&procReceiverEntry);
     vfsMount("/system", BACKEND_MINIFS);
     vfsMount("/devices", BACKEND_DEVICE);

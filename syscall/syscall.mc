@@ -67,6 +67,28 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // process actually owns (the same "no real memory-safety enforcement
 // yet" gap every ring3 syscall here has had since milestone 11 -
 // capability/security work is roadmap phase IX, not this one).
+// num 6/7/8 (milestone 23): spawn/channelSend/channelReceive - wrapping
+// Process/Channel the same way num 4/5 wrapped File. num 6 (spawn)
+// reuses spawnProcessFromPath() completely unchanged (the exact same
+// function the shell's `spawn` command already calls in kernel mode -
+// only the caller is new, not the mechanism) and returns the new
+// process's taskIndex, same convention syscall 3 already established.
+// num 7/8 (channelSend/channelReceive) are genuinely new territory: the
+// first BLOCKING syscall this kernel has ever had. channelReceive()
+// calls yield()/switch_context() same as it always has when called
+// from a kernel task directly (procReceiverEntry) - since syscall_dispatch
+// runs as an ordinary nested call within the *calling* ring3 task's own
+// context (gCurrentTask is that task; the interrupt didn't create a new
+// one), blocking here suspends the right task and correctly resumes
+// back through isr_syscall's iretq once woken, by the same mechanism
+// already proven for a pure-kernel-task caller. Unlike num 4/5's
+// pointer arguments (still unchecked, see above), num 7/8's channel
+// index IS bounds-checked here - `gChannels[4]` is a fixed-size array
+// with no existing bounds check anywhere in channel.mc (every caller
+// until now was trusted kernel code using a hardcoded index), so a
+// ring3-controlled out-of-range index would be a real out-of-bounds
+// array access, not just wrong data - the same reasoning that already
+// made syscall 3's handle lookup bounds-checked applies here too.
 u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     if (num == 1) {
         char* s = (char*) arg1;
@@ -108,6 +130,32 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
             return (u64) -1;
         }
         return arg3;
+    }
+    if (num == 6) {
+        char* path = (char*) arg1;
+        int procIndex = spawnProcessFromPath(path, arg2, arg3);
+        if (procIndex < 0) {
+            return (u64) -1;
+        }
+        return (u64) gProcesses[procIndex].taskIndex;
+    }
+    if (num == 7) {
+        int channelIndex = (int) arg1;
+        if (channelIndex < 0 || channelIndex >= gChannelCount) {
+            return (u64) -1;
+        }
+        bool ok = channelSend(channelIndex, arg2);
+        if (!ok) {
+            return (u64) -1;
+        }
+        return 0;
+    }
+    if (num == 8) {
+        int channelIndex = (int) arg1;
+        if (channelIndex < 0 || channelIndex >= gChannelCount) {
+            return (u64) -1;
+        }
+        return channelReceive(channelIndex);
     }
     return (u64) -1;   // unknown syscall
 }

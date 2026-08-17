@@ -24,8 +24,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go echo <text>\n");
 }
 
 void cmdClear() {
@@ -482,6 +482,24 @@ void cmdSend() {
     serialPrint("sent 0xc0ffee1234\n");
 }
 
+// Milestone 23: wakes the boot-time ring3 process's own blocking
+// Channel.receive() call (a real ring3 syscall, not this kernel task
+// calling channelReceive() directly the way procReceiverEntry does) -
+// operator-triggered on purpose, same "deterministic, not racing the
+// timer" reasoning as `send` above. Once the ring3 process receives
+// this, it goes on to call Process.spawn() - run `install` first so
+// the file it spawns actually exists on disk.
+void cmdRing3Go() {
+    bool ok = channelSend(gRing3ChannelDemo, 0x1);
+    if (!ok) {
+        vgaPrint("ring3go failed - channel full");
+        serialPrint("ring3go failed - channel full\n");
+        return;
+    }
+    vgaPrint("sent ring3 spawn trigger");
+    serialPrint("sent ring3 spawn trigger\n");
+}
+
 void cmdProcs() {
     vgaPrint("procA: 0x");
     serialPrint("procA: 0x");
@@ -575,6 +593,8 @@ void runCommand() {
         cmdChan();
     } else if (streq(gLineBuffer, "send")) {
         cmdSend();
+    } else if (streq(gLineBuffer, "ring3go")) {
+        cmdRing3Go();
     } else if (streq(gLineBuffer, "disk")) {
         cmdDisk();
     } else if (streq(gLineBuffer, "diskwrite")) {
