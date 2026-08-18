@@ -19,6 +19,7 @@ import "../disk/minifs.mc";
 import "../disk/vfs.mc";
 import "../drivers/pci.mc";
 import "../net/e1000.mc";
+import "../net/arp.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -262,6 +263,14 @@ void cmdNic() {
     e1000GetMac(&mac[0]);
     vgaPrint("e1000 mac=");
     serialPrint("e1000 mac=");
+    printMac(&mac[0]);
+    bool linkUp = e1000LinkUp();
+    vgaPrint(" linkUp=0x");
+    serialPrint(" linkUp=0x");
+    printHex((u64) linkUp);
+}
+
+void printMac(u8* mac) {
     int i = 0;
     while (i < 6) {
         printHex((u64) mac[i]);
@@ -271,142 +280,88 @@ void cmdNic() {
         }
         i = i + 1;
     }
-    bool linkUp = e1000LinkUp();
-    vgaPrint(" linkUp=0x");
-    serialPrint(" linkUp=0x");
-    printHex((u64) linkUp);
 }
 
-// Milestone 31: real TX/RX descriptor rings and a genuine, end-to-end
-// packet round trip - the DMA-buffer-management work milestone 30
-// deliberately deferred. Deliberately NOT a real ARP subsystem (no
-// address resolution cache, no general request/reply handling) - this
-// crafts exactly ONE hardcoded, valid Ethernet+ARP request frame,
-// purely as a real stimulus to prove RX genuinely works, the same way
-// milestone 26's `ring3fault` crafted one hardcoded forbidden access
-// rather than building a general fault-injection framework. Asks "who
-// has 10.0.2.2" (QEMU user-mode networking's own well-known default
-// gateway address) - if QEMU's SLIRP backend replies, that's a REAL
-// external round trip, not a loopback or something this driver could
-// fake on its own.
+// Milestone 32: exercises the real resolver (net/arp.mc), superseding
+// milestone 31's own hardcoded one-shot test - same command name, now
+// backed by a genuine cache and a resolver that works for any target,
+// not one fixed address. Four real, independently checkable claims in
+// one command:
+//   1. resolve the gateway (10.0.2.2) - same address milestone 31
+//      proved reachable, now through the real arpResolve() API instead
+//      of a hand-rolled one-off flow.
+//   2. resolve it AGAIN - a real cache hit, checkable by real elapsed
+//      ticks: the first call sends a packet and waits for an external
+//      reply (nonzero elapsed ticks), the second returns from the cache
+//      alone (zero packets sent, zero elapsed ticks) - a genuine
+//      behavioral difference, not just "returned the same value twice."
+//   3. resolve a SECOND, different real address (10.0.2.3, QEMU
+//      SLIRP's own well-known built-in DNS proxy) - proves the resolver
+//      genuinely generalizes past the one address milestone 31 ever
+//      exercised.
+//   4. resolve an address nothing answers for (10.0.2.99) - a real
+//      negative-space proof: arpResolve() must return false after its
+//      own bounded timeout, not hang forever or return garbage.
 void cmdArp() {
-    bool ok = e1000Init();
-    if (!ok) {
-        vgaPrint("e1000 init failed - device not found at 0:3.0");
-        serialPrint("e1000 init failed - device not found at 0:3.0\n");
-        return;
-    }
-    if (!e1000InitRings()) {
-        vgaPrint("e1000 ring setup failed - out of frames");
-        serialPrint("e1000 ring setup failed - out of frames\n");
-        return;
-    }
+    u8 gatewayIp[4];
+    gatewayIp[0] = 10;
+    gatewayIp[1] = 0;
+    gatewayIp[2] = 2;
+    gatewayIp[3] = 2;
 
     u8 mac[6];
-    e1000GetMac(&mac[0]);
+    u64 t0 = gTickCount;
+    bool ok1 = arpResolve(&gatewayIp[0], &mac[0]);
+    u64 elapsed1 = gTickCount - t0;
+    vgaPrint("resolve gateway ok=0x");
+    serialPrint("resolve gateway ok=0x");
+    printHex((u64) ok1);
+    if (ok1) {
+        vgaPrint(" mac=");
+        serialPrint(" mac=");
+        printMac(&mac[0]);
+    }
+    vgaPrint(" elapsedTicks=0x");
+    serialPrint(" elapsedTicks=0x");
+    printHex(elapsed1);
 
-    u8 frame[60];
-    int i = 0;
-    while (i < 60) {
-        frame[i] = 0;
-        i = i + 1;
-    }
-    // dest = broadcast
-    i = 0;
-    while (i < 6) {
-        frame[i] = 0xFF;
-        i = i + 1;
-    }
-    // src = our real MAC
-    i = 0;
-    while (i < 6) {
-        frame[6 + i] = mac[i];
-        i = i + 1;
-    }
-    frame[12] = 0x08;   // EtherType = 0x0806 (ARP), big-endian on the wire
-    frame[13] = 0x06;
-    frame[14] = 0x00;   // hwtype = 1 (Ethernet)
-    frame[15] = 0x01;
-    frame[16] = 0x08;   // ptype = 0x0800 (IPv4)
-    frame[17] = 0x00;
-    frame[18] = 6;       // hwlen
-    frame[19] = 4;       // protolen
-    frame[20] = 0x00;   // opcode = 1 (request)
-    frame[21] = 0x01;
-    i = 0;
-    while (i < 6) {
-        frame[22 + i] = mac[i];   // sender MAC = ours
-        i = i + 1;
-    }
-    frame[28] = 10;   // sender IP = 10.0.2.15 (QEMU SLIRP's default guest address)
-    frame[29] = 0;
-    frame[30] = 2;
-    frame[31] = 15;
-    // target MAC left zeroed (unknown - being resolved)
-    frame[38] = 10;   // target IP = 10.0.2.2 (QEMU SLIRP's default gateway)
-    frame[39] = 0;
-    frame[40] = 2;
-    frame[41] = 2;
+    u8 mac2[6];
+    u64 t1 = gTickCount;
+    bool ok2 = arpResolve(&gatewayIp[0], &mac2[0]);
+    u64 elapsed2 = gTickCount - t1;
+    vgaPrint(" cachedOk=0x");
+    serialPrint(" cachedOk=0x");
+    printHex((u64) ok2);
+    vgaPrint(" cachedElapsedTicks=0x");
+    serialPrint(" cachedElapsedTicks=0x");
+    printHex(elapsed2);
 
-    bool sent = e1000Send(&frame[0], 60);
-    vgaPrint("arp request sent=0x");
-    serialPrint("arp request sent=0x");
-    printHex((u64) sent);
-    if (!sent) {
-        return;
+    u8 dnsIp[4];
+    dnsIp[0] = 10;
+    dnsIp[1] = 0;
+    dnsIp[2] = 2;
+    dnsIp[3] = 3;
+    u8 mac3[6];
+    bool ok3 = arpResolve(&dnsIp[0], &mac3[0]);
+    vgaPrint(" resolveDnsProxyOk=0x");
+    serialPrint(" resolveDnsProxyOk=0x");
+    printHex((u64) ok3);
+    if (ok3) {
+        vgaPrint(" dnsMac=");
+        serialPrint(" dnsMac=");
+        printMac(&mac3[0]);
     }
 
-    // A real external reply (through QEMU's SLIRP backend) takes real
-    // wall-clock time - poll against the kernel's own tick counter
-    // (isr.mc's gTickCount, ~100Hz nominal though QEMU/TCG runs it
-    // faster in practice) rather than trusting an instruction-count
-    // spin to correspond to any particular amount of real time.
-    u8 reply[64];
-    u16 replyLen = 0;
-    u64 startTick = gTickCount;
-    while (gTickCount - startTick < 2000) {
-        replyLen = e1000Receive(&reply[0], 64);
-        if (replyLen > 0) {
-            break;
-        }
-    }
-    vgaPrint(" reply len=0x");
-    serialPrint(" reply len=0x");
-    printHex((u64) replyLen);
-    if (replyLen == 0) {
-        return;
-    }
-
-    bool isArp = reply[12] == 0x08 && reply[13] == 0x06;
-    bool isReply = reply[20] == 0x00 && reply[21] == 0x02;
-    vgaPrint(" isArpReply=0x");
-    serialPrint(" isArpReply=0x");
-    printHex((u64) (isArp && isReply));
-    if (isArp && isReply) {
-        vgaPrint(" from=");
-        serialPrint(" from=");
-        i = 0;
-        while (i < 6) {
-            printHex((u64) reply[22 + i]);
-            if (i < 5) {
-                vgaPrint(":");
-                serialPrint(":");
-            }
-            i = i + 1;
-        }
-        vgaPrint(" senderIp=");
-        serialPrint(" senderIp=");
-        printHex((u64) reply[28]);
-        vgaPrint(".");
-        serialPrint(".");
-        printHex((u64) reply[29]);
-        vgaPrint(".");
-        serialPrint(".");
-        printHex((u64) reply[30]);
-        vgaPrint(".");
-        serialPrint(".");
-        printHex((u64) reply[31]);
-    }
+    u8 unreachableIp[4];
+    unreachableIp[0] = 10;
+    unreachableIp[1] = 0;
+    unreachableIp[2] = 2;
+    unreachableIp[3] = 99;
+    u8 mac4[6];
+    bool ok4 = arpResolve(&unreachableIp[0], &mac4[0]);
+    vgaPrint(" resolveUnreachableOk=0x");
+    serialPrint(" resolveUnreachableOk=0x");
+    printHex((u64) ok4);
 }
 
 // Reads LBA 1, a sector the disk image is pre-populated with (from the

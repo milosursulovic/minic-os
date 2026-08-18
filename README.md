@@ -71,7 +71,12 @@ DMA-based packet TX/RX through that driver (a hand-crafted ARP request
 transmitted, its completion confirmed by the hardware's own descriptor
 status bit, and a genuine reply received back from QEMU's real networking
 backend - the sender address in that reply is QEMU's own well-documented
-default gateway, not anything this kernel invented), and
+default gateway, not anything this kernel invented), a real ARP resolver
+on top of it (a genuine cache - a second resolve of the same address
+returns instantly with zero packets sent, checkable by real elapsed
+ticks, not just "returned the same answer twice" - that generalizes to
+any target address and correctly reports failure, not a hang, for one
+nothing answers), and
 runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
@@ -139,6 +144,10 @@ net/              networking (milestone 30 onward)
                      e1000Send()/e1000Receive() - a genuine packet round
                      trip, verified via a hand-crafted ARP request/reply
                      (see Known limitations for what's still ahead)
+  arp.mc             milestone 32: a real ARP resolver - a genuine
+                     cache, arpResolve() working for any target address,
+                     a real tick-bounded timeout on a miss. Client
+                     (resolver) only, no responder (see Known limitations)
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via
                      mm/paging.mc; every grown page is PAGE_NX (milestone 28)
@@ -681,7 +690,7 @@ pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 
 > nic
 e1000 mac=52:54:0:12:34:56 linkUp=0x1
 > arp
-arp request sent=0x1 reply len=0x40 isArpReply=0x1 from=52:55:a:0:2:2 senderIp=a.0.2.2
+resolve gateway ok=0x1 mac=52:55:a:0:2:2 elapsedTicks=0x64 cachedOk=0x1 cachedElapsedTicks=0x0 resolveDnsProxyOk=0x1 dnsMac=52:55:a:0:2:3 resolveUnreachableOk=0x0
 > disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 > diskwrite
@@ -924,27 +933,33 @@ stuck-low link bit) would have been immediately, independently
 checkable against a publicly known value, not just "the command didn't
 crash."
 
-That `arp` result is milestone 31's proof, and it's the strongest one
-this driver has produced yet: a genuine, external, two-way network round
-trip, not a loopback or anything this kernel could fake on its own.
-`sent=0x1` is the TX half - the e1000's own hardware set the descriptor's
-DD (descriptor done) status bit after genuinely transmitting the
-hand-crafted 60-byte Ethernet+ARP frame, not something software could
-claim on its own. `reply len=0x40` means something real arrived back in
-the RX ring within the polling window. `isArpReply=0x1` confirms it's
-genuinely an ARP reply (EtherType `0x0806`, opcode `0x0002`), not
-arbitrary noise. The strongest part is what it contains:
-`from=52:55:0a:00:02:02` and `senderIp=10.0.2.2` (shown in this kernel's
-usual hex-per-octet style, `a.0.2.2`) are QEMU's own well-known,
-publicly documented default gateway MAC and IP for its SLIRP user-mode
-networking backend - the exact address this test asked "who has
-10.0.2.2" - meaning QEMU's real network stack, running entirely outside
-this kernel, received the crafted request, parsed it, and replied, and
-this kernel's RX ring genuinely captured that reply. Getting any of this
-wrong (no reply at all, a reply that isn't really ARP, a sender address
-that doesn't match QEMU's documented default) would have been
-immediately, independently wrong against public knowledge neither this
-kernel nor its test scripts control.
+That `arp` result is milestone 32's proof, exercising the real
+`net/arp.mc` resolver (`arpResolve()`) instead of milestone 31's own
+hardcoded one-shot flow - four separate, independently checkable claims
+in one command. `resolve gateway ok=0x1 mac=52:55:0a:00:02:02` is a
+genuine external round trip, the same shape milestone 31 first proved,
+now through the real API: QEMU's SLIRP backend, running entirely outside
+this kernel, received a real ARP request and replied with its own
+well-known, publicly documented default gateway MAC. `elapsedTicks=0x64`
+(100 ticks) is real, non-trivial wall-clock time - a genuine network
+round trip actually took a measurable amount of time. `cachedOk=0x1
+cachedElapsedTicks=0x0` is the real proof of the cache: resolving the
+identical address a SECOND time returns instantly, zero ticks elapsed,
+because it never sends a packet at all - a concrete, timing-based
+behavioral difference between a cache hit and a cache miss, not just "the
+second call returned the same answer as the first" (which a broken cache
+that just re-resolved every time would also produce).
+`resolveDnsProxyOk=0x1 dnsMac=52:55:0a:00:02:03` resolves a SECOND,
+different real address (QEMU SLIRP's own built-in DNS proxy) - the MAC
+that comes back is genuinely different from the gateway's, and follows
+the exact same publicly-documented SLIRP convention (embedding the IP's
+last three octets into the MAC), proving the resolver generalizes past
+the one fixed address milestone 31 ever exercised, not something
+special-cased for the gateway alone. `resolveUnreachableOk=0x0` is the
+negative-space proof: asking to resolve an address nothing ever answers
+for (`10.0.2.99`) correctly returns false once the resolver's own real
+tick-bounded timeout expires, rather than hanging forever or returning
+garbage - a real, honest failure result for a real failure case.
 
 The two `hello from a LOADED process!` lines, printed automatically
 before the shell even shows its first prompt, are the milestone 13
@@ -1749,10 +1764,32 @@ milestones 1-10 were each scoped just before starting them:
     `from=52:55:0a:00:02:02`/`senderIp=10.0.2.2` are QEMU's own
     documented default gateway MAC/IP, not anything this kernel could
     have fabricated. A full regression pass (heap, paging, scheduler,
-    `nic`, `pci`, `disk`/`diskwrite`) stayed clean.~~ Next up: real ARP
-    (an actual address-resolution cache/request-reply mechanism, not one
-    hardcoded test packet), then IP, then UDP/TCP - each realistically
-    its own future milestone.
+    `nic`, `pci`, `disk`/`diskwrite`) stayed clean.~~
+    ~~**Milestone 32: a real ARP resolver** - Phase X's fourth step,
+    replacing milestone 31's own hardcoded one-shot test packet with a
+    genuine client-side resolver, built on the proven TX/RX plumbing
+    rather than starting over. New `net/arp.mc`: a fixed-size cache
+    (`ArpEntry[8]`), `arpResolve(ip, macOut)` - checks the cache first,
+    and only on a miss sends a real request and polls for a genuinely
+    matching reply (right EtherType, right opcode, right sender IP,
+    ignoring anything else that might arrive) against a real
+    `gTickCount`-bounded timeout. Deliberately scoped as a CLIENT
+    (resolver) only, not a responder - this kernel has no assigned IP
+    address of its own in any real sense yet, so answering "who has
+    &lt;our address&gt;" doesn't mean anything until it does. The shell's
+    `arp` command (same name as milestone 31's, now backed by the real
+    mechanism) runs four checks in one pass: resolve the gateway (a real
+    external round trip, `elapsedTicks=0x64` - genuine, non-trivial
+    wall-clock time), resolve it AGAIN (`cachedElapsedTicks=0x0` - a
+    real, timing-based proof of the cache, not just "same answer
+    twice"), resolve a SECOND, different real address (QEMU SLIRP's own
+    DNS proxy, `10.0.2.3` - proves the resolver genuinely generalizes,
+    not something special-cased for one fixed IP), and resolve an
+    address nothing answers for (`10.0.2.99` - correctly returns false
+    after the real timeout, not a hang). A full regression pass (heap,
+    paging, scheduler, `pci`, `nic`, `disk`/`diskwrite`) stayed clean.~~
+    Next up: IP, then UDP/TCP - each realistically its own future
+    milestone.
 11. **Service architecture + a real `init`** - the current hardcoded
     `shell/shell.mc` loop migrates to an actual userspace program once
     processes/IPC/VFS exist to support that; async I/O as a cross-cutting
@@ -2008,20 +2045,26 @@ around phase 7-8.
   PCI, its MMIO register file is mapped, real hardware state reads back
   correctly, and real TX/RX descriptor rings move genuine traffic -
   verified with an actual external round trip through QEMU's own
-  network backend (`arp`), not a loopback. **Still fully open**: no real
-  ARP subsystem - `arp` crafts exactly one hardcoded request/reply pair
-  as a driver-level test vehicle, not a general address-resolution
-  mechanism (no cache, no arbitrary target address, no integration with
-  anything else). No IP, no UDP/TCP - the entire protocol stack above
-  the device driver is still ahead, each realistically its own future
-  milestone rather than one large jump. `net/e1000.mc`'s register
-  offsets and init sequence are e1000-specific - no generic NIC
-  abstraction exists (nor would one make sense yet, with only one NIC
-  driver in existence). The RX/TX rings are fixed-size (8 descriptors
-  each) with no dynamic growth, matching every other fixed-size table in
-  this kernel; `e1000Send()`/`e1000Receive()` both poll rather than
-  using the device's own interrupt capability, the same "poll first,
-  interrupts later" precedent the ATA driver already established.
+  network backend. ~~No real ARP subsystem~~ - **`net/arp.mc` now exists**
+  (milestone 32): a genuine cache, `arpResolve()` working for any target
+  address, a real tick-bounded timeout on a miss. **Still fully open**:
+  ARP is client (resolver) only - this kernel never answers "who has
+  &lt;our address&gt;," since it has no assigned IP address of its own in
+  any real sense yet (no DHCP, no static config - `arpSendRequest()`'s
+  own "sender IP" field is a fixed, documented assumption of
+  `10.0.2.15`, QEMU SLIRP's conventional default guest address, not
+  something this kernel actually owns or configured). The cache has no
+  eviction/TTL - entries, once resolved, are trusted forever within one
+  boot. No IP, no UDP/TCP - the entire protocol stack above ARP is still
+  ahead, each realistically its own future milestone rather than one
+  large jump. `net/e1000.mc`'s register offsets and init sequence are
+  e1000-specific - no generic NIC abstraction exists (nor would one make
+  sense yet, with only one NIC driver in existence). The RX/TX rings are
+  fixed-size (8 descriptors each) with no dynamic growth, matching every
+  other fixed-size table in this kernel; `e1000Send()`/`e1000Receive()`
+  both poll rather than using the device's own interrupt capability, the
+  same "poll first, interrupts later" precedent the ATA driver already
+  established.
 - The ATA driver is polling-only (busy-waits on the status register), not
   interrupt-driven - simpler to get right first, same reasoning PIO came
   before AHCI/NVMe, but it means a disk operation blocks whichever task
