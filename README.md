@@ -76,7 +76,11 @@ on top of it (a genuine cache - a second resolve of the same address
 returns instantly with zero packets sent, checkable by real elapsed
 ticks, not just "returned the same answer twice" - that generalizes to
 any target address and correctly reports failure, not a hang, for one
-nothing answers), and
+nothing answers), a real IPv4 layer with a genuine ICMP echo (ping) round
+trip to the gateway (real header construction, a real RFC 791 checksum,
+this kernel's own first concept of "my IP address" - the reply's
+identifier and sequence number are checked to genuinely match what was
+sent, not just "something came back"), and
 runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
@@ -148,6 +152,14 @@ net/              networking (milestone 30 onward)
                      cache, arpResolve() working for any target address,
                      a real tick-bounded timeout on a miss. Client
                      (resolver) only, no responder (see Known limitations)
+  ip.mc              milestone 33: real IPv4 header build + the RFC 791
+                     checksum algorithm, and gMyIp - this kernel's own
+                     first concept of "my IP address" (still static, no
+                     DHCP - see Known limitations)
+  icmp.mc            milestone 33: icmpPing() - a real echo request/reply
+                     round trip, the minimal verification vehicle for
+                     "does IP actually work," the same relationship
+                     milestone 31's ARP had to proving TX/RX worked
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via
                      mm/paging.mc; every grown page is PAGE_NX (milestone 28)
@@ -691,6 +703,8 @@ pci devices: 0x6 0:0.0 vendor=0x8086 device=0x1237 class=0x6 subclass=0x0 0:1.0 
 e1000 mac=52:54:0:12:34:56 linkUp=0x1
 > arp
 resolve gateway ok=0x1 mac=52:55:a:0:2:2 elapsedTicks=0x64 cachedOk=0x1 cachedElapsedTicks=0x0 resolveDnsProxyOk=0x1 dnsMac=52:55:a:0:2:3 resolveUnreachableOk=0x0
+> ping
+ping gateway ok=0x1 elapsedTicks=0x64
 > disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 > diskwrite
@@ -960,6 +974,27 @@ negative-space proof: asking to resolve an address nothing ever answers
 for (`10.0.2.99`) correctly returns false once the resolver's own real
 tick-bounded timeout expires, rather than hanging forever or returning
 garbage - a real, honest failure result for a real failure case.
+
+That `ping` result is milestone 33's proof: a genuine ICMP echo round
+trip through the full stack built so far - ARP resolution, real IPv4
+header construction, a real checksum, and a real Ethernet send/receive,
+all in one. `ok=0x1` means `net/icmp.mc`'s `icmpPing()` got back a reply
+that matched on EVERY real, independently meaningful field: the right
+EtherType, the right IP protocol number, the right source IP, the right
+ICMP type (echo reply, not some other ICMP message), AND the exact
+identifier/sequence number this specific request sent - not just "some
+ICMP traffic arrived." A wrong IP header (a bad checksum, a malformed
+field) would most likely have gotten the packet silently dropped by
+QEMU's real host-level network stack rather than answered at all, so the
+reply arriving *at all* is itself strong indirect evidence the header was
+built correctly - the same "external validation beats self-validation"
+property every proof in this networking phase has looked for.
+`elapsedTicks=0x64` matches the same real, non-trivial round-trip time
+`arp` measured moments earlier - consistent, not coincidental, real
+network latency. This is also the first milestone in this whole project
+to give the kernel a real, explicit "my IP address" (`net/ip.mc`'s
+`gMyIp`) - previously a bare literal duplicated inside `arp.mc`'s own
+request-building code, now one shared, named value both files use.
 
 The two `hello from a LOADED process!` lines, printed automatically
 before the shell even shows its first prompt, are the milestone 13
@@ -1788,7 +1823,34 @@ milestones 1-10 were each scoped just before starting them:
     address nothing answers for (`10.0.2.99` - correctly returns false
     after the real timeout, not a hang). A full regression pass (heap,
     paging, scheduler, `pci`, `nic`, `disk`/`diskwrite`) stayed clean.~~
-    Next up: IP, then UDP/TCP - each realistically its own future
+    ~~**Milestone 33: a real IPv4 layer, verified with a genuine ICMP
+    echo (ping) round trip** - Phase X's fifth step, and the first
+    milestone to give this kernel a real, explicit concept of "my IP
+    address" (`net/ip.mc`'s `gMyIp`, previously a bare literal
+    duplicated inside `net/arp.mc`'s own request-building code, now one
+    shared, named value both files use). New `net/ip.mc`: `ipChecksum()`
+    (the real RFC 791 one's-complement checksum, also reused for ICMP's
+    identical algorithm) and `ipBuildHeader()` (a real 20-byte, no-options
+    IPv4 header). New `net/icmp.mc`: `icmpPing()` - the minimal, natural
+    verification vehicle for "does IP genuinely work end to end," the
+    same relationship milestone 31's hardcoded ARP request had to proving
+    TX/RX worked at all (a bare IP packet with no upper-layer protocol
+    has nothing that could reply to it). Resolves the target's MAC via
+    milestone 32's real `arpResolve()` first, builds a real
+    Ethernet+IPv4+ICMP echo request, sends it, and polls (real
+    `gTickCount`-bounded, milestone 31/32's already-learned timing
+    lesson) for a reply matching on EVERY real field: EtherType, IP
+    protocol, source IP, ICMP type, AND the exact identifier/sequence
+    number sent - not just "something ICMP arrived." Verified in QEMU:
+    `ping gateway ok=0x1 elapsedTicks=0x64` - a genuine reply from QEMU's
+    real network stack, the same non-trivial round-trip time `arp`
+    already measured, no bugs found (the hard, novel risk - DMA rings,
+    MMIO, the tick-vs-spin timing lesson, real external verification -
+    was already absorbed by milestones 31/32; this one was a clean
+    application of already-proven mechanisms to a new protocol layer). A
+    full regression pass (heap, paging, scheduler, `pci`, `arp`'s own
+    continued correctness after the `gMyIp` refactor) stayed clean.~~
+    Next up: UDP, then TCP - each realistically its own future
     milestone.
 11. **Service architecture + a real `init`** - the current hardcoded
     `shell/shell.mc` loop migrates to an actual userspace program once
@@ -2047,17 +2109,22 @@ around phase 7-8.
   verified with an actual external round trip through QEMU's own
   network backend. ~~No real ARP subsystem~~ - **`net/arp.mc` now exists**
   (milestone 32): a genuine cache, `arpResolve()` working for any target
-  address, a real tick-bounded timeout on a miss. **Still fully open**:
-  ARP is client (resolver) only - this kernel never answers "who has
-  &lt;our address&gt;," since it has no assigned IP address of its own in
-  any real sense yet (no DHCP, no static config - `arpSendRequest()`'s
-  own "sender IP" field is a fixed, documented assumption of
-  `10.0.2.15`, QEMU SLIRP's conventional default guest address, not
-  something this kernel actually owns or configured). The cache has no
-  eviction/TTL - entries, once resolved, are trusted forever within one
-  boot. No IP, no UDP/TCP - the entire protocol stack above ARP is still
-  ahead, each realistically its own future milestone rather than one
-  large jump. `net/e1000.mc`'s register offsets and init sequence are
+  address, a real tick-bounded timeout on a miss. ~~No IP layer~~ - **a
+  real one exists now** (milestone 33, `net/ip.mc`/`net/icmp.mc`): real
+  IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP
+  echo (ping) round trip. **Still fully open**: ARP remains client
+  (resolver) only - this kernel never answers "who has &lt;our
+  address&gt;." This kernel's own IP address (`net/ip.mc`'s `gMyIp`,
+  milestone 33) is a fixed, static assumption, not real DHCP-negotiated
+  configuration - `10.0.2.15`, QEMU SLIRP's conventional default guest
+  address, not something this kernel actually negotiated or owns. The
+  ARP cache has no eviction/TTL - entries, once resolved, are trusted
+  forever within one boot. No UDP, no TCP - the transport layer above IP
+  is still ahead, each realistically its own future milestone rather
+  than one large jump; ICMP is the only IP-layer protocol implemented,
+  and only its echo request/reply message type at that (no destination-
+  unreachable, no time-exceeded, no other ICMP messages). `net/e1000.mc`'s
+  register offsets and init sequence are
   e1000-specific - no generic NIC abstraction exists (nor would one make
   sense yet, with only one NIC driver in existence). The RX/TX rings are
   fixed-size (8 descriptors each) with no dynamic growth, matching every

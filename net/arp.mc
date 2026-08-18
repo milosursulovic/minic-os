@@ -7,14 +7,17 @@
 // not one fixed address.
 //
 // Deliberately scoped as a CLIENT (resolver) only, not a responder: this
-// kernel has no assigned IP address of its own in any real sense yet (no
-// DHCP, no static config), so answering "who has <our address>" doesn't
-// mean anything yet. Also no cache eviction/TTL (real ARP caches expire
+// kernel's own IP address (`net/ip.mc`'s `gMyIp`, milestone 33) is
+// still a fixed, static assumption, not real DHCP-negotiated
+// configuration - answering "who has <our address>" for an address
+// nothing actually configured doesn't mean much yet. Also no cache
+// eviction/TTL (real ARP caches expire
 // entries after a few minutes) - a fixed-size cache that just fills up
 // is fine for a first version, the same "narrowest safe first version"
 // discipline every driver-layer milestone in this phase has used.
 
 import "e1000.mc";
+import "ip.mc";
 import "../isr/isr.mc";
 
 struct ArpEntry {
@@ -90,10 +93,14 @@ void arpCacheInsert(u8* ip, u8* mac) {
 
 // Builds and sends one real Ethernet+ARP request frame for `targetIp` -
 // the same layout milestone 31's own hardcoded version used, just
-// parameterized instead of fixed to one address. Sender IP is still a
-// fixed assumption (10.0.2.15, QEMU SLIRP's default guest address) since
-// this kernel has no real IP configuration mechanism yet - a real gap,
-// not hidden: see Known limitations.
+// parameterized instead of fixed to one address. Sender IP is
+// `net/ip.mc`'s own `gMyIp` (milestone 33) - still a fixed, static
+// assumption (10.0.2.15, QEMU SLIRP's default guest address), since this
+// kernel has no real IP configuration mechanism (DHCP or otherwise) yet
+// - a real gap, not hidden: see Known limitations. `ipInit()` is cheap
+// and idempotent (just (re)assigns four constant bytes), so calling it
+// here guarantees `gMyIp` is valid regardless of whether some other path
+// (like milestone 33's own `ping`) already initialized it first.
 void arpSendRequest(u8* targetIp) {
     u8 mac[6];
     e1000GetMac(&mac[0]);
@@ -129,10 +136,12 @@ void arpSendRequest(u8* targetIp) {
         frame[22 + i] = mac[i];
         i = i + 1;
     }
-    frame[28] = 10;
-    frame[29] = 0;
-    frame[30] = 2;
-    frame[31] = 15;
+    ipInit();
+    i = 0;
+    while (i < 4) {
+        frame[28 + i] = gMyIp[i];
+        i = i + 1;
+    }
     i = 0;
     while (i < 4) {
         frame[38 + i] = targetIp[i];

@@ -20,6 +20,8 @@ import "../disk/vfs.mc";
 import "../drivers/pci.mc";
 import "../net/e1000.mc";
 import "../net/arp.mc";
+import "../net/ip.mc";
+import "../net/icmp.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -27,8 +29,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
 }
 
 void cmdClear() {
@@ -362,6 +364,34 @@ void cmdArp() {
     vgaPrint(" resolveUnreachableOk=0x");
     serialPrint(" resolveUnreachableOk=0x");
     printHex((u64) ok4);
+}
+
+// Milestone 33: a real IPv4 layer, verified with a genuine ICMP echo
+// (ping) round trip to the gateway - the minimal, natural "does IP
+// actually work end to end" test, the same relationship milestone 31's
+// hardcoded ARP request had to proving TX/RX worked at all. Resolves the
+// gateway's MAC first (reusing milestone 32's real resolver - a cache
+// hit costs nothing here), builds and sends a real Ethernet+IPv4+ICMP
+// echo request, and polls for a genuinely matching reply: right
+// EtherType, right IP protocol, right source IP, right ICMP type, AND
+// the exact identifier/sequence this request sent.
+void cmdPing() {
+    u8 gatewayIp[4];
+    gatewayIp[0] = 10;
+    gatewayIp[1] = 0;
+    gatewayIp[2] = 2;
+    gatewayIp[3] = 2;
+
+    u64 startTick = gTickCount;
+    bool ok = icmpPing(&gatewayIp[0], 0x1234, 0x1);
+    u64 elapsed = gTickCount - startTick;
+
+    vgaPrint("ping gateway ok=0x");
+    serialPrint("ping gateway ok=0x");
+    printHex((u64) ok);
+    vgaPrint(" elapsedTicks=0x");
+    serialPrint(" elapsedTicks=0x");
+    printHex(elapsed);
 }
 
 // Reads LBA 1, a sector the disk image is pre-populated with (from the
@@ -806,6 +836,8 @@ void runCommand() {
         cmdNic();
     } else if (streq(gLineBuffer, "arp")) {
         cmdArp();
+    } else if (streq(gLineBuffer, "ping")) {
+        cmdPing();
     } else if (streq(gLineBuffer, "disk")) {
         cmdDisk();
     } else if (streq(gLineBuffer, "diskwrite")) {
