@@ -7,7 +7,7 @@
 // not one fixed address.
 //
 // Deliberately scoped as a CLIENT (resolver) only, not a responder: this
-// kernel's own IP address (`net/ip.mc`'s `gMyIp`, milestone 33) is
+// kernel's own IP address (`net/ip.mc`'s `g_my_ip`, milestone 33) is
 // still a fixed, static assumption, not real DHCP-negotiated
 // configuration - answering "who has <our address>" for an address
 // nothing actually configured doesn't mean much yet. Also no cache
@@ -20,7 +20,7 @@ import "e1000.mc";
 import "ip.mc";
 import "../isr/isr.mc";
 
-struct ArpEntry {
+struct arp_entry {
     bool used;
     u8 ip[4];
     u8 mac[6];
@@ -29,40 +29,40 @@ struct ArpEntry {
 // Fixed cap, matching every other table in this kernel - real headroom
 // for a handful of resolved addresses, not exactly enough. MiniC array
 // sizes need a literal, not a named const (hit already in milestone 31).
-ArpEntry gArpCache[8];
-u32 gArpCacheCount;
+arp_entry g_arp_cache[8];
+u32 g_arp_cache_count;
 
-bool gArpNicReady;
+bool g_arp_nic_ready;
 
-// Lazily brings the NIC up exactly once - callers just call arpResolve()
+// Lazily brings the NIC up exactly once - callers just call arp_resolve()
 // without needing to know or care whether milestone 30/31's own
 // init/ring-setup has already run, the same "idempotent, self-
-// contained" shape mm/heap.mc's heapInit() already established.
-bool arpInit() {
-    if (gArpNicReady) {
+// contained" shape mm/heap.mc's heap_init() already established.
+bool arp_init() {
+    if (g_arp_nic_ready) {
         return true;
     }
-    if (!e1000Init()) {
+    if (!e1000_init()) {
         return false;
     }
-    if (!e1000InitRings()) {
+    if (!e1000_init_rings()) {
         return false;
     }
-    gArpNicReady = true;
+    g_arp_nic_ready = true;
     return true;
 }
 
-bool ipEquals(u8* a, u8* b) {
+bool ip_equals(u8* a, u8* b) {
     return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
 }
 
-bool arpCacheLookup(u8* ip, u8* macOut) {
+bool arp_cache_lookup(u8* ip, u8* mac_out) {
     u32 i = 0;
-    while (i < gArpCacheCount) {
-        if (gArpCache[i].used && ipEquals(&gArpCache[i].ip[0], ip)) {
+    while (i < g_arp_cache_count) {
+        if (g_arp_cache[i].used && ip_equals(&g_arp_cache[i].ip[0], ip)) {
             u32 j = 0;
             while (j < 6) {
-                macOut[j] = gArpCache[i].mac[j];
+                mac_out[j] = g_arp_cache[i].mac[j];
                 j = j + 1;
             }
             return true;
@@ -72,38 +72,38 @@ bool arpCacheLookup(u8* ip, u8* macOut) {
     return false;
 }
 
-void arpCacheInsert(u8* ip, u8* mac) {
-    if (gArpCacheCount >= 8) {
+void arp_cache_insert(u8* ip, u8* mac) {
+    if (g_arp_cache_count >= 8) {
         return;
     }
-    u32 slot = gArpCacheCount;
-    gArpCache[slot].used = true;
+    u32 slot = g_arp_cache_count;
+    g_arp_cache[slot].used = true;
     u32 j = 0;
     while (j < 4) {
-        gArpCache[slot].ip[j] = ip[j];
+        g_arp_cache[slot].ip[j] = ip[j];
         j = j + 1;
     }
     j = 0;
     while (j < 6) {
-        gArpCache[slot].mac[j] = mac[j];
+        g_arp_cache[slot].mac[j] = mac[j];
         j = j + 1;
     }
-    gArpCacheCount = gArpCacheCount + 1;
+    g_arp_cache_count = g_arp_cache_count + 1;
 }
 
-// Builds and sends one real Ethernet+ARP request frame for `targetIp` -
+// Builds and sends one real Ethernet+ARP request frame for `target_ip` -
 // the same layout milestone 31's own hardcoded version used, just
 // parameterized instead of fixed to one address. Sender IP is
-// `net/ip.mc`'s own `gMyIp` (milestone 33) - still a fixed, static
+// `net/ip.mc`'s own `g_my_ip` (milestone 33) - still a fixed, static
 // assumption (10.0.2.15, QEMU SLIRP's default guest address), since this
 // kernel has no real IP configuration mechanism (DHCP or otherwise) yet
-// - a real gap, not hidden: see Known limitations. `ipInit()` is cheap
+// - a real gap, not hidden: see Known limitations. `ip_init()` is cheap
 // and idempotent (just (re)assigns four constant bytes), so calling it
-// here guarantees `gMyIp` is valid regardless of whether some other path
+// here guarantees `g_my_ip` is valid regardless of whether some other path
 // (like milestone 33's own `ping`) already initialized it first.
-void arpSendRequest(u8* targetIp) {
+void arp_send_request(u8* target_ip) {
     u8 mac[6];
-    e1000GetMac(&mac[0]);
+    e1000_get_mac(&mac[0]);
 
     u8 frame[60];
     int i = 0;
@@ -136,19 +136,19 @@ void arpSendRequest(u8* targetIp) {
         frame[22 + i] = mac[i];
         i = i + 1;
     }
-    ipInit();
+    ip_init();
     i = 0;
     while (i < 4) {
-        frame[28 + i] = gMyIp[i];
+        frame[28 + i] = g_my_ip[i];
         i = i + 1;
     }
     i = 0;
     while (i < 4) {
-        frame[38 + i] = targetIp[i];
+        frame[38 + i] = target_ip[i];
         i = i + 1;
     }
 
-    e1000Send(&frame[0], 60);
+    e1000_send(&frame[0], 60);
 }
 
 // The real resolver: cache hit returns immediately (no packet ever
@@ -157,38 +157,38 @@ void arpSendRequest(u8* targetIp) {
 // and polls for a genuinely matching reply (right EtherType, right
 // opcode, right sender IP - ignoring anything else that might arrive)
 // against a real wall-clock-bounded timeout using isr/isr.mc's own
-// gTickCount, not a raw instruction-count spin - milestone 31 already
+// g_tick_count, not a raw instruction-count spin - milestone 31 already
 // found that a spin count doesn't reliably correspond to real time for
 // a genuine external round trip. Returns false (a real, honest "could
 // not resolve," not a hang or garbage) if nothing matching arrives
 // within the budget - exercised directly by the shell's own negative
 // test against an address nothing answers for.
-const u64 ARP_TIMEOUT_TICKS = 2000;
+const u64 arp_timeout_ticks = 2000;
 
-bool arpResolve(u8* targetIp, u8* macOut) {
-    if (arpCacheLookup(targetIp, macOut)) {
+bool arp_resolve(u8* target_ip, u8* mac_out) {
+    if (arp_cache_lookup(target_ip, mac_out)) {
         return true;
     }
-    if (!arpInit()) {
+    if (!arp_init()) {
         return false;
     }
 
-    arpSendRequest(targetIp);
+    arp_send_request(target_ip);
 
     u8 reply[64];
-    u64 startTick = gTickCount;
-    while (gTickCount - startTick < ARP_TIMEOUT_TICKS) {
-        u16 len = e1000Receive(&reply[0], 64);
+    u64 start_tick = g_tick_count;
+    while (g_tick_count - start_tick < arp_timeout_ticks) {
+        u16 len = e1000_receive(&reply[0], 64);
         if (len > 0) {
-            bool isArp = reply[12] == 0x08 && reply[13] == 0x06;
-            bool isReplyOp = reply[20] == 0x00 && reply[21] == 0x02;
-            if (isArp && isReplyOp && ipEquals(&reply[28], targetIp)) {
+            bool is_arp = reply[12] == 0x08 && reply[13] == 0x06;
+            bool is_reply_op = reply[20] == 0x00 && reply[21] == 0x02;
+            if (is_arp && is_reply_op && ip_equals(&reply[28], target_ip)) {
                 u32 j = 0;
                 while (j < 6) {
-                    macOut[j] = reply[22 + j];
+                    mac_out[j] = reply[22 + j];
                     j = j + 1;
                 }
-                arpCacheInsert(targetIp, macOut);
+                arp_cache_insert(target_ip, mac_out);
                 return true;
             }
             // Something else arrived (not a matching reply) - ignore it

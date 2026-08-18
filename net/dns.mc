@@ -13,8 +13,8 @@ import "udp.mc";
 import "ip.mc";
 import "../isr/isr.mc";
 
-const u16 DNS_PORT = 53;
-const u16 DNS_SRC_PORT = 12345;
+const u16 dns_port = 53;
+const u16 dns_src_port = 12345;
 
 // Encodes a dotted hostname ("example.com") into DNS label format:
 // each segment prefixed by its own length byte, terminated by a zero
@@ -22,28 +22,28 @@ const u16 DNS_SRC_PORT = 12345;
 // `while (true)`, which this compiler's return-reachability checker
 // doesn't recognize as provably terminating) - real headroom past any
 // hostname this milestone actually uses.
-u16 dnsEncodeName(u8* out, char* hostname) {
+u16 dns_encode_name(u8* out, char* hostname) {
     u16 pos = 1;
-    u16 lenPos = 0;
-    u8 labelLen = 0;
+    u16 len_pos = 0;
+    u8 label_len = 0;
     int i = 0;
     while (i < 256) {
         char c = hostname[i];
         if (c == '\0') {
-            out[lenPos] = labelLen;
+            out[len_pos] = label_len;
             out[pos] = 0;
             pos = pos + 1;
             return pos;
         }
         if (c == '.') {
-            out[lenPos] = labelLen;
-            labelLen = 0;
-            lenPos = pos;
+            out[len_pos] = label_len;
+            label_len = 0;
+            len_pos = pos;
             pos = pos + 1;
         } else {
             out[pos] = (u8) c;
             pos = pos + 1;
-            labelLen = labelLen + 1;
+            label_len = label_len + 1;
         }
         i = i + 1;
     }
@@ -54,9 +54,9 @@ u16 dnsEncodeName(u8* out, char* hostname) {
 // question, recursion desired, no answers/authority/additional records
 // - a real, standard query shape) followed by the encoded QNAME, QTYPE
 // (1 = A record), and QCLASS (1 = IN).
-u16 dnsBuildQuery(u8* out, u16 transactionId, char* hostname) {
-    out[0] = (u8) (transactionId >> 8);
-    out[1] = (u8) (transactionId & 0xFF);
+u16 dns_build_query(u8* out, u16 transaction_id, char* hostname) {
+    out[0] = (u8) (transaction_id >> 8);
+    out[1] = (u8) (transaction_id & 0xFF);
     out[2] = 0x01;   // flags: standard query, recursion desired
     out[3] = 0x00;
     out[4] = 0x00;   // QDCOUNT = 1
@@ -67,7 +67,7 @@ u16 dnsBuildQuery(u8* out, u16 transactionId, char* hostname) {
     out[9] = 0x00;
     out[10] = 0x00;  // ARCOUNT = 0
     out[11] = 0x00;
-    u16 pos = 12 + dnsEncodeName(&out[12], hostname);
+    u16 pos = 12 + dns_encode_name(&out[12], hostname);
     out[pos] = 0x00;       // QTYPE = 1 (A)
     out[pos + 1] = 0x01;
     out[pos + 2] = 0x00;   // QCLASS = 1 (IN)
@@ -81,29 +81,29 @@ u16 dnsBuildQuery(u8* out, u16 transactionId, char* hostname) {
 // already used), the QR (response) bit set, and at least one real
 // answer record - proving SLIRP's proxy actually resolved the name
 // against a real resolver, not just echoed something malformed back.
-bool dnsQuery(char* hostname) {
-    u8 dnsProxyIp[4];
-    dnsProxyIp[0] = 10;
-    dnsProxyIp[1] = 0;
-    dnsProxyIp[2] = 2;
-    dnsProxyIp[3] = 3;
+bool dns_query(char* hostname) {
+    u8 dns_proxy_ip[4];
+    dns_proxy_ip[0] = 10;
+    dns_proxy_ip[1] = 0;
+    dns_proxy_ip[2] = 2;
+    dns_proxy_ip[3] = 3;
 
     u8 query[96];
-    u16 queryLen = dnsBuildQuery(&query[0], 0xABCD, hostname);
+    u16 query_len = dns_build_query(&query[0], 0xABCD, hostname);
 
-    if (!udpSend(&dnsProxyIp[0], DNS_PORT, DNS_SRC_PORT, &query[0], queryLen)) {
+    if (!udp_send(&dns_proxy_ip[0], dns_port, dns_src_port, &query[0], query_len)) {
         return false;
     }
 
     u8 reply[160];
-    u16 replyLen = udpReceive(&dnsProxyIp[0], DNS_PORT, DNS_SRC_PORT, &reply[0], 160);
-    if (replyLen < 12) {
+    u16 reply_len = udp_receive(&dns_proxy_ip[0], dns_port, dns_src_port, &reply[0], 160);
+    if (reply_len < 12) {
         return false;
     }
 
-    u16 replyId = (((u16) reply[0]) << 8) | ((u16) reply[1]);
-    bool isResponse = (reply[2] & 0x80) != 0;
-    u16 answerCount = (((u16) reply[6]) << 8) | ((u16) reply[7]);
+    u16 reply_id = (((u16) reply[0]) << 8) | ((u16) reply[1]);
+    bool is_response = (reply[2] & 0x80) != 0;
+    u16 answer_count = (((u16) reply[6]) << 8) | ((u16) reply[7]);
 
-    return replyId == 0xABCD && isResponse && answerCount > 0;
+    return reply_id == 0xABCD && is_response && answer_count > 0;
 }

@@ -2,21 +2,21 @@
 // construction, the real one's-complement checksum algorithm (RFC 791),
 // and this kernel's own long-overdue concept of "my IP address."
 //
-// `gMyIp` used to be a hardcoded literal duplicated wherever a sender IP
-// was needed (net/arp.mc's own arpSendRequest()) - now one real, named,
+// `g_my_ip` used to be a hardcoded literal duplicated wherever a sender IP
+// was needed (net/arp.mc's own arp_send_request()) - now one real, named,
 // shared value. Still deliberately static/hardcoded, not DHCP-obtained:
 // this kernel has no real IP configuration mechanism at all yet (see
 // Known limitations) - matches QEMU SLIRP's own conventional default
 // guest address, the same value arp.mc's sender-IP field already
 // assumed before this milestone gave it a real name.
 
-u8 gMyIp[4];
+u8 g_my_ip[4];
 
-void ipInit() {
-    gMyIp[0] = 10;
-    gMyIp[1] = 0;
-    gMyIp[2] = 2;
-    gMyIp[3] = 15;
+void ip_init() {
+    g_my_ip[0] = 10;
+    g_my_ip[1] = 0;
+    g_my_ip[2] = 2;
+    g_my_ip[3] = 15;
 }
 
 // The standard IPv4/ICMP checksum: sum every 16-bit word (a trailing odd
@@ -24,7 +24,7 @@ void ipInit() {
 // low 16 bits, then take the one's complement. The same algorithm
 // covers both an IP header and an ICMP message - only the byte range
 // checksummed differs.
-u16 ipChecksum(u8* data, u32 len) {
+u16 ip_checksum(u8* data, u32 len) {
     u32 sum = 0;
     u32 i = 0;
     while (i + 1 < len) {
@@ -46,12 +46,12 @@ u16 ipChecksum(u8* data, u32 len) {
 // fixed/simple choices appropriate for a single, unfragmented packet -
 // this kernel never needs to fragment anything it sends, since every
 // payload it builds today fits in one frame well under the Ethernet MTU.
-void ipBuildHeader(u8* out, u8* srcIp, u8* dstIp, u8 protocol, u16 payloadLen) {
+void ip_build_header(u8* out, u8* src_ip, u8* dst_ip, u8 protocol, u16 payload_len) {
     out[0] = 0x45;   // version 4, IHL 5 (20 bytes, no options)
     out[1] = 0x00;   // type of service
-    u16 totalLen = 20 + payloadLen;
-    out[2] = (u8) (totalLen >> 8);
-    out[3] = (u8) (totalLen & 0xFF);
+    u16 total_len = 20 + payload_len;
+    out[2] = (u8) (total_len >> 8);
+    out[3] = (u8) (total_len & 0xFF);
     out[4] = 0x00;   // identification
     out[5] = 0x00;
     out[6] = 0x40;   // flags = don't fragment, fragment offset = 0
@@ -62,11 +62,11 @@ void ipBuildHeader(u8* out, u8* srcIp, u8* dstIp, u8 protocol, u16 payloadLen) {
     out[11] = 0;
     int i = 0;
     while (i < 4) {
-        out[12 + i] = srcIp[i];
-        out[16 + i] = dstIp[i];
+        out[12 + i] = src_ip[i];
+        out[16 + i] = dst_ip[i];
         i = i + 1;
     }
-    u16 csum = ipChecksum(out, 20);
+    u16 csum = ip_checksum(out, 20);
     out[10] = (u8) (csum >> 8);
     out[11] = (u8) (csum & 0xFF);
 }

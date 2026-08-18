@@ -8,7 +8,7 @@
 # (14) - just enough exceptions to report something useful if a kernel bug
 # trips one - plus IRQ0/IRQ1 (timer/keyboard, remapped to vectors 32/33 by
 # kmain.mc's PIC setup). Not the full 0-31 exception table yet; the same
-# ISR_NOERR/ISR_ERR macro pattern extends to the rest when something
+# isr_noerr/isr_err macro pattern extends to the rest when something
 # actually needs them.
 
 .intel_syntax noprefix
@@ -23,22 +23,22 @@
 .global irq1
 .global isr_syscall
 
-.macro ISR_NOERR num
+.macro isr_noerr num
 isr\num:
     push 0
     push \num
     jmp isr_common_stub
 .endm
 
-.macro ISR_ERR num
+.macro isr_err num
 isr\num:
     push \num
     jmp isr_common_stub
 .endm
 
-ISR_NOERR 0
-ISR_ERR   13
-ISR_ERR   14
+isr_noerr 0
+isr_err   13
+isr_err   14
 
 irq0:
     push 0
@@ -50,9 +50,9 @@ irq1:
     push 33
     jmp isr_common_stub
 
-# Stack on entry: [vector, errorCode, RIP, CS, RFLAGS, RSP, SS] (CPU pushed
+# Stack on entry: [vector, error_code, RIP, CS, RFLAGS, RSP, SS] (CPU pushed
 # the last five; the stub above pushed the first two). Read vector/
-# errorCode into the SysV arg registers before any push touches them.
+# error_code into the SysV arg registers before any push touches them.
 isr_common_stub:
     mov rdi, [rsp]
     mov rsi, [rsp + 8]
@@ -91,13 +91,13 @@ isr_common_stub:
     pop rbx
     pop rax
 
-    add rsp, 16          # drop vector + errorCode
+    add rsp, 16          # drop vector + error_code
     iretq
 
 # Milestone 11's syscall gate (vector 0x80, DPL=3 so ring3's `int 0x80` is
 # allowed to reach it at all - see drivers/interrupts_init.mc). Separate
 # from isr_common_stub above: that one calls interrupt_handler(vector,
-# errorCode) - fine for hardware interrupts/exceptions, but a syscall
+# error_code) - fine for hardware interrupts/exceptions, but a syscall
 # needs its *arguments* (already sitting in rax/rdi/rsi/rdx when this
 # fires, by this kernel's own calling convention - see syscall/syscall.mc)
 # passed through, and its *return value* written back into the saved rax

@@ -25,8 +25,8 @@
 
 import "io.mc";
 
-const u16 PCI_CONFIG_ADDRESS = 0xCF8;
-const u16 PCI_CONFIG_DATA = 0xCFC;
+const u16 pci_config_address = 0xCF8;
+const u16 pci_config_data = 0xCFC;
 
 // Every PCI config register access goes through this: write the
 // (bus, device, function, register) address as one 32-bit dword to
@@ -34,27 +34,27 @@ const u16 PCI_CONFIG_DATA = 0xCFC;
 // requires set), then read the 32-bit result back from CONFIG_DATA.
 // `offset` must be 4-byte aligned - real config space is dword-
 // addressed even though individual fields are 1/2/4 bytes wide.
-u32 pciConfigReadDword(u8 bus, u8 device, u8 function, u8 offset) {
+u32 pci_config_read_dword(u8 bus, u8 device, u8 function, u8 offset) {
     u32 address = (((u32) 1) << 31)
         | (((u32) bus) << 16)
         | (((u32) device) << 11)
         | (((u32) function) << 8)
         | ((u32) (offset & 0xFC));
-    outl(PCI_CONFIG_ADDRESS, address);
-    return inl(PCI_CONFIG_DATA);
+    outl(pci_config_address, address);
+    return inl(pci_config_data);
 }
 
 // Real config fields are often 8 or 16 bits (vendor ID, class code) -
 // these two shift/mask the containing dword rather than needing a
 // second port-I/O round trip per field.
-u16 pciConfigReadWord(u8 bus, u8 device, u8 function, u8 offset) {
-    u32 dword = pciConfigReadDword(bus, device, function, offset);
+u16 pci_config_read_word(u8 bus, u8 device, u8 function, u8 offset) {
+    u32 dword = pci_config_read_dword(bus, device, function, offset);
     u32 shift = ((u32) (offset & 2)) * 8;
     return (u16) ((dword >> shift) & 0xFFFF);
 }
 
-u8 pciConfigReadByte(u8 bus, u8 device, u8 function, u8 offset) {
-    u32 dword = pciConfigReadDword(bus, device, function, offset);
+u8 pci_config_read_byte(u8 bus, u8 device, u8 function, u8 offset) {
+    u32 dword = pci_config_read_dword(bus, device, function, offset);
     u32 shift = ((u32) (offset & 3)) * 8;
     return (u8) ((dword >> shift) & 0xFF);
 }
@@ -64,14 +64,14 @@ u8 pciConfigReadByte(u8 bus, u8 device, u8 function, u8 offset) {
 // Needed to set the command register's bus-mastering bit before a NIC
 // can DMA descriptor rings to/from memory. Same addressing as the read
 // side; CONFIG_DATA becomes a write target instead of a read source.
-void pciConfigWriteDword(u8 bus, u8 device, u8 function, u8 offset, u32 value) {
+void pci_config_write_dword(u8 bus, u8 device, u8 function, u8 offset, u32 value) {
     u32 address = (((u32) 1) << 31)
         | (((u32) bus) << 16)
         | (((u32) device) << 11)
         | (((u32) function) << 8)
         | ((u32) (offset & 0xFC));
-    outl(PCI_CONFIG_ADDRESS, address);
-    outl(PCI_CONFIG_DATA, value);
+    outl(pci_config_address, address);
+    outl(pci_config_data, value);
 }
 
 // Reads BAR0 (offset 0x10) and masks off the low 4 bits (bit 0 = space
@@ -86,90 +86,90 @@ void pciConfigWriteDword(u8 bus, u8 device, u8 function, u8 offset, u32 value) {
 // real PCI bus enumeration and BAR assignment already happened before
 // this kernel ever got control, the same reason milestone 29's own
 // vendor/device ID reads already came back real and sane.
-u32 pciReadBar0(u8 bus, u8 device, u8 function) {
-    u32 bar0 = pciConfigReadDword(bus, device, function, 0x10);
+u32 pci_read_bar0(u8 bus, u8 device, u8 function) {
+    u32 bar0 = pci_config_read_dword(bus, device, function, 0x10);
     return bar0 & ~((u32) 0xF);
 }
 
-struct PciDevice {
+struct pci_device {
     u8 bus;
     u8 device;
     u8 function;
-    u16 vendorId;
-    u16 deviceId;
-    u8 classCode;
+    u16 vendor_id;
+    u16 device_id;
+    u8 class_code;
     u8 subclass;
-    u8 progIf;
-    u8 headerType;
+    u8 prog_if;
+    u8 header_type;
 }
 
 // A fixed, small cap - same class of "generous enough for today, not
 // infinite" choice every fixed-size table in this kernel already makes
-// (gObjects[8], gChannels[4], etc). QEMU's default machine populates a
+// (g_objects[8], g_channels[4], etc). QEMU's default machine populates a
 // handful of devices (host bridge, ISA bridge, IDE controller, VGA,
 // usually a default NIC) - 16 is real headroom over that, not exactly
 // enough.
-PciDevice gPciDevices[16];
-int gPciDeviceCount;
+pci_device g_pci_devices[16];
+int g_pci_device_count;
 
-void pciRecordDevice(u8 bus, u8 device, u8 function) {
-    if (gPciDeviceCount >= 16) {
+void pci_record_device(u8 bus, u8 device, u8 function) {
+    if (g_pci_device_count >= 16) {
         return;
     }
-    u16 vendorId = pciConfigReadWord(bus, device, function, 0x00);
-    u16 deviceId = pciConfigReadWord(bus, device, function, 0x02);
-    u8 classCode = pciConfigReadByte(bus, device, function, 0x0B);
-    u8 subclass = pciConfigReadByte(bus, device, function, 0x0A);
-    u8 progIf = pciConfigReadByte(bus, device, function, 0x09);
-    u8 headerType = pciConfigReadByte(bus, device, function, 0x0E);
+    u16 vendor_id = pci_config_read_word(bus, device, function, 0x00);
+    u16 device_id = pci_config_read_word(bus, device, function, 0x02);
+    u8 class_code = pci_config_read_byte(bus, device, function, 0x0B);
+    u8 subclass = pci_config_read_byte(bus, device, function, 0x0A);
+    u8 prog_if = pci_config_read_byte(bus, device, function, 0x09);
+    u8 header_type = pci_config_read_byte(bus, device, function, 0x0E);
 
-    int i = gPciDeviceCount;
-    gPciDevices[i].bus = bus;
-    gPciDevices[i].device = device;
-    gPciDevices[i].function = function;
-    gPciDevices[i].vendorId = vendorId;
-    gPciDevices[i].deviceId = deviceId;
-    gPciDevices[i].classCode = classCode;
-    gPciDevices[i].subclass = subclass;
-    gPciDevices[i].progIf = progIf;
-    gPciDevices[i].headerType = headerType;
-    gPciDeviceCount = gPciDeviceCount + 1;
+    int i = g_pci_device_count;
+    g_pci_devices[i].bus = bus;
+    g_pci_devices[i].device = device;
+    g_pci_devices[i].function = function;
+    g_pci_devices[i].vendor_id = vendor_id;
+    g_pci_devices[i].device_id = device_id;
+    g_pci_devices[i].class_code = class_code;
+    g_pci_devices[i].subclass = subclass;
+    g_pci_devices[i].prog_if = prog_if;
+    g_pci_devices[i].header_type = header_type;
+    g_pci_device_count = g_pci_device_count + 1;
 }
 
 // A device with no function ever present reads back vendor ID 0xFFFF -
 // there's no separate "present" bit, this sentinel IS the presence
 // check, the same convention every real PCI enumerator (and this
 // kernel's own -1-sentinel style elsewhere) relies on.
-void pciCheckDevice(u8 bus, u8 device) {
-    u16 vendorId = pciConfigReadWord(bus, device, 0, 0x00);
-    if (vendorId == 0xFFFF) {
+void pci_check_device(u8 bus, u8 device) {
+    u16 vendor_id = pci_config_read_word(bus, device, 0, 0x00);
+    if (vendor_id == 0xFFFF) {
         return;
     }
-    pciRecordDevice(bus, device, 0);
+    pci_record_device(bus, device, 0);
 
     // Bit 7 of the header type byte marks a multi-function device -
     // only worth checking functions 1-7 at all when it's set, since a
     // single-function device's other seven "functions" aren't real
     // hardware, just unpopulated config space that may or may not
     // reliably read back 0xFFFF depending on the chipset.
-    u8 headerType = pciConfigReadByte(bus, device, 0, 0x0E);
-    if ((headerType & 0x80) != 0) {
+    u8 header_type = pci_config_read_byte(bus, device, 0, 0x0E);
+    if ((header_type & 0x80) != 0) {
         u8 function = 1;
         while (function < 8) {
-            u16 fnVendorId = pciConfigReadWord(bus, device, function, 0x00);
-            if (fnVendorId != 0xFFFF) {
-                pciRecordDevice(bus, device, function);
+            u16 fn_vendor_id = pci_config_read_word(bus, device, function, 0x00);
+            if (fn_vendor_id != 0xFFFF) {
+                pci_record_device(bus, device, function);
             }
             function = function + 1;
         }
     }
 }
 
-void pciEnumerate() {
-    gPciDeviceCount = 0;
+void pci_enumerate() {
+    g_pci_device_count = 0;
     u16 device = 0;
     while (device < 32) {
-        pciCheckDevice(0, (u8) device);
+        pci_check_device(0, (u8) device);
         device = device + 1;
     }
 }

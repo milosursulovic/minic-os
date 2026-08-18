@@ -53,7 +53,7 @@ int_stack_bottom:
 int_stack_top:
 
 .align 16
-.global tss_start   # milestone 19: MiniC pokes RSP0 here directly per-task now (mm/paging.mc's setTssRsp0) - see its comment for why
+.global tss_start   # milestone 19: MiniC pokes RSP0 here directly per-task now (mm/paging.mc's set_tss_rsp0) - see its comment for why
 tss_start:
     .skip 104
 tss_end:
@@ -63,7 +63,7 @@ tss_end:
 .code32
 .global _boot_start
 .extern _start              # MiniC's void _start(), in kmain.mc
-.extern gMultibootInfoPtr   # MiniC global - see the note by its use below
+.extern g_multiboot_info_ptr   # MiniC global - see the note by its use below
 
 _boot_start:
     mov esp, offset stack_top
@@ -182,9 +182,9 @@ _start64:
 
     # Multiboot handed us a pointer to its info structure in EBX at entry,
     # and nothing since has touched that register - stash it in a MiniC
-    # global (a real, `.globl`-exported symbol, same trick as gOutPort/
-    # gOutByte for outb) since `_start` takes no parameters.
-    mov dword ptr [rip + gMultibootInfoPtr], ebx
+    # global (a real, `.globl`-exported symbol, same trick as g_out_port/
+    # g_out_byte for outb) since `_start` takes no parameters.
+    mov dword ptr [rip + g_multiboot_info_ptr], ebx
 
     call _start
 

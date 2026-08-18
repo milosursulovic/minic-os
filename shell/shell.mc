@@ -1,6 +1,6 @@
 // The minimal interactive shell, built on keyboard.mc's line buffer.
-// The main loop (kmain.mc's _start) dispatches a line via runCommand()
-// once keyboard.mc's IRQ1 handler (isr.mc) sets gLineReady.
+// The main loop (kmain.mc's _start) dispatches a line via run_command()
+// once keyboard.mc's IRQ1 handler (isr.mc) sets g_line_ready.
 
 import "../drivers/io.mc";
 import "../lib/strings.mc";
@@ -25,188 +25,188 @@ import "../net/icmp.mc";
 import "../net/udp.mc";
 import "../net/dns.mc";
 
-void printPrompt() {
-    vgaPrint("> ");
-    serialPrint("> ");
+void print_prompt() {
+    vga_print("> ");
+    serial_print("> ");
 }
 
-void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping dns disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping dns disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
+void cmd_help() {
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping dns disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping dns disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
 }
 
-void cmdClear() {
+void cmd_clear() {
     int i = 80;   // leave the boot message on row 0
     while (i < 2000) {
-        gVga[i].character = ' ';
-        gVga[i].color = 0x07;
+        g_vga[i].character = ' ';
+        g_vga[i].color = 0x07;
         i = i + 1;
     }
-    gVgaCursor = 80;
+    g_vga_cursor = 80;
 }
 
-void cmdTicks() {
-    vgaPrint("ticks: 0x");
-    serialPrint("ticks: 0x");
-    printHex(gTickCount);
+void cmd_ticks() {
+    vga_print("ticks: 0x");
+    serial_print("ticks: 0x");
+    print_hex(g_tick_count);
 }
 
-void cmdAlloc() {
+void cmd_alloc() {
     void* p = kalloc(64);
     if (p == null) {
-        vgaPrint("alloc failed - heap full");
-        serialPrint("alloc failed - heap full\n");
+        vga_print("alloc failed - heap full");
+        serial_print("alloc failed - heap full\n");
     } else {
-        gLastAlloc = p;
-        vgaPrint("allocated 64 bytes at 0x");
-        serialPrint("allocated 64 bytes at 0x");
-        printHex((u64) p);
+        g_last_alloc = p;
+        vga_print("allocated 64 bytes at 0x");
+        serial_print("allocated 64 bytes at 0x");
+        print_hex((u64) p);
     }
 }
 
-void cmdBigAlloc() {
-    // 64KB - bigger than a single heapGrow() chunk, so this reliably
+void cmd_big_alloc() {
+    // 64KB - bigger than a single heap_grow() chunk, so this reliably
     // forces at least one on-demand growth cycle in one shot, instead of
     // needing dozens of plain `alloc`s to exhaust the initial mapping.
     void* p = kalloc(65536);
     if (p == null) {
-        vgaPrint("bigalloc failed - heap full");
-        serialPrint("bigalloc failed - heap full\n");
+        vga_print("bigalloc failed - heap full");
+        serial_print("bigalloc failed - heap full\n");
     } else {
-        gLastAlloc = p;
-        vgaPrint("allocated 65536 bytes at 0x");
-        serialPrint("allocated 65536 bytes at 0x");
-        printHex((u64) p);
+        g_last_alloc = p;
+        vga_print("allocated 65536 bytes at 0x");
+        serial_print("allocated 65536 bytes at 0x");
+        print_hex((u64) p);
     }
 }
 
-void cmdFree() {
-    if (gLastAlloc == null) {
-        vgaPrint("nothing to free");
-        serialPrint("nothing to free\n");
+void cmd_free() {
+    if (g_last_alloc == null) {
+        vga_print("nothing to free");
+        serial_print("nothing to free\n");
         return;
     }
-    vgaPrint("freed 0x");
-    serialPrint("freed 0x");
-    printHex((u64) gLastAlloc);
-    kfree(gLastAlloc);
-    gLastAlloc = null;
+    vga_print("freed 0x");
+    serial_print("freed 0x");
+    print_hex((u64) g_last_alloc);
+    kfree(g_last_alloc);
+    g_last_alloc = null;
 }
 
-void cmdMem() {
-    vgaPrint("free: 0x");
-    serialPrint("free: 0x");
-    printHex(heapFreeBytes());
-    vgaPrint(" / 0x");
-    serialPrint(" / 0x");
-    printHex(gHeapSize);
+void cmd_mem() {
+    vga_print("free: 0x");
+    serial_print("free: 0x");
+    print_hex(heap_free_bytes());
+    vga_print(" / 0x");
+    serial_print(" / 0x");
+    print_hex(g_heap_size);
 }
 
-void cmdReset() {
-    heapInit();
-    gLastAlloc = null;
-    vgaPrint("heap reset");
-    serialPrint("heap reset\n");
+void cmd_reset() {
+    heap_init();
+    g_last_alloc = null;
+    vga_print("heap reset");
+    serial_print("heap reset\n");
 }
 
-void cmdEcho() {
-    char* text = &gLineBuffer[5];   // past "echo "
-    vgaPrint(text);
-    serialPrint(text);
+void cmd_echo() {
+    char* text = &g_line_buffer[5];   // past "echo "
+    vga_print(text);
+    serial_print(text);
 }
 
-void cmdFreeAddr() {
-    u64 addr = parseHex(&gLineBuffer[5]);   // past "free "
+void cmd_free_addr() {
+    u64 addr = parse_hex(&g_line_buffer[5]);   // past "free "
     kfree((void*) addr);
-    vgaPrint("freed 0x");
-    serialPrint("freed 0x");
-    printHex(addr);
+    vga_print("freed 0x");
+    serial_print("freed 0x");
+    print_hex(addr);
 }
 
-void cmdFrames() {
-    vgaPrint("free frames: 0x");
-    serialPrint("free frames: 0x");
-    printHex((u64) gFreeFrameCount);
-    vgaPutc(' ');
-    serialPutc(' ');
-    vgaPrint("/ 0x");
-    serialPrint("/ 0x");
-    printHex((u64) gTotalFrames);
+void cmd_frames() {
+    vga_print("free frames: 0x");
+    serial_print("free frames: 0x");
+    print_hex((u64) g_free_frame_count);
+    vga_putc(' ');
+    serial_putc(' ');
+    vga_print("/ 0x");
+    serial_print("/ 0x");
+    print_hex((u64) g_total_frames);
 }
 
-void cmdFrame() {
-    void* f = allocFrame();
+void cmd_frame() {
+    void* f = alloc_frame();
     if (f == null) {
-        vgaPrint("out of frames");
-        serialPrint("out of frames\n");
+        vga_print("out of frames");
+        serial_print("out of frames\n");
     } else {
-        gLastFrame = f;
-        vgaPrint("allocated frame at 0x");
-        serialPrint("allocated frame at 0x");
-        printHex((u64) f);
+        g_last_frame = f;
+        vga_print("allocated frame at 0x");
+        serial_print("allocated frame at 0x");
+        print_hex((u64) f);
     }
 }
 
-void cmdUnframe() {
-    if (gLastFrame == null) {
-        vgaPrint("nothing to unframe");
-        serialPrint("nothing to unframe\n");
+void cmd_unframe() {
+    if (g_last_frame == null) {
+        vga_print("nothing to unframe");
+        serial_print("nothing to unframe\n");
         return;
     }
-    vgaPrint("freed frame 0x");
-    serialPrint("freed frame 0x");
-    printHex((u64) gLastFrame);
-    freeFrame(gLastFrame);
-    gLastFrame = null;
+    vga_print("freed frame 0x");
+    serial_print("freed frame 0x");
+    print_hex((u64) g_last_frame);
+    free_frame(g_last_frame);
+    g_last_frame = null;
 }
 
-void cmdMap() {
-    void* frame = allocFrame();
+void cmd_map() {
+    void* frame = alloc_frame();
     if (frame == null) {
-        vgaPrint("out of frames");
-        serialPrint("out of frames\n");
+        vga_print("out of frames");
+        serial_print("out of frames\n");
         return;
     }
     u64 vaddr = 0x40000000;   // 1GB - just past boot.s's static identity map
-    bool ok = mapPage(vaddr, (u64) frame, 0x02 | PAGE_NX);   // writable, non-executable (milestone 28)
+    bool ok = map_page(vaddr, (u64) frame, 0x02 | page_nx);   // writable, non-executable (milestone 28)
     if (!ok) {
-        vgaPrint("map failed");
-        serialPrint("map failed\n");
-        freeFrame(frame);
+        vga_print("map failed");
+        serial_print("map failed\n");
+        free_frame(frame);
         return;
     }
 
     u32* p = (u32*) vaddr;
     p[0] = 0xCAFEBABE;
-    u32 readBack = p[0];
+    u32 read_back = p[0];
 
-    vgaPrint("mapped 0x");
-    serialPrint("mapped 0x");
-    printHex(vaddr);
-    vgaPrint(" -> 0x");
-    serialPrint(" -> 0x");
-    printHex((u64) frame);
-    vgaPrint(", wrote/read 0x");
-    serialPrint(", wrote/read 0x");
-    printHex((u64) readBack);
+    vga_print("mapped 0x");
+    serial_print("mapped 0x");
+    print_hex(vaddr);
+    vga_print(" -> 0x");
+    serial_print(" -> 0x");
+    print_hex((u64) frame);
+    vga_print(", wrote/read 0x");
+    serial_print(", wrote/read 0x");
+    print_hex((u64) read_back);
 }
 
-void cmdTasks() {
-    vgaPrint("task1: 0x");
-    serialPrint("task1: 0x");
-    printHex(gTask1Ticks);
-    vgaPrint(" task2: 0x");
-    serialPrint(" task2: 0x");
-    printHex(gTask2Ticks);
-    vgaPrint(" task3: 0x");
-    serialPrint(" task3: 0x");
-    printHex(gTask3Ticks);
-    vgaPrint(" task4: 0x");
-    serialPrint(" task4: 0x");
-    printHex(gTask4Ticks);
-    vgaPrint(" ticks: 0x");
-    serialPrint(" ticks: 0x");
-    printHex(gTickCount);
+void cmd_tasks() {
+    vga_print("task1: 0x");
+    serial_print("task1: 0x");
+    print_hex(g_task1_ticks);
+    vga_print(" task2: 0x");
+    serial_print(" task2: 0x");
+    print_hex(g_task2_ticks);
+    vga_print(" task3: 0x");
+    serial_print(" task3: 0x");
+    print_hex(g_task3_ticks);
+    vga_print(" task4: 0x");
+    serial_print(" task4: 0x");
+    print_hex(g_task4_ticks);
+    vga_print(" ticks: 0x");
+    serial_print(" ticks: 0x");
+    print_hex(g_tick_count);
 }
 
 // Milestone 29: the first time this kernel discovers its own hardware
@@ -216,35 +216,35 @@ void cmdTasks() {
 // default machine model (a host bridge, an ISA bridge, an IDE
 // controller, usually a VGA device and a default NIC), not something
 // this kernel can fake or hardcode its way into looking right.
-void cmdPci() {
-    pciEnumerate();
-    vgaPrint("pci devices: 0x");
-    serialPrint("pci devices: 0x");
-    printHex((u64) gPciDeviceCount);
+void cmd_pci() {
+    pci_enumerate();
+    vga_print("pci devices: 0x");
+    serial_print("pci devices: 0x");
+    print_hex((u64) g_pci_device_count);
     int i = 0;
-    while (i < gPciDeviceCount) {
-        PciDevice* d = &gPciDevices[i];
-        vgaPrint(" ");
-        serialPrint(" ");
-        printHex((u64) d->bus);
-        vgaPrint(":");
-        serialPrint(":");
-        printHex((u64) d->device);
-        vgaPrint(".");
-        serialPrint(".");
-        printHex((u64) d->function);
-        vgaPrint(" vendor=0x");
-        serialPrint(" vendor=0x");
-        printHex((u64) d->vendorId);
-        vgaPrint(" device=0x");
-        serialPrint(" device=0x");
-        printHex((u64) d->deviceId);
-        vgaPrint(" class=0x");
-        serialPrint(" class=0x");
-        printHex((u64) d->classCode);
-        vgaPrint(" subclass=0x");
-        serialPrint(" subclass=0x");
-        printHex((u64) d->subclass);
+    while (i < g_pci_device_count) {
+        pci_device* d = &g_pci_devices[i];
+        vga_print(" ");
+        serial_print(" ");
+        print_hex((u64) d->bus);
+        vga_print(":");
+        serial_print(":");
+        print_hex((u64) d->device);
+        vga_print(".");
+        serial_print(".");
+        print_hex((u64) d->function);
+        vga_print(" vendor=0x");
+        serial_print(" vendor=0x");
+        print_hex((u64) d->vendor_id);
+        vga_print(" device=0x");
+        serial_print(" device=0x");
+        print_hex((u64) d->device_id);
+        vga_print(" class=0x");
+        serial_print(" class=0x");
+        print_hex((u64) d->class_code);
+        vga_print(" subclass=0x");
+        serial_print(" subclass=0x");
+        print_hex((u64) d->subclass);
         i = i + 1;
     }
 }
@@ -256,31 +256,31 @@ void cmdPci() {
 // auto-loads its burned-in address) and its link-up status. Read-only
 // proof only - no packet has been sent or received yet, see the
 // roadmap for what's still ahead in this phase.
-void cmdNic() {
-    bool ok = e1000Init();
+void cmd_nic() {
+    bool ok = e1000_init();
     if (!ok) {
-        vgaPrint("e1000 init failed - device not found at 0:3.0");
-        serialPrint("e1000 init failed - device not found at 0:3.0\n");
+        vga_print("e1000 init failed - device not found at 0:3.0");
+        serial_print("e1000 init failed - device not found at 0:3.0\n");
         return;
     }
     u8 mac[6];
-    e1000GetMac(&mac[0]);
-    vgaPrint("e1000 mac=");
-    serialPrint("e1000 mac=");
-    printMac(&mac[0]);
-    bool linkUp = e1000LinkUp();
-    vgaPrint(" linkUp=0x");
-    serialPrint(" linkUp=0x");
-    printHex((u64) linkUp);
+    e1000_get_mac(&mac[0]);
+    vga_print("e1000 mac=");
+    serial_print("e1000 mac=");
+    print_mac(&mac[0]);
+    bool link_up = e1000_link_up();
+    vga_print(" link_up=0x");
+    serial_print(" link_up=0x");
+    print_hex((u64) link_up);
 }
 
-void printMac(u8* mac) {
+void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
-        printHex((u64) mac[i]);
+        print_hex((u64) mac[i]);
         if (i < 5) {
-            vgaPrint(":");
-            serialPrint(":");
+            vga_print(":");
+            serial_print(":");
         }
         i = i + 1;
     }
@@ -292,7 +292,7 @@ void printMac(u8* mac) {
 // not one fixed address. Four real, independently checkable claims in
 // one command:
 //   1. resolve the gateway (10.0.2.2) - same address milestone 31
-//      proved reachable, now through the real arpResolve() API instead
+//      proved reachable, now through the real arp_resolve() API instead
 //      of a hand-rolled one-off flow.
 //   2. resolve it AGAIN - a real cache hit, checkable by real elapsed
 //      ticks: the first call sends a packet and waits for an external
@@ -304,68 +304,68 @@ void printMac(u8* mac) {
 //      genuinely generalizes past the one address milestone 31 ever
 //      exercised.
 //   4. resolve an address nothing answers for (10.0.2.99) - a real
-//      negative-space proof: arpResolve() must return false after its
+//      negative-space proof: arp_resolve() must return false after its
 //      own bounded timeout, not hang forever or return garbage.
-void cmdArp() {
-    u8 gatewayIp[4];
-    gatewayIp[0] = 10;
-    gatewayIp[1] = 0;
-    gatewayIp[2] = 2;
-    gatewayIp[3] = 2;
+void cmd_arp() {
+    u8 gateway_ip[4];
+    gateway_ip[0] = 10;
+    gateway_ip[1] = 0;
+    gateway_ip[2] = 2;
+    gateway_ip[3] = 2;
 
     u8 mac[6];
-    u64 t0 = gTickCount;
-    bool ok1 = arpResolve(&gatewayIp[0], &mac[0]);
-    u64 elapsed1 = gTickCount - t0;
-    vgaPrint("resolve gateway ok=0x");
-    serialPrint("resolve gateway ok=0x");
-    printHex((u64) ok1);
+    u64 t0 = g_tick_count;
+    bool ok1 = arp_resolve(&gateway_ip[0], &mac[0]);
+    u64 elapsed1 = g_tick_count - t0;
+    vga_print("resolve gateway ok=0x");
+    serial_print("resolve gateway ok=0x");
+    print_hex((u64) ok1);
     if (ok1) {
-        vgaPrint(" mac=");
-        serialPrint(" mac=");
-        printMac(&mac[0]);
+        vga_print(" mac=");
+        serial_print(" mac=");
+        print_mac(&mac[0]);
     }
-    vgaPrint(" elapsedTicks=0x");
-    serialPrint(" elapsedTicks=0x");
-    printHex(elapsed1);
+    vga_print(" elapsed_ticks=0x");
+    serial_print(" elapsed_ticks=0x");
+    print_hex(elapsed1);
 
     u8 mac2[6];
-    u64 t1 = gTickCount;
-    bool ok2 = arpResolve(&gatewayIp[0], &mac2[0]);
-    u64 elapsed2 = gTickCount - t1;
-    vgaPrint(" cachedOk=0x");
-    serialPrint(" cachedOk=0x");
-    printHex((u64) ok2);
-    vgaPrint(" cachedElapsedTicks=0x");
-    serialPrint(" cachedElapsedTicks=0x");
-    printHex(elapsed2);
+    u64 t1 = g_tick_count;
+    bool ok2 = arp_resolve(&gateway_ip[0], &mac2[0]);
+    u64 elapsed2 = g_tick_count - t1;
+    vga_print(" cached_ok=0x");
+    serial_print(" cached_ok=0x");
+    print_hex((u64) ok2);
+    vga_print(" cached_elapsed_ticks=0x");
+    serial_print(" cached_elapsed_ticks=0x");
+    print_hex(elapsed2);
 
-    u8 dnsIp[4];
-    dnsIp[0] = 10;
-    dnsIp[1] = 0;
-    dnsIp[2] = 2;
-    dnsIp[3] = 3;
+    u8 dns_ip[4];
+    dns_ip[0] = 10;
+    dns_ip[1] = 0;
+    dns_ip[2] = 2;
+    dns_ip[3] = 3;
     u8 mac3[6];
-    bool ok3 = arpResolve(&dnsIp[0], &mac3[0]);
-    vgaPrint(" resolveDnsProxyOk=0x");
-    serialPrint(" resolveDnsProxyOk=0x");
-    printHex((u64) ok3);
+    bool ok3 = arp_resolve(&dns_ip[0], &mac3[0]);
+    vga_print(" resolve_dns_proxy_ok=0x");
+    serial_print(" resolve_dns_proxy_ok=0x");
+    print_hex((u64) ok3);
     if (ok3) {
-        vgaPrint(" dnsMac=");
-        serialPrint(" dnsMac=");
-        printMac(&mac3[0]);
+        vga_print(" dns_mac=");
+        serial_print(" dns_mac=");
+        print_mac(&mac3[0]);
     }
 
-    u8 unreachableIp[4];
-    unreachableIp[0] = 10;
-    unreachableIp[1] = 0;
-    unreachableIp[2] = 2;
-    unreachableIp[3] = 99;
+    u8 unreachable_ip[4];
+    unreachable_ip[0] = 10;
+    unreachable_ip[1] = 0;
+    unreachable_ip[2] = 2;
+    unreachable_ip[3] = 99;
     u8 mac4[6];
-    bool ok4 = arpResolve(&unreachableIp[0], &mac4[0]);
-    vgaPrint(" resolveUnreachableOk=0x");
-    serialPrint(" resolveUnreachableOk=0x");
-    printHex((u64) ok4);
+    bool ok4 = arp_resolve(&unreachable_ip[0], &mac4[0]);
+    vga_print(" resolve_unreachable_ok=0x");
+    serial_print(" resolve_unreachable_ok=0x");
+    print_hex((u64) ok4);
 }
 
 // Milestone 33: a real IPv4 layer, verified with a genuine ICMP echo
@@ -377,23 +377,23 @@ void cmdArp() {
 // echo request, and polls for a genuinely matching reply: right
 // EtherType, right IP protocol, right source IP, right ICMP type, AND
 // the exact identifier/sequence this request sent.
-void cmdPing() {
-    u8 gatewayIp[4];
-    gatewayIp[0] = 10;
-    gatewayIp[1] = 0;
-    gatewayIp[2] = 2;
-    gatewayIp[3] = 2;
+void cmd_ping() {
+    u8 gateway_ip[4];
+    gateway_ip[0] = 10;
+    gateway_ip[1] = 0;
+    gateway_ip[2] = 2;
+    gateway_ip[3] = 2;
 
-    u64 startTick = gTickCount;
-    bool ok = icmpPing(&gatewayIp[0], 0x1234, 0x1);
-    u64 elapsed = gTickCount - startTick;
+    u64 start_tick = g_tick_count;
+    bool ok = icmp_ping(&gateway_ip[0], 0x1234, 0x1);
+    u64 elapsed = g_tick_count - start_tick;
 
-    vgaPrint("ping gateway ok=0x");
-    serialPrint("ping gateway ok=0x");
-    printHex((u64) ok);
-    vgaPrint(" elapsedTicks=0x");
-    serialPrint(" elapsedTicks=0x");
-    printHex(elapsed);
+    vga_print("ping gateway ok=0x");
+    serial_print("ping gateway ok=0x");
+    print_hex((u64) ok);
+    vga_print(" elapsed_ticks=0x");
+    serial_print(" elapsed_ticks=0x");
+    print_hex(elapsed);
 }
 
 // Milestone 34: a real UDP layer, verified with a genuine DNS query to
@@ -402,17 +402,17 @@ void cmdPing() {
 // same relationship milestone 33's ICMP ping had to proving IP worked.
 // Not a general DNS client (no compression, no caching) - one hardcoded
 // query, purely as a real external stimulus.
-void cmdDns() {
-    u64 startTick = gTickCount;
-    bool ok = dnsQuery("example.com");
-    u64 elapsed = gTickCount - startTick;
+void cmd_dns() {
+    u64 start_tick = g_tick_count;
+    bool ok = dns_query("example.com");
+    u64 elapsed = g_tick_count - start_tick;
 
-    vgaPrint("dns query ok=0x");
-    serialPrint("dns query ok=0x");
-    printHex((u64) ok);
-    vgaPrint(" elapsedTicks=0x");
-    serialPrint(" elapsedTicks=0x");
-    printHex(elapsed);
+    vga_print("dns query ok=0x");
+    serial_print("dns query ok=0x");
+    print_hex((u64) ok);
+    vga_print(" elapsed_ticks=0x");
+    serial_print(" elapsed_ticks=0x");
+    print_hex(elapsed);
 }
 
 // Reads LBA 1, a sector the disk image is pre-populated with (from the
@@ -420,173 +420,173 @@ void cmdDns() {
 // ASCII signature followed by zero-fill. Printing it as a string is
 // safe precisely because of that zero-fill: the byte right after the
 // signature is a real null terminator, not luck.
-void cmdDisk() {
+void cmd_disk() {
     u8 buf[512];
-    bool ok = ataReadSector(1, buf);
+    bool ok = ata_read_sector(1, buf);
     if (!ok) {
-        vgaPrint("disk read failed");
-        serialPrint("disk read failed\n");
+        vga_print("disk read failed");
+        serial_print("disk read failed\n");
         return;
     }
     char* s = (char*) &buf[0];
-    vgaPrint("sector 1: ");
-    serialPrint("sector 1: ");
-    vgaPrint(s);
-    serialPrint(s);
+    vga_print("sector 1: ");
+    serial_print("sector 1: ");
+    vga_print(s);
+    serial_print(s);
 }
 
 // Writes a fixed pattern to LBA 100 (arbitrary, clear of the signature
 // sector) and immediately reads it back into a SEPARATE buffer -
 // comparing the two proves a real round trip through the driver, not
 // just "a write instruction executed" or "a read instruction executed."
-void cmdDiskWrite() {
-    u8 writeBuf[512];
+void cmd_disk_write() {
+    u8 write_buf[512];
     int i = 0;
     while (i < 512) {
-        writeBuf[i] = (u8) (i & 0xFF);
+        write_buf[i] = (u8) (i & 0xFF);
         i = i + 1;
     }
-    bool wrote = ataWriteSector(100, writeBuf);
+    bool wrote = ata_write_sector(100, write_buf);
     if (!wrote) {
-        vgaPrint("disk write failed");
-        serialPrint("disk write failed\n");
+        vga_print("disk write failed");
+        serial_print("disk write failed\n");
         return;
     }
-    u8 readBuf[512];
-    bool read = ataReadSector(100, readBuf);
+    u8 read_buf[512];
+    bool read = ata_read_sector(100, read_buf);
     if (!read) {
-        vgaPrint("disk write ok, readback failed");
-        serialPrint("disk write ok, readback failed\n");
+        vga_print("disk write ok, readback failed");
+        serial_print("disk write ok, readback failed\n");
         return;
     }
     bool match = true;
     i = 0;
     while (i < 512) {
-        if (writeBuf[i] != readBuf[i]) {
+        if (write_buf[i] != read_buf[i]) {
             match = false;
         }
         i = i + 1;
     }
     if (match) {
-        vgaPrint("write+readback verified, 512/512 bytes match");
-        serialPrint("write+readback verified, 512/512 bytes match\n");
+        vga_print("write+readback verified, 512/512 bytes match");
+        serial_print("write+readback verified, 512/512 bytes match\n");
     } else {
-        vgaPrint("MISMATCH - write or read is broken");
-        serialPrint("MISMATCH - write or read is broken\n");
+        vga_print("MISMATCH - write or read is broken");
+        serial_print("MISMATCH - write or read is broken\n");
     }
 }
 
-void cmdMkfs() {
+void cmd_mkfs() {
     bool ok = mkfs();
     if (ok) {
-        vgaPrint("filesystem formatted");
-        serialPrint("filesystem formatted\n");
+        vga_print("filesystem formatted");
+        serial_print("filesystem formatted\n");
     } else {
-        vgaPrint("mkfs failed");
-        serialPrint("mkfs failed\n");
+        vga_print("mkfs failed");
+        serial_print("mkfs failed\n");
     }
 }
 
-int gNextFileIndex;
-char gLastFileName[20];
+int g_next_file_index;
+char g_last_file_name[20];
 
 // Creates a new file every call, name and content both embedding the
 // same running index ("file0.mfs" / "file1.mfs" / ...) - running this
 // twice and `cat`-ing after each one is what proves multiple files
 // coexist correctly (distinct content, no overwriting each other) and
 // that the free-space scan advances past each file already written.
-void cmdMkfile() {
-    char nameBuf[20];
-    nameBuf[0] = 'f'; nameBuf[1] = 'i'; nameBuf[2] = 'l'; nameBuf[3] = 'e';
-    nameBuf[4] = (char) ('0' + (u8) (gNextFileIndex % 10));
-    nameBuf[5] = '.'; nameBuf[6] = 'm'; nameBuf[7] = 'f'; nameBuf[8] = 's';
-    nameBuf[9] = '\0';
+void cmd_mkfile() {
+    char name_buf[20];
+    name_buf[0] = 'f'; name_buf[1] = 'i'; name_buf[2] = 'l'; name_buf[3] = 'e';
+    name_buf[4] = (char) ('0' + (u8) (g_next_file_index % 10));
+    name_buf[5] = '.'; name_buf[6] = 'm'; name_buf[7] = 'f'; name_buf[8] = 's';
+    name_buf[9] = '\0';
 
-    char contentBuf[64];
+    char content_buf[64];
     char* prefix = "Hello from MiniFS, this is file #";
     int i = 0;
     while (prefix[i] != '\0') {
-        contentBuf[i] = prefix[i];
+        content_buf[i] = prefix[i];
         i = i + 1;
     }
-    contentBuf[i] = (char) ('0' + (u8) (gNextFileIndex % 10));
+    content_buf[i] = (char) ('0' + (u8) (g_next_file_index % 10));
     i = i + 1;
-    contentBuf[i] = '\0';
+    content_buf[i] = '\0';
     i = i + 1;
 
-    bool ok = fsWriteFile(nameBuf, (u8*) &contentBuf[0], (u32) i);
+    bool ok = fs_write_file(name_buf, (u8*) &content_buf[0], (u32) i);
     if (!ok) {
-        vgaPrint("mkfile failed");
-        serialPrint("mkfile failed\n");
+        vga_print("mkfile failed");
+        serial_print("mkfile failed\n");
         return;
     }
-    copyName(&gLastFileName[0], nameBuf);
-    gNextFileIndex = gNextFileIndex + 1;
-    vgaPrint("created ");
-    serialPrint("created ");
-    vgaPrint(nameBuf);
-    serialPrint(nameBuf);
+    copy_name(&g_last_file_name[0], name_buf);
+    g_next_file_index = g_next_file_index + 1;
+    vga_print("created ");
+    serial_print("created ");
+    vga_print(name_buf);
+    serial_print(name_buf);
 }
 
-void cmdCat() {
-    if (gLastFileName[0] == '\0') {
-        vgaPrint("no file yet - run mkfile first");
-        serialPrint("no file yet - run mkfile first\n");
+void cmd_cat() {
+    if (g_last_file_name[0] == '\0') {
+        vga_print("no file yet - run mkfile first");
+        serial_print("no file yet - run mkfile first\n");
         return;
     }
     u8 buf[65];
-    int n = fsReadFile(&gLastFileName[0], buf, 64);
+    int n = fs_read_file(&g_last_file_name[0], buf, 64);
     if (n < 0) {
-        vgaPrint("cat failed");
-        serialPrint("cat failed\n");
+        vga_print("cat failed");
+        serial_print("cat failed\n");
         return;
     }
-    buf[n] = 0;   // fsWriteFile's own null terminator is part of the stored bytes already, this is just defensive
+    buf[n] = 0;   // fs_write_file's own null terminator is part of the stored bytes already, this is just defensive
     char* s = (char*) &buf[0];
-    vgaPrint(s);
-    serialPrint(s);
+    vga_print(s);
+    serial_print(s);
 }
 
-void cmdLs() {
-    u8 sbBuf[512];
-    if (!ataReadSector(SUPERBLOCK_LBA, sbBuf)) {
-        vgaPrint("ls failed - disk read error");
-        serialPrint("ls failed - disk read error\n");
+void cmd_ls() {
+    u8 sb_buf[512];
+    if (!ata_read_sector(superblock_lba, sb_buf)) {
+        vga_print("ls failed - disk read error");
+        serial_print("ls failed - disk read error\n");
         return;
     }
-    Superblock* sb = (Superblock*) &sbBuf[0];
-    vgaPrint("fileCount: 0x");
-    serialPrint("fileCount: 0x");
-    printHex((u64) sb->fileCount);
-    vgaPrint("  ");
-    serialPrint("  ");
+    superblock* sb = (superblock*) &sb_buf[0];
+    vga_print("file_count: 0x");
+    serial_print("file_count: 0x");
+    print_hex((u64) sb->file_count);
+    vga_print("  ");
+    serial_print("  ");
 
-    u8 dirBuf[512];
-    bool ok = ataReadSector(DIRECTORY_LBA, dirBuf);
+    u8 dir_buf[512];
+    bool ok = ata_read_sector(directory_lba, dir_buf);
     if (!ok) {
-        vgaPrint("ls failed - disk read error");
-        serialPrint("ls failed - disk read error\n");
+        vga_print("ls failed - disk read error");
+        serial_print("ls failed - disk read error\n");
         return;
     }
-    DirEntry* entries = (DirEntry*) &dirBuf[0];
+    dir_entry* entries = (dir_entry*) &dir_buf[0];
     int i = 0;
     int shown = 0;
-    while (i < (int) MAX_FILES) {
+    while (i < (int) max_files) {
         if (entries[i].used) {
-            vgaPrint(entries[i].name);
-            serialPrint(entries[i].name);
-            vgaPrint(" 0x");
-            serialPrint(" 0x");
-            printHex((u64) entries[i].sizeBytes);
-            vgaPrint("  ");
-            serialPrint("  ");
+            vga_print(entries[i].name);
+            serial_print(entries[i].name);
+            vga_print(" 0x");
+            serial_print(" 0x");
+            print_hex((u64) entries[i].size_bytes);
+            vga_print("  ");
+            serial_print("  ");
             shown = shown + 1;
         }
         i = i + 1;
     }
     if (shown == 0) {
-        vgaPrint("(empty)");
-        serialPrint("(empty)");
+        vga_print("(empty)");
+        serial_print("(empty)");
     }
 }
 
@@ -595,144 +595,144 @@ void cmdLs() {
 // devfs (live kernel state, no disk touched at all). Same function
 // call, two completely different mechanisms depending only on the path
 // prefix - that's the actual milestone 18 proof, not the printed text.
-void cmdVfsCat() {
-    char* path = &gLineBuffer[7];   // past "vfscat "
+void cmd_vfs_cat() {
+    char* path = &g_line_buffer[7];   // past "vfscat "
     u8 buf[256];
-    int n = vfsRead(path, buf, 256);
+    int n = vfs_read(path, buf, 256);
     if (n == -2) {
-        vgaPrint("vfscat: file too large to display");
-        serialPrint("vfscat: file too large to display\n");
+        vga_print("vfscat: file too large to display");
+        serial_print("vfscat: file too large to display\n");
         return;
     }
     if (n < 0) {
-        vgaPrint("vfscat: not found");
-        serialPrint("vfscat: not found\n");
+        vga_print("vfscat: not found");
+        serial_print("vfscat: not found\n");
         return;
     }
     buf[n] = 0;
     char* s = (char*) &buf[0];
-    vgaPrint(s);
-    serialPrint(s);
+    vga_print(s);
+    serial_print(s);
 }
 
-// Writes a fixed demo file through the VFS (not fsWriteFile() directly)
+// Writes a fixed demo file through the VFS (not fs_write_file() directly)
 // to prove the write side routes too, not just reads - `vfscat` the
 // same path afterward, or plain `ls` (MiniFS's own directory listing,
 // unaware this file arrived via VFS rather than `mkfile`) to see it
 // landed in the exact same underlying MiniFS directory.
-void cmdVfsWrite() {
+void cmd_vfs_write() {
     char* content = "This file was written through the VFS layer, not MiniFS directly.";
     int len = strlen(content) + 1;   // include the null terminator, same as mkfile's content
-    bool ok = vfsWrite("/system/vfsdemo.mfs", (u8*) content, (u32) len);
+    bool ok = vfs_write("/system/vfsdemo.mfs", (u8*) content, (u32) len);
     if (ok) {
-        vgaPrint("wrote /system/vfsdemo.mfs via VFS");
-        serialPrint("wrote /system/vfsdemo.mfs via VFS\n");
+        vga_print("wrote /system/vfsdemo.mfs via VFS");
+        serial_print("wrote /system/vfsdemo.mfs via VFS\n");
     } else {
-        vgaPrint("vfswrite failed");
-        serialPrint("vfswrite failed\n");
+        vga_print("vfswrite failed");
+        serial_print("vfswrite failed\n");
     }
 }
 
 // Milestone 19 setup step: writes the kernel's own compiled-in test
-// program (proc/testprog.s, gTestProgStart..gTestProgEnd - the exact
-// same bytes milestone 13's boot-time spawnProcess() already uses) out
+// program (proc/ring3blob.s, g_test_prog_start..g_test_prog_end - the exact
+// same bytes milestone 13's boot-time spawn_process() already uses) out
 // to a real MiniFS file, simulating "this program is now genuinely
 // installed on disk," addressable by path and indistinguishable from
 // any other file - not a special-cased kernel-image blob anymore from
 // this point on. `spawn` is what actually proves the load-from-disk
 // path; `install` just gets real bytes onto real storage first.
-void cmdInstall() {
-    u32 len = (u32) ((u64) &gTestProgEnd - (u64) &gTestProgStart);
-    bool ok = vfsWrite("/system/testprog.bin", &gTestProgStart, len);
+void cmd_install() {
+    u32 len = (u32) ((u64) &g_test_prog_end - (u64) &g_test_prog_start);
+    bool ok = vfs_write("/system/testprog.bin", &g_test_prog_start, len);
     if (!ok) {
-        vgaPrint("install failed");
-        serialPrint("install failed\n");
+        vga_print("install failed");
+        serial_print("install failed\n");
         return;
     }
-    vgaPrint("installed /system/testprog.bin, 0x");
-    serialPrint("installed /system/testprog.bin, 0x");
-    printHex((u64) len);
-    vgaPrint(" bytes");
-    serialPrint(" bytes");
+    vga_print("installed /system/testprog.bin, 0x");
+    serial_print("installed /system/testprog.bin, 0x");
+    print_hex((u64) len);
+    vga_print(" bytes");
+    serial_print(" bytes");
 }
 
 // The milestone 19 proof: reads /system/testprog.bin back through the
 // VFS and spawns a brand-new isolated ring3 process from THOSE bytes -
 // a second, independent instance of the same program, loaded from disk
 // this time rather than the kernel's own compiled-in image. Reuses the
-// exact same load virtual address procA/procB/the milestone-13 process
+// exact same load virtual address proc_a/proc_b/the milestone-13 process
 // all use (0x80000000) - safe, since this process gets its own freshly
 // cloned address space, same as every isolated task before it.
-// stackVaddr is 0x80020000, not 0x80001000 - see kmain.mc's comment on
-// its own spawnProcess() call for the real milestone-24 bug this fixes;
+// stack_vaddr is 0x80020000, not 0x80001000 - see kmain.mc's comment on
+// its own spawn_process() call for the real milestone-24 bug this fixes;
 // every spawn call site must agree on this same constant.
-void cmdSpawn() {
-    int idx = spawnProcessFromPath("/system/testprog.bin", 0x80000000, 0x80020000);
+void cmd_spawn() {
+    int idx = spawn_process_from_path("/system/testprog.bin", 0x80000000, 0x80020000);
     if (idx < 0) {
-        vgaPrint("spawn failed");
-        serialPrint("spawn failed\n");
+        vga_print("spawn failed");
+        serial_print("spawn failed\n");
         return;
     }
-    vgaPrint("spawned process 0x");
-    serialPrint("spawned process 0x");
-    printHex((u64) idx);
+    vga_print("spawned process 0x");
+    serial_print("spawned process 0x");
+    print_hex((u64) idx);
 }
 
-void cmdChan() {
-    vgaPrint("receiver got: 0x");
-    serialPrint("receiver got: 0x");
-    printHex((u64) gReceiverGotMessage);
-    vgaPrint(" value=0x");
-    serialPrint(" value=0x");
-    printHex(gReceiverValue);
+void cmd_chan() {
+    vga_print("receiver got: 0x");
+    serial_print("receiver got: 0x");
+    print_hex((u64) g_receiver_got_message);
+    vga_print(" value=0x");
+    serial_print(" value=0x");
+    print_hex(g_receiver_value);
 }
 
-void cmdSend() {
-    bool ok = channelSend(gChannelDemo, 0xC0FFEE1234);
+void cmd_send() {
+    bool ok = channel_send(g_channel_demo, 0xC0FFEE1234);
     if (!ok) {
-        vgaPrint("send failed - channel full");
-        serialPrint("send failed - channel full\n");
+        vga_print("send failed - channel full");
+        serial_print("send failed - channel full\n");
         return;
     }
-    vgaPrint("sent 0xc0ffee1234");
-    serialPrint("sent 0xc0ffee1234\n");
+    vga_print("sent 0xc0ffee1234");
+    serial_print("sent 0xc0ffee1234\n");
 }
 
 // Milestone 23: wakes the boot-time ring3 process's own blocking
 // Channel.receive() call (a real ring3 syscall, not this kernel task
-// calling channelReceive() directly the way procReceiverEntry does) -
+// calling channel_receive() directly the way proc_receiver_entry does) -
 // operator-triggered on purpose, same "deterministic, not racing the
 // timer" reasoning as `send` above. Once the ring3 process receives
 // this, it goes on to call Process.spawn() - run `install` first so
 // the file it spawns actually exists on disk.
-void cmdRing3Go() {
-    bool ok = channelSend(gRing3ChannelDemo, 0x1);
+void cmd_ring3_go() {
+    bool ok = channel_send(g_ring3_channel_demo, 0x1);
     if (!ok) {
-        vgaPrint("ring3go failed - channel full");
-        serialPrint("ring3go failed - channel full\n");
+        vga_print("ring3go failed - channel full");
+        serial_print("ring3go failed - channel full\n");
         return;
     }
-    vgaPrint("sent ring3 spawn trigger");
-    serialPrint("sent ring3 spawn trigger\n");
+    vga_print("sent ring3 spawn trigger");
+    serial_print("sent ring3 spawn trigger\n");
 }
 
 // Milestone 26: sends trigger value 0x2 (distinct from ring3go's 0x1) on
-// the same gRing3ChannelDemo mailbox - the boot-time ring3 process
+// the same g_ring3_channel_demo mailbox - the boot-time ring3 process
 // branches on this to attempt a deliberate forbidden write instead of
 // spawning. This is a ONE-SHOT, KERNEL-HALTING command: if the fix in
-// mm/paging.mc's cloneAddressSpace() is working, the write takes a real
+// mm/paging.mc's clone_address_space() is working, the write takes a real
 // page fault and the kernel halts right there (isr.mc's existing
 // handler, no new kernel code needed) - run it in its own dedicated
 // session, never interleaved with other regression testing.
-void cmdRing3Fault() {
-    bool ok = channelSend(gRing3ChannelDemo, 0x2);
+void cmd_ring3_fault() {
+    bool ok = channel_send(g_ring3_channel_demo, 0x2);
     if (!ok) {
-        vgaPrint("ring3fault failed - channel full");
-        serialPrint("ring3fault failed - channel full\n");
+        vga_print("ring3fault failed - channel full");
+        serial_print("ring3fault failed - channel full\n");
         return;
     }
-    vgaPrint("sent ring3 forbidden-write trigger - expect a page fault");
-    serialPrint("sent ring3 forbidden-write trigger - expect a page fault\n");
+    vga_print("sent ring3 forbidden-write trigger - expect a page fault");
+    serial_print("sent ring3 forbidden-write trigger - expect a page fault\n");
 }
 
 // Milestone 28: sends trigger value 0x3 (distinct from ring3go's 0x1 and
@@ -741,30 +741,30 @@ void cmdRing3Fault() {
 // attempt to execute it, proving PAGE_NX (mm/paging.mc) really is
 // enforced there. Also ONE-SHOT and KERNEL-HALTING, same caveat as
 // ring3fault - run it in its own dedicated session.
-void cmdRing3Nx() {
-    bool ok = channelSend(gRing3ChannelDemo, 0x3);
+void cmd_ring3_nx() {
+    bool ok = channel_send(g_ring3_channel_demo, 0x3);
     if (!ok) {
-        vgaPrint("ring3nx failed - channel full");
-        serialPrint("ring3nx failed - channel full\n");
+        vga_print("ring3nx failed - channel full");
+        serial_print("ring3nx failed - channel full\n");
         return;
     }
-    vgaPrint("sent ring3 stack-execution trigger - expect a page fault");
-    serialPrint("sent ring3 stack-execution trigger - expect a page fault\n");
+    vga_print("sent ring3 stack-execution trigger - expect a page fault");
+    serial_print("sent ring3 stack-execution trigger - expect a page fault\n");
 }
 
-void cmdProcs() {
-    vgaPrint("procA: 0x");
-    serialPrint("procA: 0x");
-    printHex((u64) gProcAValue);
-    vgaPrint(" @phys 0x");
-    serialPrint(" @phys 0x");
-    printHex(gProcAPhys);
-    vgaPrint(" procB: 0x");
-    serialPrint(" procB: 0x");
-    printHex((u64) gProcBValue);
-    vgaPrint(" @phys 0x");
-    serialPrint(" @phys 0x");
-    printHex(gProcBPhys);
+void cmd_procs() {
+    vga_print("proc_a: 0x");
+    serial_print("proc_a: 0x");
+    print_hex((u64) g_proc_a_value);
+    vga_print(" @phys 0x");
+    serial_print(" @phys 0x");
+    print_hex(g_proc_a_phys);
+    vga_print(" proc_b: 0x");
+    serial_print(" proc_b: 0x");
+    print_hex((u64) g_proc_b_value);
+    vga_print(" @phys 0x");
+    serial_print(" @phys 0x");
+    print_hex(g_proc_b_phys);
 }
 
 // Milestone 19 grew this from "print process 0's details" to a real
@@ -772,119 +772,119 @@ void cmdProcs() {
 // (spawn), showing only the first stopped being useful for confirming
 // each spawned process is genuinely distinct (different task, possibly
 // different cr3) rather than the same one reported twice.
-void cmdPs() {
-    vgaPrint("processes: 0x");
-    serialPrint("processes: 0x");
-    printHex((u64) gProcessCount);
+void cmd_ps() {
+    vga_print("processes: 0x");
+    serial_print("processes: 0x");
+    print_hex((u64) g_process_count);
     int i = 0;
-    while (i < gProcessCount) {
-        Process* p = &gProcesses[i];
-        vgaPrint(" proc");
-        serialPrint(" proc");
-        printHex((u64) i);
-        vgaPrint(" task=0x");
-        serialPrint(" task=0x");
-        printHex((u64) p->taskIndex);
-        vgaPrint(" cr3=0x");
-        serialPrint(" cr3=0x");
-        printHex(p->cr3);
+    while (i < g_process_count) {
+        process* p = &g_processes[i];
+        vga_print(" proc");
+        serial_print(" proc");
+        print_hex((u64) i);
+        vga_print(" task=0x");
+        serial_print(" task=0x");
+        print_hex((u64) p->task_index);
+        vga_print(" cr3=0x");
+        serial_print(" cr3=0x");
+        print_hex(p->cr3);
         i = i + 1;
     }
 }
 
-void cmdObjs() {
-    vgaPrint("objects: 0x");
-    serialPrint("objects: 0x");
-    printHex((u64) gObjectCount);
-    if (gObjectCount > 0) {
-        vgaPrint(" obj0 type=0x");
-        serialPrint(" obj0 type=0x");
-        printHex((u64) gObjects[0].type);
-        vgaPrint(" dataIndex=0x");
-        serialPrint(" dataIndex=0x");
-        printHex((u64) gObjects[0].dataIndex);
+void cmd_objs() {
+    vga_print("objects: 0x");
+    serial_print("objects: 0x");
+    print_hex((u64) g_object_count);
+    if (g_object_count > 0) {
+        vga_print(" obj0 type=0x");
+        serial_print(" obj0 type=0x");
+        print_hex((u64) g_objects[0].type);
+        vga_print(" data_index=0x");
+        serial_print(" data_index=0x");
+        print_hex((u64) g_objects[0].data_index);
     }
 }
 
-void runCommand() {
-    if (streq(gLineBuffer, "help")) {
-        cmdHelp();
-    } else if (streq(gLineBuffer, "clear")) {
-        cmdClear();
-    } else if (streq(gLineBuffer, "ticks")) {
-        cmdTicks();
-    } else if (streq(gLineBuffer, "alloc")) {
-        cmdAlloc();
-    } else if (streq(gLineBuffer, "bigalloc")) {
-        cmdBigAlloc();
-    } else if (streq(gLineBuffer, "free")) {
-        cmdFree();
-    } else if (startsWith(gLineBuffer, "free ")) {
-        cmdFreeAddr();
-    } else if (streq(gLineBuffer, "mem")) {
-        cmdMem();
-    } else if (streq(gLineBuffer, "reset")) {
-        cmdReset();
-    } else if (streq(gLineBuffer, "frames")) {
-        cmdFrames();
-    } else if (streq(gLineBuffer, "frame")) {
-        cmdFrame();
-    } else if (streq(gLineBuffer, "unframe")) {
-        cmdUnframe();
-    } else if (streq(gLineBuffer, "map")) {
-        cmdMap();
-    } else if (streq(gLineBuffer, "tasks")) {
-        cmdTasks();
-    } else if (streq(gLineBuffer, "procs")) {
-        cmdProcs();
-    } else if (streq(gLineBuffer, "ps")) {
-        cmdPs();
-    } else if (streq(gLineBuffer, "objs")) {
-        cmdObjs();
-    } else if (streq(gLineBuffer, "chan")) {
-        cmdChan();
-    } else if (streq(gLineBuffer, "send")) {
-        cmdSend();
-    } else if (streq(gLineBuffer, "ring3go")) {
-        cmdRing3Go();
-    } else if (streq(gLineBuffer, "ring3fault")) {
-        cmdRing3Fault();
-    } else if (streq(gLineBuffer, "ring3nx")) {
-        cmdRing3Nx();
-    } else if (streq(gLineBuffer, "pci")) {
-        cmdPci();
-    } else if (streq(gLineBuffer, "nic")) {
-        cmdNic();
-    } else if (streq(gLineBuffer, "arp")) {
-        cmdArp();
-    } else if (streq(gLineBuffer, "ping")) {
-        cmdPing();
-    } else if (streq(gLineBuffer, "dns")) {
-        cmdDns();
-    } else if (streq(gLineBuffer, "disk")) {
-        cmdDisk();
-    } else if (streq(gLineBuffer, "diskwrite")) {
-        cmdDiskWrite();
-    } else if (streq(gLineBuffer, "mkfs")) {
-        cmdMkfs();
-    } else if (streq(gLineBuffer, "mkfile")) {
-        cmdMkfile();
-    } else if (streq(gLineBuffer, "cat")) {
-        cmdCat();
-    } else if (streq(gLineBuffer, "ls")) {
-        cmdLs();
-    } else if (startsWith(gLineBuffer, "vfscat ")) {
-        cmdVfsCat();
-    } else if (streq(gLineBuffer, "vfswrite")) {
-        cmdVfsWrite();
-    } else if (streq(gLineBuffer, "install")) {
-        cmdInstall();
-    } else if (streq(gLineBuffer, "spawn")) {
-        cmdSpawn();
-    } else if (startsWith(gLineBuffer, "echo ")) {
-        cmdEcho();
-    } else if (gLineLen > 0) {
-        vgaPrint("unknown command");
-        serialPrint("unknown command\n");
+void run_command() {
+    if (streq(g_line_buffer, "help")) {
+        cmd_help();
+    } else if (streq(g_line_buffer, "clear")) {
+        cmd_clear();
+    } else if (streq(g_line_buffer, "ticks")) {
+        cmd_ticks();
+    } else if (streq(g_line_buffer, "alloc")) {
+        cmd_alloc();
+    } else if (streq(g_line_buffer, "bigalloc")) {
+        cmd_big_alloc();
+    } else if (streq(g_line_buffer, "free")) {
+        cmd_free();
+    } else if (starts_with(g_line_buffer, "free ")) {
+        cmd_free_addr();
+    } else if (streq(g_line_buffer, "mem")) {
+        cmd_mem();
+    } else if (streq(g_line_buffer, "reset")) {
+        cmd_reset();
+    } else if (streq(g_line_buffer, "frames")) {
+        cmd_frames();
+    } else if (streq(g_line_buffer, "frame")) {
+        cmd_frame();
+    } else if (streq(g_line_buffer, "unframe")) {
+        cmd_unframe();
+    } else if (streq(g_line_buffer, "map")) {
+        cmd_map();
+    } else if (streq(g_line_buffer, "tasks")) {
+        cmd_tasks();
+    } else if (streq(g_line_buffer, "procs")) {
+        cmd_procs();
+    } else if (streq(g_line_buffer, "ps")) {
+        cmd_ps();
+    } else if (streq(g_line_buffer, "objs")) {
+        cmd_objs();
+    } else if (streq(g_line_buffer, "chan")) {
+        cmd_chan();
+    } else if (streq(g_line_buffer, "send")) {
+        cmd_send();
+    } else if (streq(g_line_buffer, "ring3go")) {
+        cmd_ring3_go();
+    } else if (streq(g_line_buffer, "ring3fault")) {
+        cmd_ring3_fault();
+    } else if (streq(g_line_buffer, "ring3nx")) {
+        cmd_ring3_nx();
+    } else if (streq(g_line_buffer, "pci")) {
+        cmd_pci();
+    } else if (streq(g_line_buffer, "nic")) {
+        cmd_nic();
+    } else if (streq(g_line_buffer, "arp")) {
+        cmd_arp();
+    } else if (streq(g_line_buffer, "ping")) {
+        cmd_ping();
+    } else if (streq(g_line_buffer, "dns")) {
+        cmd_dns();
+    } else if (streq(g_line_buffer, "disk")) {
+        cmd_disk();
+    } else if (streq(g_line_buffer, "diskwrite")) {
+        cmd_disk_write();
+    } else if (streq(g_line_buffer, "mkfs")) {
+        cmd_mkfs();
+    } else if (streq(g_line_buffer, "mkfile")) {
+        cmd_mkfile();
+    } else if (streq(g_line_buffer, "cat")) {
+        cmd_cat();
+    } else if (streq(g_line_buffer, "ls")) {
+        cmd_ls();
+    } else if (starts_with(g_line_buffer, "vfscat ")) {
+        cmd_vfs_cat();
+    } else if (streq(g_line_buffer, "vfswrite")) {
+        cmd_vfs_write();
+    } else if (streq(g_line_buffer, "install")) {
+        cmd_install();
+    } else if (streq(g_line_buffer, "spawn")) {
+        cmd_spawn();
+    } else if (starts_with(g_line_buffer, "echo ")) {
+        cmd_echo();
+    } else if (g_line_len > 0) {
+        vga_print("unknown command");
+        serial_print("unknown command\n");
     }
 }

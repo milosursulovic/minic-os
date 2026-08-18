@@ -19,7 +19,7 @@ import "../proc/process.mc";
 import "../proc/object.mc";
 import "../disk/vfs.mc";
 
-extern void run_ring3_test(u64 entry, u64 userStack);
+extern void run_ring3_test(u64 entry, u64 user_stack);
 
 // num 1: print arg1 (a char* the caller owns) followed by arg2 in hex.
 // milestone 11's ring3 demo used the hex slot for its own CS register
@@ -27,7 +27,7 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // testprog.s) uses it for an arbitrary marker constant instead.
 //
 // There used to be a num 2 ("exit the one-shot ring3 test") here -
-// milestone 11's ring3TestEntry()/runRing3Test() demo, since retired.
+// milestone 11's ring3_test_entry()/run_ring3_test() demo, since retired.
 // It worked by popping a saved kernel rsp and `ret`-ing directly instead
 // of going back through isr_syscall's iretq - which relied on it being
 // the ONLY thing ever using the shared TSS.RSP0 stack for a ring3->ring0
@@ -46,16 +46,16 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // (ring3 entry + syscalls + CPL) and more, so nothing is lost.
 // num 3: resolve arg1 as a handle *within the calling process's own
 // handle table* (milestone 14) and return a piece of ground-truth info
-// about whatever it points to - for a process object, its taskIndex,
+// about whatever it points to - for a process object, its task_index,
 // independently checkable against the `ps` shell command's own output.
 // A handle that's out of range, never allocated, or belongs to a plain
-// kernel task with no handle table at all (gTasks[...].processIndex < 0
-// - can't happen for real ring3 code today, since only spawnProcess()
+// kernel task with no handle table at all (g_tasks[...].process_index < 0
+// - can't happen for real ring3 code today, since only spawn_process()
 // tasks ever reach syscall_dispatch from ring3, but checked anyway since
 // arg1 is caller-controlled) all return the same -1 sentinel rather than
 // trusting the index or crashing - the entire point of a handle table
 // over a raw array index.
-// num 4/5 (milestone 22): vfsRead/vfsWrite, the first syscalls giving
+// num 4/5 (milestone 22): vfs_read/vfs_write, the first syscalls giving
 // ring3 code access to something beyond print/handle-query - a real
 // slice of the native "File" API's job, not the whole thing (Process/
 // Channel wrappers are a later milestone). arg1/arg2 are a caller-owned
@@ -68,22 +68,22 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // yet" gap every ring3 syscall here has had since milestone 11 -
 // capability/security work is roadmap phase IX, not this one).
 // num 6 (milestone 23): spawn - wraps Process the same way num 4/5
-// wrapped File. Reuses spawnProcessFromPath() completely unchanged (the
+// wrapped File. Reuses spawn_process_from_path() completely unchanged (the
 // exact same function the shell's `spawn` command already calls in
 // kernel mode - only the caller is new, not the mechanism) and returns
-// the new process's taskIndex, same convention syscall 3 already
+// the new process's task_index, same convention syscall 3 already
 // established.
-// num 7/8/9 (milestone 23, reworked in milestone 25): channelSend/
-// channelReceive/openChannel. channelReceive is the first BLOCKING
-// syscall this kernel has ever had - channelReceive() calls
+// num 7/8/9 (milestone 23, reworked in milestone 25): channel_send/
+// channel_receive/open_channel. channel_receive is the first BLOCKING
+// syscall this kernel has ever had - channel_receive() calls
 // yield()/switch_context() same as it always has when called from a
-// kernel task directly (procReceiverEntry), and since syscall_dispatch
+// kernel task directly (proc_receiver_entry), and since syscall_dispatch
 // runs as an ordinary nested call within the *calling* ring3 task's own
 // context, blocking here suspends the right task and correctly resumes
 // through isr_syscall's iretq once woken.
 //
 // Milestone 25: num 7/8's arg1 used to be a raw channel INDEX, bounds-
-// checked against gChannelCount but with no ownership concept at all -
+// checked against g_channel_count but with no ownership concept at all -
 // any ring3 process that could guess a valid index (0-3, and every
 // index this kernel actually uses is baked into ring3prog.mc's own
 // source as a fixed constant, so "guess" barely undersells it) could
@@ -91,24 +91,24 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 // arg1 is a real HANDLE, resolved through the calling process's own
 // handle table with real per-handle RIGHTS checked before the
 // underlying channel is touched at all - the actual "capability" in
-// "capability/permission system" (roadmap phase IX). num 9 (openChannel)
+// "capability/permission system" (roadmap phase IX). num 9 (open_channel)
 // is the one place a ring3 process can turn a channel index into a
 // handle - and it's also the one place rights POLICY is decided: it
 // always grants RIGHT_RECEIVE only, never RIGHT_SEND, regardless of
 // what the caller might want, since nothing in this kernel today needs
 // a ring3-initiated send (the shell/kernel side always sends directly).
 // A handle's rights are fixed forever at grant time (see object.mc's
-// allocHandle) - there's no way to widen one later, only to open a new
+// alloc_handle) - there's no way to widen one later, only to open a new
 // one under whatever policy the kernel chooses at that call site.
 //
-// Milestone 27: num 3 (query) used to resolve a handle via resolveHandle()
+// Milestone 27: num 3 (query) used to resolve a handle via resolve_handle()
 // and return ground truth with NO rights check at all - object.mc's own
 // RIGHT_QUERY comment even named this exact syscall as the right's
 // purpose, but nothing ever verified it. A real, if narrow, enforcement
 // gap: any valid OBJ_PROCESS handle could be queried regardless of its
 // rights bitmask. Fixed by inlining the same handle-table/rights-check
-// style syscalls 7/8/9 already use, replacing the old resolveHandle()
-// call. New num 10 (openProcess) is the first real cross-process
+// style syscalls 7/8/9 already use, replacing the old resolve_handle()
+// call. New num 10 (open_process) is the first real cross-process
 // capability: given another task's index (not necessarily the caller's
 // own), it mints a handle to THAT process in the caller's own table -
 // the caller REQUESTS a rights bitmask (arg2), and the kernel grants the
@@ -121,38 +121,38 @@ extern void run_ring3_test(u64 entry, u64 userStack);
 u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     if (num == 1) {
         char* s = (char*) arg1;
-        serialPrint(s);
-        vgaPrint(s);
-        printHex(arg2);
-        serialPrint("\n");
+        serial_print(s);
+        vga_print(s);
+        print_hex(arg2);
+        serial_print("\n");
         return 0;
     }
     if (num == 3) {
-        int callerProcess = gTasks[gCurrentTask].processIndex;
-        if (callerProcess < 0) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
             return (u64) -1;
         }
         int handle = (int) arg1;
-        if (handle < 0 || handle >= HANDLES_PER_PROCESS) {
+        if (handle < 0 || handle >= handles_per_process) {
             return (u64) -1;
         }
-        if (!gHandleTables[callerProcess][handle].used) {
+        if (!g_handle_tables[caller_process][handle].used) {
             return (u64) -1;
         }
-        if ((gHandleTables[callerProcess][handle].rights & RIGHT_QUERY) == 0) {
+        if ((g_handle_tables[caller_process][handle].rights & right_query) == 0) {
             return (u64) -1;
         }
-        int objIndex = gHandleTables[callerProcess][handle].objectIndex;
-        if (gObjects[objIndex].type == OBJ_PROCESS) {
-            int procIdx = gObjects[objIndex].dataIndex;
-            return (u64) gProcesses[procIdx].taskIndex;
+        int obj_index = g_handle_tables[caller_process][handle].object_index;
+        if (g_objects[obj_index].type == obj_process) {
+            int proc_idx = g_objects[obj_index].data_index;
+            return (u64) g_processes[proc_idx].task_index;
         }
         return (u64) -1;
     }
     if (num == 4) {
         char* path = (char*) arg1;
         u8* buf = (u8*) arg2;
-        int n = vfsRead(path, buf, (u32) arg3);
+        int n = vfs_read(path, buf, (u32) arg3);
         if (n < 0) {
             return (u64) -1;
         }
@@ -161,7 +161,7 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     if (num == 5) {
         char* path = (char*) arg1;
         u8* buf = (u8*) arg2;
-        bool ok = vfsWrite(path, buf, (u32) arg3);
+        bool ok = vfs_write(path, buf, (u32) arg3);
         if (!ok) {
             return (u64) -1;
         }
@@ -169,98 +169,98 @@ u64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     }
     if (num == 6) {
         char* path = (char*) arg1;
-        int procIndex = spawnProcessFromPath(path, arg2, arg3);
-        if (procIndex < 0) {
+        int proc_index = spawn_process_from_path(path, arg2, arg3);
+        if (proc_index < 0) {
             return (u64) -1;
         }
-        return (u64) gProcesses[procIndex].taskIndex;
+        return (u64) g_processes[proc_index].task_index;
     }
     if (num == 7) {
-        int callerProcess = gTasks[gCurrentTask].processIndex;
-        if (callerProcess < 0) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
             return (u64) -1;
         }
         int handle = (int) arg1;
-        if (handle < 0 || handle >= HANDLES_PER_PROCESS) {
+        if (handle < 0 || handle >= handles_per_process) {
             return (u64) -1;
         }
-        if (!gHandleTables[callerProcess][handle].used) {
+        if (!g_handle_tables[caller_process][handle].used) {
             return (u64) -1;
         }
-        if ((gHandleTables[callerProcess][handle].rights & RIGHT_SEND) == 0) {
+        if ((g_handle_tables[caller_process][handle].rights & right_send) == 0) {
             return (u64) -1;
         }
-        int objIndex = gHandleTables[callerProcess][handle].objectIndex;
-        if (gObjects[objIndex].type != OBJ_CHANNEL) {
+        int obj_index = g_handle_tables[caller_process][handle].object_index;
+        if (g_objects[obj_index].type != obj_channel) {
             return (u64) -1;
         }
-        int channelIndex = gObjects[objIndex].dataIndex;
-        bool ok = channelSend(channelIndex, arg2);
+        int channel_index = g_objects[obj_index].data_index;
+        bool ok = channel_send(channel_index, arg2);
         if (!ok) {
             return (u64) -1;
         }
         return 0;
     }
     if (num == 8) {
-        int callerProcess = gTasks[gCurrentTask].processIndex;
-        if (callerProcess < 0) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
             return (u64) -1;
         }
         int handle = (int) arg1;
-        if (handle < 0 || handle >= HANDLES_PER_PROCESS) {
+        if (handle < 0 || handle >= handles_per_process) {
             return (u64) -1;
         }
-        if (!gHandleTables[callerProcess][handle].used) {
+        if (!g_handle_tables[caller_process][handle].used) {
             return (u64) -1;
         }
-        if ((gHandleTables[callerProcess][handle].rights & RIGHT_RECEIVE) == 0) {
+        if ((g_handle_tables[caller_process][handle].rights & right_receive) == 0) {
             return (u64) -1;
         }
-        int objIndex = gHandleTables[callerProcess][handle].objectIndex;
-        if (gObjects[objIndex].type != OBJ_CHANNEL) {
+        int obj_index = g_handle_tables[caller_process][handle].object_index;
+        if (g_objects[obj_index].type != obj_channel) {
             return (u64) -1;
         }
-        int channelIndex = gObjects[objIndex].dataIndex;
-        return channelReceive(channelIndex);
+        int channel_index = g_objects[obj_index].data_index;
+        return channel_receive(channel_index);
     }
     if (num == 9) {
-        int callerProcess = gTasks[gCurrentTask].processIndex;
-        if (callerProcess < 0) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
             return (u64) -1;
         }
-        int channelIndex = (int) arg1;
-        if (channelIndex < 0 || channelIndex >= gChannelCount) {
+        int channel_index = (int) arg1;
+        if (channel_index < 0 || channel_index >= g_channel_count) {
             return (u64) -1;
         }
-        int objIndex = allocObject(OBJ_CHANNEL, channelIndex);
-        if (objIndex < 0) {
+        int obj_index = alloc_object(obj_channel, channel_index);
+        if (obj_index < 0) {
             return (u64) -1;
         }
-        int handle = allocHandle(callerProcess, objIndex, RIGHT_RECEIVE);
+        int handle = alloc_handle(caller_process, obj_index, right_receive);
         if (handle < 0) {
             return (u64) -1;
         }
         return (u64) handle;
     }
     if (num == 10) {
-        int callerProcess = gTasks[gCurrentTask].processIndex;
-        if (callerProcess < 0) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
             return (u64) -1;
         }
-        int targetTask = (int) arg1;
-        if (targetTask < 0 || targetTask >= gTaskCount) {
+        int target_task = (int) arg1;
+        if (target_task < 0 || target_task >= g_task_count) {
             return (u64) -1;
         }
-        int targetProcess = gTasks[targetTask].processIndex;
-        if (targetProcess < 0) {
+        int target_process = g_tasks[target_task].process_index;
+        if (target_process < 0) {
             return (u64) -1;
         }
-        int objIndex = allocObject(OBJ_PROCESS, targetProcess);
-        if (objIndex < 0) {
+        int obj_index = alloc_object(obj_process, target_process);
+        if (obj_index < 0) {
             return (u64) -1;
         }
-        int grantedRights = ((int) arg2) & RIGHT_QUERY;
-        int handle = allocHandle(callerProcess, objIndex, grantedRights);
+        int granted_rights = ((int) arg2) & right_query;
+        int handle = alloc_handle(caller_process, obj_index, granted_rights);
         if (handle < 0) {
             return (u64) -1;
         }

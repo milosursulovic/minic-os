@@ -5,12 +5,12 @@
 // it, not just inside that fixed range.
 //
 // Every physical address this code touches - the tables themselves, and
-// every frame allocFrame() hands out - is guaranteed inside the first
+// every frame alloc_frame() hands out - is guaranteed inside the first
 // 1GB, which boot.s already identity-maps. That's what makes this doable
 // in ordinary MiniC with plain pointer dereferences: no temporary
 // mapping trick or recursive self-map is needed just to edit a table.
 //
-// Known limitation: mapPage() must not be called on a virtual address
+// Known limitation: map_page() must not be called on a virtual address
 // that falls inside boot.s's static 1GB identity map (PDPT index 0) -
 // the PD entries there are 2MB huge pages (PS bit set), and walking past
 // one as if it pointed to a PT would read a garbage table address.
@@ -25,35 +25,35 @@ import "frames.mc";
 // leaf - a single supervisor-only entry ANYWHERE in the chain blocks
 // ring3 access), the CPU ORs the NX bit across every level - execution
 // is disabled if ANY entry in the translation has it set. Concretely:
-// tableGetOrCreate()'s intermediate tables never set NX (see its own
+// table_get_or_create()'s intermediate tables never set NX (see its own
 // 0x07 grant below, unchanged), so marking ONLY the final leaf PT entry
 // is both necessary and sufficient - no intermediate-table change needed
 // for this one, the opposite lesson from milestone 26's fix.
-const u64 PAGE_NX = 0x8000000000000000;
+const u64 page_nx = 0x8000000000000000;
 
-u64 gPML4Phys;
+u64 g_pml4_phys;
 
-void readPML4() {
-    asm("mov rax, cr3\nmov [rip+gPML4Phys], rax");
+void read_pml4() {
+    asm("mov rax, cr3\nmov [rip+g_pml4_phys], rax");
 }
 
-u64 gInvlpgAddr;
+u64 g_invlpg_addr;
 
-void invalidatePage(u64 vaddr) {
-    gInvlpgAddr = vaddr;
-    asm("mov rax, [rip+gInvlpgAddr]\ninvlpg [rax]");
+void invalidate_page(u64 vaddr) {
+    g_invlpg_addr = vaddr;
+    asm("mov rax, [rip+g_invlpg_addr]\ninvlpg [rax]");
 }
 
-u64 gCr2Value;
+u64 g_cr2_value;
 
 // CR2 holds the faulting virtual address for a page fault (vector 14) -
 // the CPU sets it right before delivering the exception. Only valid to
 // read from inside that handler.
-void readCr2() {
-    asm("mov rax, cr2\nmov [rip+gCr2Value], rax");
+void read_cr2() {
+    asm("mov rax, cr2\nmov [rip+g_cr2_value], rax");
 }
 
-void zeroPage(void* p) {
+void zero_page(void* p) {
     u64* words = (u64*) p;
     u32 i = 0;
     while (i < 512) {
@@ -64,26 +64,26 @@ void zeroPage(void* p) {
 
 // Returns the next-level table's physical address, allocating and
 // zeroing a fresh frame for it if this entry isn't present yet.
-u64* tableGetOrCreate(u64* table, u32 index) {
+u64* table_get_or_create(u64* table, u32 index) {
     u64 entry = table[index];
     if ((entry & 1) == 0) {
-        void* newTable = allocFrame();
-        if (newTable == null) {
+        void* new_table = alloc_frame();
+        if (new_table == null) {
             return null;
         }
-        zeroPage(newTable);
+        zero_page(new_table);
         // Milestone 11: user (0x04) added alongside present+writable. This
         // doesn't loosen any existing protection - the CPU ANDs the user
         // bit across every level from PML4 down to the leaf PT entry, so a
-        // supervisor-only *leaf* (mapPage() callers not passing 0x04, which
+        // supervisor-only *leaf* (map_page() callers not passing 0x04, which
         // is everything except the ring3 test's own stack today) still
         // blocks user access regardless of what intermediate tables allow.
         // Without this, an intermediate table created for one purpose
         // (e.g. the heap) could accidentally block user access to a
         // completely different, unrelated leaf mapped later through the
         // same table - this just removes that possibility.
-        table[index] = ((u64) newTable) | 0x07;   // present + writable + user
-        return (u64*) newTable;
+        table[index] = ((u64) new_table) | 0x07;   // present + writable + user
+        return (u64*) new_table;
     }
     return (u64*) (entry & ~((u64) 0xFFF));
 }
@@ -92,34 +92,34 @@ u64* tableGetOrCreate(u64* table, u32 index) {
 // space, creating any missing PDPT/PD/PT tables along the way. `flags`
 // is OR'd into the final PT entry on top of the present bit (e.g. 0x02
 // for writable, or PAGE_NX as of milestone 28 for non-executable).
-// Every page-table frame allocFrame() hands out lives
+// Every page-table frame alloc_frame() hands out lives
 // inside the flat 1GB identity map every address space shares, so this
 // is a plain pointer walk regardless of which CR3 is currently loaded -
 // kernel code can build up a process's private mappings without ever
 // switching into it first.
-bool mapPageIn(u64 pml4Phys, u64 vaddr, u64 paddr, u64 flags) {
+bool map_page_in(u64 pml4_phys, u64 vaddr, u64 paddr, u64 flags) {
     u32 i4 = (u32) ((vaddr >> 39) & 0x1FF);
     u32 i3 = (u32) ((vaddr >> 30) & 0x1FF);
     u32 i2 = (u32) ((vaddr >> 21) & 0x1FF);
     u32 i1 = (u32) ((vaddr >> 12) & 0x1FF);
 
-    u64* pml4 = (u64*) pml4Phys;
-    u64* pdpt = tableGetOrCreate(pml4, i4);
+    u64* pml4 = (u64*) pml4_phys;
+    u64* pdpt = table_get_or_create(pml4, i4);
     if (pdpt == null) {
         return false;
     }
-    u64* pd = tableGetOrCreate(pdpt, i3);
+    u64* pd = table_get_or_create(pdpt, i3);
     if (pd == null) {
         return false;
     }
-    u64* pt = tableGetOrCreate(pd, i2);
+    u64* pt = table_get_or_create(pd, i2);
     if (pt == null) {
         return false;
     }
 
-    pt[i1] = (paddr & ~((u64) 0xFFF)) | (flags & (((u64) 0xFFF) | PAGE_NX)) | 0x01;
-    if (pml4Phys == gPML4Phys) {
-        invalidatePage(vaddr);   // only meaningful for the currently-loaded space
+    pt[i1] = (paddr & ~((u64) 0xFFF)) | (flags & (((u64) 0xFFF) | page_nx)) | 0x01;
+    if (pml4_phys == g_pml4_phys) {
+        invalidate_page(vaddr);   // only meaningful for the currently-loaded space
     }
     return true;
 }
@@ -127,8 +127,8 @@ bool mapPageIn(u64 pml4Phys, u64 vaddr, u64 paddr, u64 flags) {
 // Maps into the currently-loaded (kernel) address space - every caller
 // before milestone 12 (the heap, the `map` demo, the ring3 test stack)
 // keeps working unchanged.
-bool mapPage(u64 vaddr, u64 paddr, u64 flags) {
-    return mapPageIn(gPML4Phys, vaddr, paddr, flags);
+bool map_page(u64 vaddr, u64 paddr, u64 flags) {
+    return map_page_in(g_pml4_phys, vaddr, paddr, flags);
 }
 
 // Read-only walk of an explicit address space, returning the physical
@@ -138,13 +138,13 @@ bool mapPage(u64 vaddr, u64 paddr, u64 flags) {
 // Used to prove two processes' identical virtual addresses land on
 // genuinely different physical frames, not just that they read back
 // different values (which a cache or a coincidence could also explain).
-u64 translateIn(u64 pml4Phys, u64 vaddr) {
+u64 translate_in(u64 pml4_phys, u64 vaddr) {
     u32 i4 = (u32) ((vaddr >> 39) & 0x1FF);
     u32 i3 = (u32) ((vaddr >> 30) & 0x1FF);
     u32 i2 = (u32) ((vaddr >> 21) & 0x1FF);
     u32 i1 = (u32) ((vaddr >> 12) & 0x1FF);
 
-    u64* pml4 = (u64*) pml4Phys;
+    u64* pml4 = (u64*) pml4_phys;
     if ((pml4[i4] & 1) == 0) {
         return 0;
     }
@@ -163,10 +163,10 @@ u64 translateIn(u64 pml4Phys, u64 vaddr) {
     // Milestone 28 bug: PAGE_NX (bit 63) can now be set on a real leaf
     // entry, and this mask used to only clear the low 12 flag bits -
     // caught by `procs`' own regression check reporting a physical
-    // address with 0x8000000000000000 stuck in the top after gDemoVaddr
+    // address with 0x8000000000000000 stuck in the top after g_demo_vaddr
     // (sched/task.mc) started getting mapped with PAGE_NX. Must also
-    // clear PAGE_NX here, same reasoning as mapPageIn's own widened mask.
-    return (pt[i1] & ~(((u64) 0xFFF) | PAGE_NX)) | (vaddr & 0xFFF);
+    // clear PAGE_NX here, same reasoning as map_page_in's own widened mask.
+    return (pt[i1] & ~(((u64) 0xFFF) | page_nx)) | (vaddr & 0xFFF);
 }
 
 // Builds a brand-new address space for a process: a fresh PML4 whose
@@ -178,24 +178,24 @@ u64 translateIn(u64 pml4Phys, u64 vaddr) {
 // address space is visible through the other there. Everything from
 // PDPT[2] up (vaddr >= 0x80000000) is left NOT present - private to
 // whichever process this becomes, populated on demand the first time it
-// calls mapPageIn() there. This is what makes two processes mapping the
+// calls map_page_in() there. This is what makes two processes mapping the
 // same private-region virtual address land on different physical frames:
 // they get separate PD/PT chains for that region, created independently.
-u64 cloneAddressSpace() {
-    void* newPml4Frame = allocFrame();
-    if (newPml4Frame == null) {
+u64 clone_address_space() {
+    void* new_pml4_frame = alloc_frame();
+    if (new_pml4_frame == null) {
         return 0;
     }
-    void* newPdptFrame = allocFrame();
-    if (newPdptFrame == null) {
+    void* new_pdpt_frame = alloc_frame();
+    if (new_pdpt_frame == null) {
         return 0;
     }
-    zeroPage(newPml4Frame);
-    zeroPage(newPdptFrame);
+    zero_page(new_pml4_frame);
+    zero_page(new_pdpt_frame);
 
-    u64* kernelPml4 = (u64*) gPML4Phys;
-    u64* kernelPdpt = (u64*) (kernelPml4[0] & ~((u64) 0xFFF));
-    u64* newPdpt = (u64*) newPdptFrame;
+    u64* kernel_pml4 = (u64*) g_pml4_phys;
+    u64* kernel_pdpt = (u64*) (kernel_pml4[0] & ~((u64) 0xFFF));
+    u64* new_pdpt = (u64*) new_pdpt_frame;
     // Milestone 26: strip the user (0x04) bit when copying the shared
     // entries into a NEW (potentially ring3-capable) address space -
     // closes the gap flagged as a known limitation since milestone 12.
@@ -206,30 +206,30 @@ u64 cloneAddressSpace() {
     // CPL, not "which segment the current instruction came from", so a
     // syscall handler keeps working identically here regardless of this
     // bit. Only the *copy* used by a cloned (ring3-capable) address
-    // space is touched - the original kernel address space (gPML4Phys,
+    // space is touched - the original kernel address space (g_pml4_phys,
     // still used directly by plain kernel-mode tasks like task1-4) is
     // untouched, since nothing ever runs those in ring3 anyway. PML4[0]
-    // itself deliberately keeps its own user bit (see cloneAddressSpace's
-    // own newPml4[0] line below) - it also covers this process's PRIVATE
+    // itself deliberately keeps its own user bit (see clone_address_space's
+    // own new_pml4[0] line below) - it also covers this process's PRIVATE
     // region (PDPT[2], vaddr >= 0x80000000), which the process DOES need
     // ring3 access to; x86 permission is the AND of every level, so
     // stripping the bit specifically at THIS PDPT entry is what blocks
-    // indices 0/1 while leaving index 2+ (populated later by mapPageIn,
+    // indices 0/1 while leaving index 2+ (populated later by map_page_in,
     // WITH the user bit, unaffected by this at all) fully accessible.
-    newPdpt[0] = kernelPdpt[0] & ~((u64) 0x04);   // shared: static identity map
-    newPdpt[1] = kernelPdpt[1] & ~((u64) 0x04);   // shared: heap / dynamic-demo region
+    new_pdpt[0] = kernel_pdpt[0] & ~((u64) 0x04);   // shared: static identity map
+    new_pdpt[1] = kernel_pdpt[1] & ~((u64) 0x04);   // shared: heap / dynamic-demo region
 
-    u64* newPml4 = (u64*) newPml4Frame;
-    newPml4[0] = ((u64) newPdptFrame) | 0x07;   // present + writable + user
+    u64* new_pml4 = (u64*) new_pml4_frame;
+    new_pml4[0] = ((u64) new_pdpt_frame) | 0x07;   // present + writable + user
 
-    return (u64) newPml4Frame;
+    return (u64) new_pml4_frame;
 }
 
-u64 gCr3ToLoad;
+u64 g_cr3_to_load;
 
-void loadCr3(u64 phys) {
-    gCr3ToLoad = phys;
-    asm("mov rax, [rip+gCr3ToLoad]\nmov cr3, rax");
+void load_cr3(u64 phys) {
+    g_cr3_to_load = phys;
+    asm("mov rax, [rip+g_cr3_to_load]\nmov cr3, rax");
 }
 
 // Milestone 19: TSS.RSP0 switched per-task, the fix milestones 13/15
@@ -239,7 +239,7 @@ void loadCr3(u64 phys) {
 // transition could ever be "in flight" (suspended, not yet resumed) at
 // once - true when only one ring3 task existed at all, false the moment
 // milestone 19's spawn command could create a second one alongside the
-// one already running from boot. A real GPF (errorCode 0x32) confirmed
+// one already running from boot. A real GPF (error_code 0x32) confirmed
 // this the first time two ring3 processes coexisted: the second one's
 // own syscalls corrupted the first one's still-pending suspended state
 // on the shared stack, the same bug *class* as milestone 11's original
@@ -253,7 +253,7 @@ void loadCr3(u64 phys) {
 // same offsets boot.s's own one-time patch already used) are enough.
 extern u8 tss_start;
 
-void setTssRsp0(u64 rsp0) {
+void set_tss_rsp0(u64 rsp0) {
     u32* low = (u32*) ((u64) &tss_start + 4);
     u32* high = (u32*) ((u64) &tss_start + 8);
     *low = (u32) (rsp0 & 0xFFFFFFFF);

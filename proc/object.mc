@@ -7,39 +7,39 @@
 // handle indirection would have been pure ceremony.
 //
 // Two tables, matching the real NT design this is modeled on: a single
-// kernel-wide object table (gObjects) holding the actual objects, and a
-// SEPARATE table per process (gHandleTables) of small integers that
+// kernel-wide object table (g_objects) holding the actual objects, and a
+// SEPARATE table per process (g_handle_tables) of small integers that
 // index into it. Ring3 code only ever sees the small integer - it can
-// never walk straight into gObjects[] itself; every syscall that
+// never walk straight into g_objects[] itself; every syscall that
 // resolves a handle (syscall.mc's num 3/7/8) does its own inline
-// bounds/existence/rights check directly against gHandleTables rather
+// bounds/existence/rights check directly against g_handle_tables rather
 // than through a shared helper, since milestone 27 made every one of
 // those checks also need the handle's `rights` field, not just its
-// objectIndex - a single "resolve to object index" helper stopped being
+// object_index - a single "resolve to object index" helper stopped being
 // the natural shared shape once rights entered the picture.
 
 // A real `const` as of the `minic` compiler's const support (added the
 // same session this needed it) - was a plain, only-by-convention-const
 // global before that, same as everything else in this codebase still
-// not yet converted (gHeapBase, etc.). No OBJ_NONE constant - an
+// not yet converted (g_heap_base, etc.). No OBJ_NONE constant - an
 // unallocated KernelObject's zero-valued `type` field is never read
 // (guarded by `used` everywhere), so there's nothing for a "none" tag
 // to ever be compared against.
-const int OBJ_PROCESS = 1;
+const int obj_process = 1;
 // Milestone 25: the first object type actually wrapped by real,
 // enforced per-handle rights (see RIGHT_* below) rather than "any
 // handle to this object can do anything the object supports."
-const int OBJ_CHANNEL = 2;
+const int obj_channel = 2;
 
-struct KernelObject {
+struct kernel_object {
     bool used;
     int type;
-    int dataIndex;   // meaning depends on type - for OBJ_PROCESS, an index into
-                      // gProcesses[]; for OBJ_CHANNEL, an index into gChannels[]
+    int data_index;   // meaning depends on type - for OBJ_PROCESS, an index into
+                      // g_processes[]; for OBJ_CHANNEL, an index into g_channels[]
 }
 
-KernelObject gObjects[8];
-int gObjectCount;
+kernel_object g_objects[8];
+int g_object_count;
 
 // Milestone 25: real per-handle rights, the actual "capability" in
 // "capability/permission system" - a bitmask of what operations THIS
@@ -51,34 +51,34 @@ int gObjectCount;
 // types on purpose (simpler than a per-type rights enum) - safe in
 // practice since a handle's type is always checked first anyway (a
 // process handle's bits are never interpreted as channel rights).
-const int RIGHT_QUERY = 1;      // e.g. syscall 3's handle-query, on an OBJ_PROCESS handle
-const int RIGHT_SEND = 2;       // Channel.send(), on an OBJ_CHANNEL handle
-const int RIGHT_RECEIVE = 4;    // Channel.receive(), on an OBJ_CHANNEL handle
+const int right_query = 1;      // e.g. syscall 3's handle-query, on an OBJ_PROCESS handle
+const int right_send = 2;       // Channel.send(), on an OBJ_CHANNEL handle
+const int right_receive = 4;    // Channel.receive(), on an OBJ_CHANNEL handle
 
-struct Handle {
+struct handle {
     bool used;
-    int objectIndex;
+    int object_index;
     int rights;
 }
 
-const int HANDLES_PER_PROCESS = 8;
+const int handles_per_process = 8;
 
 // A genuine 2D array as of the `minic` compiler's multi-dimensional-
 // array support (added the same session this needed it) - was a
-// manually flattened `Handle gHandleTables[32]` before that, with
-// `gHandleTables[processIndex * HANDLES_PER_PROCESS + handle]` standing
-// in for `gHandleTables[processIndex][handle]`. Removed the workaround
+// manually flattened `Handle g_handle_tables[32]` before that, with
+// `g_handle_tables[process_index * HANDLES_PER_PROCESS + handle]` standing
+// in for `g_handle_tables[process_index][handle]`. Removed the workaround
 // once the real feature existed, same as this project always has.
-Handle gHandleTables[4][8];   // 4 processes * 8 handles each
+handle g_handle_tables[4][8];   // 4 processes * 8 handles each
 
-int allocObject(int type, int dataIndex) {
+int alloc_object(int type, int data_index) {
     int i = 0;
     while (i < 8) {
-        if (!gObjects[i].used) {
-            gObjects[i].used = true;
-            gObjects[i].type = type;
-            gObjects[i].dataIndex = dataIndex;
-            gObjectCount = gObjectCount + 1;
+        if (!g_objects[i].used) {
+            g_objects[i].used = true;
+            g_objects[i].type = type;
+            g_objects[i].data_index = data_index;
+            g_object_count = g_object_count + 1;
             return i;
         }
         i = i + 1;
@@ -87,19 +87,19 @@ int allocObject(int type, int dataIndex) {
 }
 
 // Every process's handle table starts empty, so the FIRST handle ever
-// allocated into it always lands in slot 0 - spawnProcess() relies on
+// allocated into it always lands in slot 0 - spawn_process() relies on
 // this to give every process a well-known "handle 0 = myself" without
 // needing a dedicated syscall just to look it up. `rights` (milestone
 // 25) is set once, here, at grant time - never widened later, so
 // whatever policy the granting code chooses (see syscall.mc's num 9)
 // is exactly what the handle can ever do for its whole lifetime.
-int allocHandle(int processIndex, int objectIndex, int rights) {
+int alloc_handle(int process_index, int object_index, int rights) {
     int i = 0;
-    while (i < HANDLES_PER_PROCESS) {
-        if (!gHandleTables[processIndex][i].used) {
-            gHandleTables[processIndex][i].used = true;
-            gHandleTables[processIndex][i].objectIndex = objectIndex;
-            gHandleTables[processIndex][i].rights = rights;
+    while (i < handles_per_process) {
+        if (!g_handle_tables[process_index][i].used) {
+            g_handle_tables[process_index][i].used = true;
+            g_handle_tables[process_index][i].object_index = object_index;
+            g_handle_tables[process_index][i].rights = rights;
             return i;
         }
         i = i + 1;

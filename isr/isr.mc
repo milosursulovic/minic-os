@@ -19,13 +19,13 @@ import "../mm/paging.mc";
 import "../lib/strings.mc";
 import "../sched/task.mc";
 
-u64 gTickCount;
+u64 g_tick_count;
 
-void interrupt_handler(u64 vector, u64 errorCode) {
+void interrupt_handler(u64 vector, u64 error_code) {
     if (vector == 32) {
-        gTickCount = gTickCount + 1;
-        if (gTickCount % 100 == 0) {
-            serialPutc('.');   // one dot per ~1 second at 100Hz, proves the timer keeps firing
+        g_tick_count = g_tick_count + 1;
+        if (g_tick_count % 100 == 0) {
+            serial_putc('.');   // one dot per ~1 second at 100Hz, proves the timer keeps firing
         }
         outb(0x20, 0x20);      // EOI - always send this before yield() might switch away,
         // so the PIC gets acknowledged regardless of which task ends up resuming here
@@ -50,15 +50,15 @@ void interrupt_handler(u64 vector, u64 errorCode) {
     if (vector == 33) {
         u8 scancode = inb(0x60);
         if (scancode < 0x80) {   // top bit set = key release, ignore those
-            char c = gScancodeTable[scancode];
+            char c = g_scancode_table[scancode];
             if (c == '\n') {
-                gLineBuffer[gLineLen] = '\0';
-                gLineReady = true;
-            } else if (c != '\0' && gLineLen < 127) {
-                gLineBuffer[gLineLen] = c;
-                gLineLen = gLineLen + 1;
-                vgaPutc(c);
-                serialPutc(c);
+                g_line_buffer[g_line_len] = '\0';
+                g_line_ready = true;
+            } else if (c != '\0' && g_line_len < 127) {
+                g_line_buffer[g_line_len] = c;
+                g_line_len = g_line_len + 1;
+                vga_putc(c);
+                serial_putc(c);
             }
         }
         outb(0x20, 0x20);
@@ -66,27 +66,27 @@ void interrupt_handler(u64 vector, u64 errorCode) {
     }
 
     if (vector == 0) {
-        serialPrint("divide by zero, halting\n");
+        serial_print("divide by zero, halting\n");
     } else if (vector == 13) {
-        serialPrint("general protection fault, errorCode=0x");
-        printHex(errorCode);
-        serialPrint(", halting\n");
+        serial_print("general protection fault, error_code=0x");
+        print_hex(error_code);
+        serial_print(", halting\n");
     } else if (vector == 14) {
-        readCr2();
-        serialPrint("page fault at 0x");
-        printHex(gCr2Value);
+        read_cr2();
+        serial_print("page fault at 0x");
+        print_hex(g_cr2_value);
         // Milestone 28: also print the raw error code - bit 4 (0x10) is
         // set specifically for an instruction-fetch violation (an NX
         // check failing), distinct from bit 1 (write) or a not-present
-        // fault. Was always available (interrupt_handler's own errorCode
+        // fault. Was always available (interrupt_handler's own error_code
         // parameter) but never surfaced for vector 14 before - only
         // vector 13 (GPF) printed it, since nothing needed to tell a
         // page fault's flavor apart from just "which address" until now.
-        serialPrint(", errorCode=0x");
-        printHex(errorCode);
-        serialPrint(", halting\n");
+        serial_print(", error_code=0x");
+        print_hex(error_code);
+        serial_print(", halting\n");
     } else {
-        serialPrint("unhandled exception, halting\n");
+        serial_print("unhandled exception, halting\n");
     }
     while (true) {
         asm("hlt");

@@ -20,7 +20,7 @@
 // file isn't reached through port I/O at all - it's memory-mapped
 // (MMIO): PCI BAR0 gives a real PHYSICAL address that has to be mapped
 // into this kernel's own virtual address space via mm/paging.mc's
-// mapPage() before any register can be touched, then read/written as
+// map_page() before any register can be touched, then read/written as
 // ordinary memory. This is the first time this kernel has ever mapped
 // a device's registers this way - the heap and the `map` demo command
 // mapped RAM, not hardware.
@@ -32,33 +32,33 @@ import "../mm/paging.mc";
 // a fixed, documented convention, the same class of "known demo value"
 // this kernel already relies on elsewhere (File's hardcoded path,
 // the ring3 channel's fixed index).
-const u8 E1000_BUS = 0;
-const u8 E1000_DEVICE = 3;
-const u8 E1000_FUNCTION = 0;
+const u8 e1000_bus = 0;
+const u8 e1000_device = 3;
+const u8 e1000_function = 0;
 
 // Register offsets into the MMIO BAR - the standard Intel 8254x/e1000
 // family register map, publicly documented in Intel's own datasheet.
 // Only what this milestone's read-only proof needs; TX/RX descriptor
 // registers (RDBAL/TDBAL/etc.) are real but left for the next milestone.
-const u32 E1000_REG_STATUS = 0x0008;
-const u32 E1000_REG_RAL0 = 0x5400;
-const u32 E1000_REG_RAH0 = 0x5404;
+const u32 e1000_reg_status = 0x0008;
+const u32 e1000_reg_ral0 = 0x5400;
+const u32 e1000_reg_rah0 = 0x5404;
 
 // STATUS register bit 1 = Link Up.
-const u32 E1000_STATUS_LU = 0x2;
+const u32 e1000_status_lu = 0x2;
 
-// mapPage() works one 4KB page at a time - the registers this driver
+// map_page() works one 4KB page at a time - the registers this driver
 // touches go up through RAH0 at offset 0x5404, so 8 pages (32KB) is
 // real headroom past that, not exactly enough - matching every other
-// fixed-size choice this kernel makes (gLoadedImageBuf, HANDLES_PER_
+// fixed-size choice this kernel makes (g_loaded_image_buf, HANDLES_PER_
 // PROCESS, etc: generous, not tight).
-const u64 E1000_MMIO_VADDR = 0x60000000;
-const u64 E1000_MMIO_PAGES = 8;
+const u64 e1000_mmio_vaddr = 0x60000000;
+const u64 e1000_mmio_pages = 8;
 
-u64 gE1000MmioBase;
+u64 g_e1000_mmio_base;
 
-u32 e1000ReadReg(u32 offset) {
-    volatile u32* reg = (volatile u32*) (gE1000MmioBase + (u64) offset);
+u32 e1000_read_reg(u32 offset) {
+    volatile u32* reg = (volatile u32*) (g_e1000_mmio_base + (u64) offset);
     return *reg;
 }
 
@@ -69,9 +69,9 @@ u32 e1000ReadReg(u32 offset) {
 // initiate a DMA transfer itself - not exercised yet in this
 // milestone's read-only proof, but harmless and necessary groundwork
 // for the descriptor-ring milestone that follows this one).
-const u8 PCI_REG_COMMAND = 0x04;
-const u32 PCI_COMMAND_MEMORY_SPACE = 0x2;
-const u32 PCI_COMMAND_BUS_MASTER = 0x4;
+const u8 pci_reg_command = 0x04;
+const u32 pci_command_memory_space = 0x2;
+const u32 pci_command_bus_master = 0x4;
 
 // Initializes the e1000: enables it over PCI, maps its MMIO register
 // file, and reads back real hardware state. Returns false if the
@@ -79,35 +79,35 @@ const u32 PCI_COMMAND_BUS_MASTER = 0x4;
 // possibility if this ever runs against a different QEMU machine
 // config, or real hardware with a different NIC) rather than silently
 // mapping garbage.
-bool e1000Init() {
-    u16 vendorId = pciConfigReadWord(E1000_BUS, E1000_DEVICE, E1000_FUNCTION, 0x00);
-    u16 deviceId = pciConfigReadWord(E1000_BUS, E1000_DEVICE, E1000_FUNCTION, 0x02);
-    if (vendorId != 0x8086 || deviceId != 0x100e) {
+bool e1000_init() {
+    u16 vendor_id = pci_config_read_word(e1000_bus, e1000_device, e1000_function, 0x00);
+    u16 device_id = pci_config_read_word(e1000_bus, e1000_device, e1000_function, 0x02);
+    if (vendor_id != 0x8086 || device_id != 0x100e) {
         return false;
     }
 
-    u32 command = pciConfigReadDword(E1000_BUS, E1000_DEVICE, E1000_FUNCTION, PCI_REG_COMMAND);
-    command = command | PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER;
-    pciConfigWriteDword(E1000_BUS, E1000_DEVICE, E1000_FUNCTION, PCI_REG_COMMAND, command);
+    u32 command = pci_config_read_dword(e1000_bus, e1000_device, e1000_function, pci_reg_command);
+    command = command | pci_command_memory_space | pci_command_bus_master;
+    pci_config_write_dword(e1000_bus, e1000_device, e1000_function, pci_reg_command, command);
 
-    u32 mmioPhys = pciReadBar0(E1000_BUS, E1000_DEVICE, E1000_FUNCTION);
-    if (mmioPhys == 0) {
+    u32 mmio_phys = pci_read_bar0(e1000_bus, e1000_device, e1000_function);
+    if (mmio_phys == 0) {
         return false;
     }
 
     u64 page = 0;
-    while (page < E1000_MMIO_PAGES) {
-        u64 vaddr = E1000_MMIO_VADDR + (page * 4096);
-        u64 paddr = ((u64) mmioPhys) + (page * 4096);
+    while (page < e1000_mmio_pages) {
+        u64 vaddr = e1000_mmio_vaddr + (page * 4096);
+        u64 paddr = ((u64) mmio_phys) + (page * 4096);
         // Device registers, not RAM - writable and non-executable
         // (PAGE_NX, milestone 28), no user bit (kernel-only, never
         // touched from ring3).
-        if (!mapPage(vaddr, paddr, 0x02 | PAGE_NX)) {
+        if (!map_page(vaddr, paddr, 0x02 | page_nx)) {
             return false;
         }
         page = page + 1;
     }
-    gE1000MmioBase = E1000_MMIO_VADDR;
+    g_e1000_mmio_base = e1000_mmio_vaddr;
     return true;
 }
 
@@ -118,24 +118,24 @@ bool e1000Init() {
 // these directly is simpler than implementing the EEPROM-read protocol
 // (register EERD, a real but separate mechanism) purely to re-derive a
 // value that's already sitting here in plain registers.
-void e1000GetMac(u8* macOut) {
-    u32 low = e1000ReadReg(E1000_REG_RAL0);
-    u32 high = e1000ReadReg(E1000_REG_RAH0);
-    macOut[0] = (u8) (low & 0xFF);
-    macOut[1] = (u8) ((low >> 8) & 0xFF);
-    macOut[2] = (u8) ((low >> 16) & 0xFF);
-    macOut[3] = (u8) ((low >> 24) & 0xFF);
-    macOut[4] = (u8) (high & 0xFF);
-    macOut[5] = (u8) ((high >> 8) & 0xFF);
+void e1000_get_mac(u8* mac_out) {
+    u32 low = e1000_read_reg(e1000_reg_ral0);
+    u32 high = e1000_read_reg(e1000_reg_rah0);
+    mac_out[0] = (u8) (low & 0xFF);
+    mac_out[1] = (u8) ((low >> 8) & 0xFF);
+    mac_out[2] = (u8) ((low >> 16) & 0xFF);
+    mac_out[3] = (u8) ((low >> 24) & 0xFF);
+    mac_out[4] = (u8) (high & 0xFF);
+    mac_out[5] = (u8) ((high >> 8) & 0xFF);
 }
 
-bool e1000LinkUp() {
-    u32 status = e1000ReadReg(E1000_REG_STATUS);
-    return (status & E1000_STATUS_LU) != 0;
+bool e1000_link_up() {
+    u32 status = e1000_read_reg(e1000_reg_status);
+    return (status & e1000_status_lu) != 0;
 }
 
-void e1000WriteReg(u32 offset, u32 value) {
-    volatile u32* reg = (volatile u32*) (gE1000MmioBase + (u64) offset);
+void e1000_write_reg(u32 offset, u32 value) {
+    volatile u32* reg = (volatile u32*) (g_e1000_mmio_base + (u64) offset);
     *reg = value;
 }
 
@@ -152,8 +152,8 @@ void e1000WriteReg(u32 offset, u32 value) {
 // buffers itself once bus-mastering is enabled. `packed struct` (real
 // since the freestanding phase) guarantees these match the hardware's
 // own 16-byte layout exactly, no compiler-inserted padding.
-packed struct TxDescriptor {
-    u64 bufferAddr;
+packed struct tx_descriptor {
+    u64 buffer_addr;
     u16 length;
     u8 cso;
     u8 cmd;
@@ -162,8 +162,8 @@ packed struct TxDescriptor {
     u16 special;
 }
 
-packed struct RxDescriptor {
-    u64 bufferAddr;
+packed struct rx_descriptor {
+    u64 buffer_addr;
     u16 length;
     u16 checksum;
     u8 status;
@@ -171,20 +171,20 @@ packed struct RxDescriptor {
     u16 special;
 }
 
-const u32 E1000_REG_TCTL = 0x0400;
-const u32 E1000_REG_TIPG = 0x0410;
-const u32 E1000_REG_TDBAL = 0x3800;
-const u32 E1000_REG_TDBAH = 0x3804;
-const u32 E1000_REG_TDLEN = 0x3808;
-const u32 E1000_REG_TDH = 0x3810;
-const u32 E1000_REG_TDT = 0x3818;
+const u32 e1000_reg_tctl = 0x0400;
+const u32 e1000_reg_tipg = 0x0410;
+const u32 e1000_reg_tdbal = 0x3800;
+const u32 e1000_reg_tdbah = 0x3804;
+const u32 e1000_reg_tdlen = 0x3808;
+const u32 e1000_reg_tdh = 0x3810;
+const u32 e1000_reg_tdt = 0x3818;
 
-const u32 E1000_REG_RCTL = 0x0100;
-const u32 E1000_REG_RDBAL = 0x2800;
-const u32 E1000_REG_RDBAH = 0x2804;
-const u32 E1000_REG_RDLEN = 0x2808;
-const u32 E1000_REG_RDH = 0x2810;
-const u32 E1000_REG_RDT = 0x2818;
+const u32 e1000_reg_rctl = 0x0100;
+const u32 e1000_reg_rdbal = 0x2800;
+const u32 e1000_reg_rdbah = 0x2804;
+const u32 e1000_reg_rdlen = 0x2808;
+const u32 e1000_reg_rdh = 0x2810;
+const u32 e1000_reg_rdt = 0x2818;
 
 // TX descriptor CMD bits: EOP (end of packet), IFCS (hardware computes
 // and appends the real Ethernet CRC), RS (report status - without this
@@ -192,128 +192,128 @@ const u32 E1000_REG_RDT = 0x2818;
 // forever). STATUS bit 0 = DD (descriptor done) - set by the hardware
 // itself once it has genuinely finished transmitting, not something
 // software can fake.
-const u8 TX_CMD_EOP = 0x01;
-const u8 TX_CMD_IFCS = 0x02;
-const u8 TX_CMD_RS = 0x08;
-const u8 TX_STATUS_DD = 0x01;
+const u8 tx_cmd_eop = 0x01;
+const u8 tx_cmd_ifcs = 0x02;
+const u8 tx_cmd_rs = 0x08;
+const u8 tx_status_dd = 0x01;
 
 // TCTL: EN (enable) | PSP (pad short packets - our test frames are well
 // under the 60-byte Ethernet minimum) | CT=15 (collision threshold,
 // bits 11:4) | COLD=64 (collision distance for full duplex, bits 21:12)
 // | RTLC (retransmit on late collision, bit 24) - the standard
 // full-duplex configuration documented in Intel's own datasheet.
-const u32 E1000_TCTL_VALUE = 0x014000FA;
+const u32 e1000_tctl_value = 0x014000FA;
 // TIPG: IPGT=10 (bits 9:0) | IPGR1=8 (bits 19:10) | IPGR2=6 (bits
 // 29:20) - the datasheet's own recommended full-duplex spacing.
-const u32 E1000_TIPG_VALUE = 0x0060200A;
+const u32 e1000_tipg_value = 0x0060200A;
 
 // RCTL: EN (enable) | BAM (broadcast accept - harmless here, real
 // replies are unicast to us) | SECRC (strip the CRC before writing to
 // memory, so `length` reflects the real payload) - BSIZE left at its
 // default (00 = 2048 bytes/descriptor), comfortably under the full 4KB
-// frame each RX buffer actually gets (allocFrame()'s own granularity) -
+// frame each RX buffer actually gets (alloc_frame()'s own granularity) -
 // hardware never writes more than BSIZE, so the larger real allocation
 // is just harmless headroom, not a mismatch.
-const u32 E1000_RCTL_VALUE = 0x0400800A;
+const u32 e1000_rctl_value = 0x0400800A;
 
-const u32 TX_RING_SIZE = 8;
-const u32 RX_RING_SIZE = 8;
+const u32 tx_ring_size = 8;
+const u32 rx_ring_size = 8;
 
 // One 4KB frame comfortably holds either ring (8 * 16 = 128 bytes) -
 // real headroom, not exactly enough, the same sizing philosophy every
 // other fixed-size table in this kernel uses.
-TxDescriptor* gTxRing;
-u32 gTxTail;
-u8* gTxBuffer;
+tx_descriptor* g_tx_ring;
+u32 g_tx_tail;
+u8* g_tx_buffer;
 
-RxDescriptor* gRxRing;
-u8* gRxBuffers[8];   // must match RX_RING_SIZE - MiniC array sizes need a literal, not a const
+rx_descriptor* g_rx_ring;
+u8* g_rx_buffers[8];   // must match RX_RING_SIZE - MiniC array sizes need a literal, not a const
 
 // Sets up both rings and enables the transmitter/receiver. Must run
-// after e1000Init() - needs gE1000MmioBase already mapped and PCI
+// after e1000_init() - needs g_e1000_mmio_base already mapped and PCI
 // bus-mastering already enabled, both milestone 30's own job.
-bool e1000InitRings() {
-    void* txRingFrame = allocFrame();
-    void* txBufFrame = allocFrame();
-    if (txRingFrame == null || txBufFrame == null) {
+bool e1000_init_rings() {
+    void* tx_ring_frame = alloc_frame();
+    void* tx_buf_frame = alloc_frame();
+    if (tx_ring_frame == null || tx_buf_frame == null) {
         return false;
     }
-    gTxRing = (TxDescriptor*) txRingFrame;
-    gTxBuffer = (u8*) txBufFrame;
+    g_tx_ring = (tx_descriptor*) tx_ring_frame;
+    g_tx_buffer = (u8*) tx_buf_frame;
     u32 i = 0;
-    while (i < TX_RING_SIZE) {
-        gTxRing[i].bufferAddr = 0;
-        gTxRing[i].length = 0;
-        gTxRing[i].cmd = 0;
-        gTxRing[i].status = TX_STATUS_DD;   // every unused slot starts "done"
+    while (i < tx_ring_size) {
+        g_tx_ring[i].buffer_addr = 0;
+        g_tx_ring[i].length = 0;
+        g_tx_ring[i].cmd = 0;
+        g_tx_ring[i].status = tx_status_dd;   // every unused slot starts "done"
         i = i + 1;
     }
-    gTxTail = 0;
+    g_tx_tail = 0;
 
-    e1000WriteReg(E1000_REG_TDBAL, (u32) ((u64) txRingFrame));
-    e1000WriteReg(E1000_REG_TDBAH, 0);
-    e1000WriteReg(E1000_REG_TDLEN, TX_RING_SIZE * 16);
-    e1000WriteReg(E1000_REG_TDH, 0);
-    e1000WriteReg(E1000_REG_TDT, 0);
-    e1000WriteReg(E1000_REG_TIPG, E1000_TIPG_VALUE);
-    e1000WriteReg(E1000_REG_TCTL, E1000_TCTL_VALUE);
+    e1000_write_reg(e1000_reg_tdbal, (u32) ((u64) tx_ring_frame));
+    e1000_write_reg(e1000_reg_tdbah, 0);
+    e1000_write_reg(e1000_reg_tdlen, tx_ring_size * 16);
+    e1000_write_reg(e1000_reg_tdh, 0);
+    e1000_write_reg(e1000_reg_tdt, 0);
+    e1000_write_reg(e1000_reg_tipg, e1000_tipg_value);
+    e1000_write_reg(e1000_reg_tctl, e1000_tctl_value);
 
-    void* rxRingFrame = allocFrame();
-    if (rxRingFrame == null) {
+    void* rx_ring_frame = alloc_frame();
+    if (rx_ring_frame == null) {
         return false;
     }
-    gRxRing = (RxDescriptor*) rxRingFrame;
+    g_rx_ring = (rx_descriptor*) rx_ring_frame;
     i = 0;
-    while (i < RX_RING_SIZE) {
-        void* buf = allocFrame();
+    while (i < rx_ring_size) {
+        void* buf = alloc_frame();
         if (buf == null) {
             return false;
         }
-        gRxBuffers[i] = (u8*) buf;
-        gRxRing[i].bufferAddr = (u64) buf;
-        gRxRing[i].length = 0;
-        gRxRing[i].status = 0;
+        g_rx_buffers[i] = (u8*) buf;
+        g_rx_ring[i].buffer_addr = (u64) buf;
+        g_rx_ring[i].length = 0;
+        g_rx_ring[i].status = 0;
         i = i + 1;
     }
 
-    e1000WriteReg(E1000_REG_RDBAL, (u32) ((u64) rxRingFrame));
-    e1000WriteReg(E1000_REG_RDBAH, 0);
-    e1000WriteReg(E1000_REG_RDLEN, RX_RING_SIZE * 16);
-    e1000WriteReg(E1000_REG_RDH, 0);
+    e1000_write_reg(e1000_reg_rdbal, (u32) ((u64) rx_ring_frame));
+    e1000_write_reg(e1000_reg_rdbah, 0);
+    e1000_write_reg(e1000_reg_rdlen, rx_ring_size * 16);
+    e1000_write_reg(e1000_reg_rdh, 0);
     // Every descriptor is immediately available to hardware, so the
     // tail sits one past the last one - the same "head chases tail"
     // convention as the TX ring, just starting from the opposite end.
-    e1000WriteReg(E1000_REG_RDT, RX_RING_SIZE - 1);
-    e1000WriteReg(E1000_REG_RCTL, E1000_RCTL_VALUE);
+    e1000_write_reg(e1000_reg_rdt, rx_ring_size - 1);
+    e1000_write_reg(e1000_reg_rctl, e1000_rctl_value);
 
     return true;
 }
 
 // Copies `len` bytes into the next TX slot, hands it to the hardware,
 // and polls (bounded, same "fail clean rather than hang forever"
-// discipline the ATA driver's ataWaitReady/ataWaitDrq already
+// discipline the ATA driver's ata_wait_ready/ata_wait_drq already
 // established) for the descriptor's own DD bit - the hardware's own
 // confirmation it genuinely completed the transmission, not something
 // this driver could fake by just returning true.
-bool e1000Send(u8* data, u16 len) {
+bool e1000_send(u8* data, u16 len) {
     u32 i = 0;
     while (i < (u32) len) {
-        gTxBuffer[i] = data[i];
+        g_tx_buffer[i] = data[i];
         i = i + 1;
     }
 
-    u32 slot = gTxTail;
-    gTxRing[slot].bufferAddr = (u64) gTxBuffer;
-    gTxRing[slot].length = len;
-    gTxRing[slot].cmd = TX_CMD_EOP | TX_CMD_IFCS | TX_CMD_RS;
-    gTxRing[slot].status = 0;
+    u32 slot = g_tx_tail;
+    g_tx_ring[slot].buffer_addr = (u64) g_tx_buffer;
+    g_tx_ring[slot].length = len;
+    g_tx_ring[slot].cmd = tx_cmd_eop | tx_cmd_ifcs | tx_cmd_rs;
+    g_tx_ring[slot].status = 0;
 
-    gTxTail = (slot + 1) % TX_RING_SIZE;
-    e1000WriteReg(E1000_REG_TDT, gTxTail);
+    g_tx_tail = (slot + 1) % tx_ring_size;
+    e1000_write_reg(e1000_reg_tdt, g_tx_tail);
 
     u32 spins = 0;
     while (spins < 1000000) {
-        if ((gTxRing[slot].status & TX_STATUS_DD) != 0) {
+        if ((g_tx_ring[slot].status & tx_status_dd) != 0) {
             return true;
         }
         spins = spins + 1;
@@ -322,7 +322,7 @@ bool e1000Send(u8* data, u16 len) {
 }
 
 // Polls the next expected RX slot (bounded, same reasoning as
-// e1000Send's own wait) for its DD bit. Returns the real received
+// e1000_send's own wait) for its DD bit. Returns the real received
 // length and copies the frame into `out`, or 0 if nothing arrived
 // within the wait window - a real, honest "no packet" result, not a
 // crash or a hang. Deliberately a SHORT spin bound per call, not a long
@@ -331,26 +331,26 @@ bool e1000Send(u8* data, u16 len) {
 // doesn't reliably provide even at a huge iteration count (the loop can
 // finish in microseconds on real hardware). Callers needing to wait for
 // a genuine external reply should call this repeatedly against a real
-// tick-based timeout instead - see shell.mc's cmdArp().
-u32 gRxHead;
+// tick-based timeout instead - see shell.mc's cmd_arp().
+u32 g_rx_head;
 
-u16 e1000Receive(u8* out, u16 maxLen) {
+u16 e1000_receive(u8* out, u16 max_len) {
     u32 spins = 0;
     while (spins < 20000) {
-        if ((gRxRing[gRxHead].status & 0x01) != 0) {
-            u16 len = gRxRing[gRxHead].length;
-            u16 copyLen = len;
-            if (copyLen > maxLen) {
-                copyLen = maxLen;
+        if ((g_rx_ring[g_rx_head].status & 0x01) != 0) {
+            u16 len = g_rx_ring[g_rx_head].length;
+            u16 copy_len = len;
+            if (copy_len > max_len) {
+                copy_len = max_len;
             }
             u16 i = 0;
-            while (i < copyLen) {
-                out[i] = gRxBuffers[gRxHead][i];
+            while (i < copy_len) {
+                out[i] = g_rx_buffers[g_rx_head][i];
                 i = i + 1;
             }
-            gRxRing[gRxHead].status = 0;
-            e1000WriteReg(E1000_REG_RDT, gRxHead);
-            gRxHead = (gRxHead + 1) % RX_RING_SIZE;
+            g_rx_ring[g_rx_head].status = 0;
+            e1000_write_reg(e1000_reg_rdt, g_rx_head);
+            g_rx_head = (g_rx_head + 1) % rx_ring_size;
             return len;
         }
         spins = spins + 1;

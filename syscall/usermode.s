@@ -5,7 +5,7 @@
 # privilege-level transition is program structure, not a value a MiniC
 # statement could carry.
 #
-# void run_ring3_test(u64 entry, u64 userStack)
+# void run_ring3_test(u64 entry, u64 user_stack)
 #   rdi = ring3 entry point
 #   rsi = ring3 stack pointer (top of a page already mapped present +
 #         writable + *user*, or this faults immediately on the first push)
@@ -14,7 +14,7 @@
 # exists yet, a still-open gap - see README's Known limitations). The
 # calling task's kernel-mode life ends here; from this point on it only
 # ever runs in ring3, preemptible by the timer like any other task (see
-# proc/process.mc's processEntryTrampoline(), the only caller since
+# proc/process.mc's process_entry_trampoline(), the only caller since
 # milestone 13 retired the one-shot demo that used to call this too).
 
 .intel_syntax noprefix

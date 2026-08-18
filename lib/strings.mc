@@ -21,7 +21,7 @@ int strlen(char* s) {
     return i;
 }
 
-bool startsWith(char* s, char* prefix) {
+bool starts_with(char* s, char* prefix) {
     int i = 0;
     while (prefix[i] != '\0') {
         if (s[i] != prefix[i]) {
@@ -34,8 +34,8 @@ bool startsWith(char* s, char* prefix) {
 
 // Accepts an optional "0x" prefix; any non-hex-digit character is simply
 // skipped rather than treated as an error - good enough for a shell
-// that's only ever fed its own printHex() output back.
-u64 parseHex(char* s) {
+// that's only ever fed its own print_hex() output back.
+u64 parse_hex(char* s) {
     u64 value = 0;
     int i = 0;
     if (s[0] == '0' && s[1] == 'x') {
@@ -44,15 +44,15 @@ u64 parseHex(char* s) {
     while (s[i] != '\0') {
         char c = s[i];
         u64 digit = 0;
-        bool validDigit = true;
+        bool valid_digit = true;
         if (c >= '0' && c <= '9') {
             digit = (u64) (c - '0');
         } else if (c >= 'a' && c <= 'f') {
             digit = (u64) (c - 'a') + 10;
         } else {
-            validDigit = false;
+            valid_digit = false;
         }
-        if (validDigit) {
+        if (valid_digit) {
             value = value * 16 + digit;
         }
         i = i + 1;
@@ -60,14 +60,14 @@ u64 parseHex(char* s) {
     return value;
 }
 
-void printHex(u64 value) {
+void print_hex(u64 value) {
     char* digits = "0123456789abcdef";
     char buf[17];
     buf[16] = '\0';
     if (value == 0) {
         buf[15] = digits[0];
-        vgaPrint(&buf[15]);
-        serialPrint(&buf[15]);
+        vga_print(&buf[15]);
+        serial_print(&buf[15]);
         return;
     }
     int i = 15;
@@ -77,15 +77,15 @@ void printHex(u64 value) {
         value = value / 16;
         i = i - 1;
     }
-    vgaPrint(&buf[i + 1]);
-    serialPrint(&buf[i + 1]);
+    vga_print(&buf[i + 1]);
+    serial_print(&buf[i + 1]);
 }
 
-// Same digit-generation logic as printHex, but writes into a caller-
+// Same digit-generation logic as print_hex, but writes into a caller-
 // owned buffer (no null terminator) and returns the digit count instead
 // of printing - milestone 18's devices VFS backend needs hex text
 // composed into a byte buffer, not sent straight to VGA/serial.
-int formatHex(u64 value, u8* out) {
+int format_hex(u64 value, u8* out) {
     char* digits = "0123456789abcdef";
     char buf[16];
     if (value == 0) {

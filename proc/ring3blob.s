@@ -6,9 +6,9 @@
 # new, not their name or meaning.
 .intel_syntax noprefix
 
-.global gTestProgStart
-.global gTestProgEnd
+.global g_test_prog_start
+.global g_test_prog_end
 
-gTestProgStart:
+g_test_prog_start:
 .incbin "ring3prog.bin"
-gTestProgEnd:
+g_test_prog_end:
