@@ -80,7 +80,11 @@ nothing answers), a real IPv4 layer with a genuine ICMP echo (ping) round
 trip to the gateway (real header construction, a real RFC 791 checksum,
 this kernel's own first concept of "my IP address" - the reply's
 identifier and sequence number are checked to genuinely match what was
-sent, not just "something came back"), and
+sent, not just "something came back"), a real UDP layer (a real pseudo-
+header checksum binding the datagram to its own source/destination
+addresses) with a genuine DNS query to QEMU's own resolver proxy as
+proof - a real answer, from a real upstream DNS resolution, not
+self-validation - and
 runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
@@ -160,6 +164,13 @@ net/              networking (milestone 30 onward)
                      round trip, the minimal verification vehicle for
                      "does IP actually work," the same relationship
                      milestone 31's ARP had to proving TX/RX worked
+  udp.mc             milestone 34: real UDP - udpChecksum() (the real
+                     pseudo-header algorithm), udpBuildHeader(),
+                     udpSend()/udpReceive()
+  dns.mc             milestone 34: dnsQuery() - a hand-crafted,
+                     minimal DNS query, the verification vehicle for
+                     UDP the same way ICMP's ping was for IP. Not a
+                     real DNS client (see Known limitations)
 mm/               memory management
   heap.mc            kalloc/kfree free-list allocator, grows on demand via
                      mm/paging.mc; every grown page is PAGE_NX (milestone 28)
@@ -705,6 +716,8 @@ e1000 mac=52:54:0:12:34:56 linkUp=0x1
 resolve gateway ok=0x1 mac=52:55:a:0:2:2 elapsedTicks=0x64 cachedOk=0x1 cachedElapsedTicks=0x0 resolveDnsProxyOk=0x1 dnsMac=52:55:a:0:2:3 resolveUnreachableOk=0x0
 > ping
 ping gateway ok=0x1 elapsedTicks=0x64
+> dns
+dns query ok=0x1 elapsedTicks=0x74
 > disk
 sector 1: MiniC ATA PIO driver - milestone 16 signature sector
 > diskwrite
@@ -995,6 +1008,24 @@ network latency. This is also the first milestone in this whole project
 to give the kernel a real, explicit "my IP address" (`net/ip.mc`'s
 `gMyIp`) - previously a bare literal duplicated inside `arp.mc`'s own
 request-building code, now one shared, named value both files use.
+
+That `dns` result is milestone 34's proof: `net/udp.mc`'s real UDP layer
+(a real pseudo-header checksum, correctly binding the datagram to its
+own source/destination addresses, not just its own bytes), verified with
+a genuine DNS query to QEMU's built-in SLIRP DNS proxy (`10.0.2.3`, the
+same address `arp` already resolved back in milestone 32). `ok=0x1`
+means `net/dns.mc`'s `dnsQuery()` got back a response that matched the
+exact transaction ID this query sent, had the response (QR) bit set, and
+reported at least one real answer record - meaning SLIRP's proxy
+genuinely forwarded the query to a real upstream resolver and got a real
+answer back, not something this kernel could produce on its own.
+`elapsedTicks=0x74` (116 ticks) is itself a meaningful, sensible detail:
+noticeably *higher* than `ping`'s own `elapsedTicks=0x64` - real,
+consistent with DNS resolution genuinely taking one more hop than ICMP
+echo (SLIRP forwards the query out to a real resolver and waits for
+*its* reply, rather than answering directly the way it does for ping) -
+exactly the kind of small, correct-shaped detail that would be hard to
+fake by accident.
 
 The two `hello from a LOADED process!` lines, printed automatically
 before the shell even shows its first prompt, are the milestone 13
@@ -1850,8 +1881,42 @@ milestones 1-10 were each scoped just before starting them:
     application of already-proven mechanisms to a new protocol layer). A
     full regression pass (heap, paging, scheduler, `pci`, `arp`'s own
     continued correctness after the `gMyIp` refactor) stayed clean.~~
-    Next up: UDP, then TCP - each realistically its own future
-    milestone.
+    ~~**Milestone 34: a real UDP layer, verified with a genuine DNS
+    query** - Phase X's sixth step. UDP is the simpler of the two
+    remaining transport protocols - no connection state, no
+    retransmission/congestion control, just a port-addressed datagram
+    wrapper over the now-working IP layer; TCP's real connection state
+    machine remains a substantially bigger, separate hard problem, still
+    ahead. New `net/udp.mc`: `udpChecksum()` (the real pseudo-header
+    algorithm - source IP, dest IP, a zero byte, the protocol number,
+    and the UDP length, THEN the real header+payload, reusing
+    `ip.mc`'s `ipChecksum()` unchanged - binding the checksum to the
+    addresses it's delivered between, not just its own bytes),
+    `udpBuildHeader()`, and `udpSend()`/`udpReceive()` (the same
+    resolve-then-send-then-tick-bounded-poll shape milestone 33's ICMP
+    code already established). New `net/dns.mc`: `dnsQuery()` - a
+    minimal, hand-crafted DNS query (deliberately NOT a real DNS client
+    - no compression, no caching, no record types beyond A), purely as a
+    real external verification vehicle for UDP, the same "one hardcoded
+    real-protocol message as a test vehicle" discipline ARP's request
+    and ICMP's ping both already used. Sent to QEMU SLIRP's own built-in
+    DNS proxy (`10.0.2.3`) and verified on the exact transaction ID sent,
+    the response bit, and a real answer count - proving SLIRP genuinely
+    forwarded the query to a real upstream resolver. Verified in QEMU:
+    `dns query ok=0x1 elapsedTicks=0x74` - noticeably higher than
+    `ping`'s own `elapsedTicks=0x64`, a real, sensible detail (DNS
+    resolution genuinely takes one more hop than ICMP echo, which SLIRP
+    answers directly). No bugs found in the network protocol logic
+    itself - the only issues hit were two ordinary MiniC type-mismatch
+    compile errors (mixed `int`/`u16` arithmetic in an argument
+    expression, and in an array index using a `u16` loop counter instead
+    of the established `int` convention), fixed by restructuring rather
+    than casting inline. A full regression pass (heap, paging, scheduler,
+    `pci`, `ping`'s own continued correctness) stayed clean.~~ Next up:
+    TCP - a substantially bigger, genuinely separate hard problem (real
+    connection state machine, sequence numbers, retransmission)
+    deserving its own dedicated scoping pass, not a quick follow-on to
+    UDP.
 11. **Service architecture + a real `init`** - the current hardcoded
     `shell/shell.mc` loop migrates to an actual userspace program once
     processes/IPC/VFS exist to support that; async I/O as a cross-cutting
@@ -2112,19 +2177,28 @@ around phase 7-8.
   address, a real tick-bounded timeout on a miss. ~~No IP layer~~ - **a
   real one exists now** (milestone 33, `net/ip.mc`/`net/icmp.mc`): real
   IPv4 header construction, a real RFC 791 checksum, and a genuine ICMP
-  echo (ping) round trip. **Still fully open**: ARP remains client
-  (resolver) only - this kernel never answers "who has &lt;our
+  echo (ping) round trip. ~~No UDP~~ - **a real one exists now**
+  (milestone 34, `net/udp.mc`): real pseudo-header checksums,
+  `udpSend()`/`udpReceive()`, verified with a genuine DNS query to
+  QEMU's built-in resolver proxy. **Still fully open**: ARP remains
+  client (resolver) only - this kernel never answers "who has &lt;our
   address&gt;." This kernel's own IP address (`net/ip.mc`'s `gMyIp`,
   milestone 33) is a fixed, static assumption, not real DHCP-negotiated
   configuration - `10.0.2.15`, QEMU SLIRP's conventional default guest
   address, not something this kernel actually negotiated or owns. The
   ARP cache has no eviction/TTL - entries, once resolved, are trusted
-  forever within one boot. No UDP, no TCP - the transport layer above IP
-  is still ahead, each realistically its own future milestone rather
-  than one large jump; ICMP is the only IP-layer protocol implemented,
-  and only its echo request/reply message type at that (no destination-
-  unreachable, no time-exceeded, no other ICMP messages). `net/e1000.mc`'s
-  register offsets and init sequence are
+  forever within one boot. No TCP - a substantially bigger, genuinely
+  separate hard problem (real connection state machine, sequence
+  numbers, retransmission), still fully ahead; ICMP is the only
+  IP-layer protocol implemented, and only its echo request/reply
+  message type at that (no destination-unreachable, no time-exceeded,
+  no other ICMP messages). `net/dns.mc`'s `dnsQuery()` is deliberately
+  NOT a real DNS client - no response caching, no compression-pointer
+  decoding, no record types beyond A, no reuse of the transaction
+  outside this one demo call - it exists purely as an external test
+  vehicle for UDP, the same role ARP's request and ICMP's ping played
+  for their own layers. `net/e1000.mc`'s register offsets and init
+  sequence are
   e1000-specific - no generic NIC abstraction exists (nor would one make
   sense yet, with only one NIC driver in existence). The RX/TX rings are
   fixed-size (8 descriptors each) with no dynamic growth, matching every

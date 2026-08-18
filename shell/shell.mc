@@ -22,6 +22,8 @@ import "../net/e1000.mc";
 import "../net/arp.mc";
 import "../net/ip.mc";
 import "../net/icmp.mc";
+import "../net/udp.mc";
+import "../net/dns.mc";
 
 void printPrompt() {
     vgaPrint("> ");
@@ -29,8 +31,8 @@ void printPrompt() {
 }
 
 void cmdHelp() {
-    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
-    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
+    vgaPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping dns disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
+    serialPrint("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send pci nic arp ping dns disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
 }
 
 void cmdClear() {
@@ -388,6 +390,25 @@ void cmdPing() {
 
     vgaPrint("ping gateway ok=0x");
     serialPrint("ping gateway ok=0x");
+    printHex((u64) ok);
+    vgaPrint(" elapsedTicks=0x");
+    serialPrint(" elapsedTicks=0x");
+    printHex(elapsed);
+}
+
+// Milestone 34: a real UDP layer, verified with a genuine DNS query to
+// QEMU SLIRP's built-in DNS proxy (10.0.2.3) - the minimal, natural
+// verification vehicle for "does UDP actually work end to end," the
+// same relationship milestone 33's ICMP ping had to proving IP worked.
+// Not a general DNS client (no compression, no caching) - one hardcoded
+// query, purely as a real external stimulus.
+void cmdDns() {
+    u64 startTick = gTickCount;
+    bool ok = dnsQuery("example.com");
+    u64 elapsed = gTickCount - startTick;
+
+    vgaPrint("dns query ok=0x");
+    serialPrint("dns query ok=0x");
     printHex((u64) ok);
     vgaPrint(" elapsedTicks=0x");
     serialPrint(" elapsedTicks=0x");
@@ -838,6 +859,8 @@ void runCommand() {
         cmdArp();
     } else if (streq(gLineBuffer, "ping")) {
         cmdPing();
+    } else if (streq(gLineBuffer, "dns")) {
+        cmdDns();
     } else if (streq(gLineBuffer, "disk")) {
         cmdDisk();
     } else if (streq(gLineBuffer, "diskwrite")) {
