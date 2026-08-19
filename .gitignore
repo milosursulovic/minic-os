@@ -4,5 +4,4 @@
 *.img
 *.log
 *.bin
-kmain.s
-proc/ring3prog.s
+*.gen.s

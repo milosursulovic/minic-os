@@ -1,8 +1,12 @@
 // Small string/number helpers - no libc, so these are hand-rolled.
+// (`strlen_` rather than `strlen`: avoids any ambiguity with the
+// compiler's own builtin knowledge of that exact name, even under
+// -fno-builtin/-ffreestanding - simpler to just not share the name.)
 
-import "../drivers/io.mc";
+#include "strings.h"
+#include "../drivers/io.h"
 
-bool streq(char* a, char* b) {
+bool streq(const char* a, const char* b) {
     int i = 0;
     while (a[i] != '\0' && b[i] != '\0') {
         if (a[i] != b[i]) {
@@ -13,7 +17,7 @@ bool streq(char* a, char* b) {
     return a[i] == b[i];
 }
 
-int strlen(char* s) {
+int strlen_(const char* s) {
     int i = 0;
     while (s[i] != '\0') {
         i = i + 1;
@@ -21,7 +25,7 @@ int strlen(char* s) {
     return i;
 }
 
-bool starts_with(char* s, char* prefix) {
+bool starts_with(const char* s, const char* prefix) {
     int i = 0;
     while (prefix[i] != '\0') {
         if (s[i] != prefix[i]) {
@@ -35,7 +39,7 @@ bool starts_with(char* s, char* prefix) {
 // Accepts an optional "0x" prefix; any non-hex-digit character is simply
 // skipped rather than treated as an error - good enough for a shell
 // that's only ever fed its own print_hex() output back.
-u64 parse_hex(char* s) {
+u64 parse_hex(const char* s) {
     u64 value = 0;
     int i = 0;
     if (s[0] == '0' && s[1] == 'x') {
@@ -61,7 +65,7 @@ u64 parse_hex(char* s) {
 }
 
 void print_hex(u64 value) {
-    char* digits = "0123456789abcdef";
+    const char* digits = "0123456789abcdef";
     char buf[17];
     buf[16] = '\0';
     if (value == 0) {
@@ -83,10 +87,10 @@ void print_hex(u64 value) {
 
 // Same digit-generation logic as print_hex, but writes into a caller-
 // owned buffer (no null terminator) and returns the digit count instead
-// of printing - milestone 18's devices VFS backend needs hex text
-// composed into a byte buffer, not sent straight to VGA/serial.
+// of printing - the devices VFS backend needs hex text composed into a
+// byte buffer, not sent straight to VGA/serial.
 int format_hex(u64 value, u8* out) {
-    char* digits = "0123456789abcdef";
+    const char* digits = "0123456789abcdef";
     char buf[16];
     if (value == 0) {
         out[0] = (u8) digits[0];
