@@ -1,33 +1,32 @@
 // A real free-list allocator (split on alloc, forward *and* backward
-// coalesce on free) - milestone 6 built the machinery (alloc_frame +
-// map_page) to back memory anywhere the frame allocator can reach, and
-// this is that machinery's actual point: instead of a fixed 1MB .bss
-// arena, the heap starts small and grows a chunk at a time by mapping
-// fresh frames just past its current end, up to g_heap_cap. Blocks stay
-// in address order, so "the next block" is always `offset +
-// sizeof(header) + size` - no separate `next` pointer needed, and
-// forward-coalescing two adjacent free blocks is just folding one
-// header's size into its neighbor's.
+// coalesce on free) built on frames.c's alloc_frame() + paging.c's
+// map_page(): instead of a fixed 1MB .bss arena, the heap starts small
+// and grows a chunk at a time by mapping fresh frames just past its
+// current end, up to g_heap_cap. Blocks stay in address order, so "the
+// next block" is always `offset + sizeof(header) + size` - no separate
+// `next` pointer needed, and forward-coalescing two adjacent free blocks
+// is just folding one header's size into its neighbor's.
 
-import "frames.mc";
-import "paging.mc";
+#include "heap.h"
+#include "frames.h"
+#include "paging.h"
 
-struct block_header {
-    u64 size;    // usable bytes *after* this header, not counting the header itself
+typedef struct {
+    u64 size;  // usable bytes *after* this header, not counting the header itself
     bool free;
-}
+} block_header;
 
 // A dedicated virtual region, well clear of both boot.s's static 1GB
 // identity map (0..0x40000000) and the `map` shell command's demo page
 // at 0x40000000 - nothing else claims this address.
-u64 g_heap_base = 0x50000000;
-u64 g_heap_size;       // bytes currently mapped/usable, grows over time
-u64 g_heap_cap;         // hard cap on growth, so a runaway allocator can't eat every frame
-bool g_heap_inited;
+static const u64 HEAP_BASE = 0x50000000;
+u64 g_heap_size;  // bytes currently mapped/usable, grows over time
+u64 g_heap_cap;   // hard cap on growth, so a runaway allocator can't eat every frame
+static bool g_heap_inited;
 void* g_last_alloc;
 
-block_header* block_at(u64 offset) {
-    return (block_header*) (g_heap_base + offset);
+static block_header* block_at(u64 offset) {
+    return (block_header*) (HEAP_BASE + offset);
 }
 
 // Grows the heap by at least `min_extra` bytes (rounded up to whole
@@ -51,13 +50,13 @@ bool heap_grow(u64 min_extra) {
     u64 mapped = 0;
     while (mapped < chunk) {
         void* frame = alloc_frame();
-        if (frame == null) {
+        if (frame == NULL) {
             return false;
         }
-        u64 vaddr = g_heap_base + g_heap_size + mapped;
-        // Milestone 28: PAGE_NX - the heap is data, never code; nothing
-        // legitimate ever executes from it.
-        if (!map_page(vaddr, (u64) frame, 0x02 | page_nx)) {
+        u64 vaddr = HEAP_BASE + g_heap_size + mapped;
+        // The heap is data, never code; nothing legitimate ever executes
+        // from it.
+        if (!map_page(vaddr, (u64) frame, 0x02 | PAGE_NX)) {
             free_frame(frame);
             return false;
         }
@@ -72,9 +71,9 @@ bool heap_grow(u64 min_extra) {
 // back into one block over whatever's *already* mapped - re-growing
 // here would re-map the same virtual addresses over fresh frames
 // without ever freeing the old ones, leaking a frame per byte remapped.
-void heap_init() {
+void heap_init(void) {
     if (g_heap_size == 0) {
-        g_heap_cap = 16777216;   // 16MB - plenty for a hobby kernel, bounds a runaway allocator
+        g_heap_cap = 16777216;  // 16MB - plenty for a hobby kernel, bounds a runaway allocator
         heap_grow(65536);
     }
     u64 header_size = sizeof(block_header);
@@ -93,14 +92,15 @@ void* kalloc(u64 size) {
     }
     u64 header_size = sizeof(block_header);
 
-    while (true) {
+    for (;;) {
         u64 offset = 0;
         while (offset < g_heap_size) {
             block_header* block = block_at(offset);
             if (block->free && block->size >= size) {
-                // Split off the remainder as a new free block, but only if
-                // there's enough room left for another header plus something
-                // worth having - otherwise just hand over the whole block.
+                // Split off the remainder as a new free block, but only
+                // if there's enough room left for another header plus
+                // something worth having - otherwise just hand over the
+                // whole block.
                 if (block->size >= size + header_size + 16) {
                     u64 remainder_offset = offset + header_size + size;
                     block_header* remainder = block_at(remainder_offset);
@@ -115,34 +115,33 @@ void* kalloc(u64 size) {
             offset = offset + header_size + block->size;
         }
 
-        // Nothing free was big enough - grow and add the new space as one
-        // more free block at the old end, then retry the scan from there.
+        // Nothing free was big enough - grow and add the new space as
+        // one more free block at the old end, then retry the scan from
+        // there.
         u64 old_size = g_heap_size;
         if (!heap_grow(size + header_size)) {
-            return null;
+            return NULL;
         }
         block_header* grown = block_at(old_size);
         grown->size = (g_heap_size - old_size) - header_size;
         grown->free = true;
     }
-    return null;   // unreachable - the loop above only ever exits via return
 }
 
 void kfree(void* ptr) {
-    if (ptr == null) {
+    if (ptr == NULL) {
         return;
     }
     u64 header_size = sizeof(block_header);
     u64 ptr_addr = (u64) ptr;
     // A bogus pointer (e.g. a stale/mistyped address from `free <addr>`)
     // would otherwise underflow this subtraction to a huge offset and
-    // either corrupt unrelated memory or fault - found this the hard way
-    // testing `free <addr>` with an address from a previous build. Ignore
-    // it instead of trusting it.
-    if (ptr_addr < g_heap_base + header_size || ptr_addr >= g_heap_base + g_heap_size) {
+    // either corrupt unrelated memory or fault. Ignore it instead of
+    // trusting it.
+    if (ptr_addr < HEAP_BASE + header_size || ptr_addr >= HEAP_BASE + g_heap_size) {
         return;
     }
-    u64 offset = ptr_addr - g_heap_base - header_size;
+    u64 offset = ptr_addr - HEAP_BASE - header_size;
 
     block_header* block = block_at(offset);
     block->free = true;
@@ -184,7 +183,7 @@ void kfree(void* ptr) {
     }
 }
 
-u64 heap_free_bytes() {
+u64 heap_free_bytes(void) {
     if (!g_heap_inited) {
         heap_init();
     }

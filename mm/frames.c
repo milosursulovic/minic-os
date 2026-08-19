@@ -1,13 +1,15 @@
 // Physical memory: parsing the multiboot memory map (handed to the
 // kernel via EBX at entry, preserved by boot.s into g_multiboot_info_ptr
 // since `_start` takes no parameters) and a frame bitmap allocator built
-// from it - 1 bit per 4KB frame, covering the whole milestone-1
-// identity-mapped 1GB (32768 bytes * 8 bits * 4KB = 1GB). Distinct from
-// heap.mc: that hands out *virtual* bytes within a fixed 1MB arena for
+// from it - 1 bit per 4KB frame, covering the whole boot.s-identity-
+// mapped 1GB (32768 bytes * 8 bits * 4KB = 1GB). Distinct from heap.c:
+// that hands out *virtual* bytes within a dynamically-grown region for
 // kernel data structures; this tracks *physical* frames, the raw
-// material paging.mc's map_page() uses to back new virtual mappings.
+// material paging.c's map_page() uses to back new virtual mappings.
 
-packed struct multiboot_info {
+#include "frames.h"
+
+typedef struct __attribute__((packed)) {
     u32 flags;
     u32 mem_lower;
     u32 mem_upper;
@@ -21,57 +23,57 @@ packed struct multiboot_info {
     u32 syms3;
     u32 mmap_length;
     u32 mmap_addr;
-}
+} multiboot_info;
 
-// `size` is the byte count of the rest of THIS entry, not counting itself
-// - entries aren't necessarily a fixed stride, so `addr` genuinely does
-// sit at an unaligned 4-byte offset by the real spec. Without `packed`,
-// MiniC would insert 4 bytes of padding before `addr` to 8-byte-align it
-// and silently read the wrong bytes - exactly the case `packed` exists for.
-packed struct mmap_entry {
+// `size` is the byte count of the rest of THIS entry, not counting
+// itself - entries aren't necessarily a fixed stride, so `addr` genuinely
+// sits at an unaligned 4-byte offset by the real spec. Without `packed`,
+// the compiler would insert 4 bytes of padding before `addr` to 8-byte-
+// align it and silently read the wrong bytes.
+typedef struct __attribute__((packed)) {
     u32 size;
     u64 addr;
     u64 len;
-    u32 type;   // 1 = available RAM
-}
+    u32 type;  // 1 = available RAM
+} mmap_entry;
 
 u32 g_multiboot_info_ptr;
 
-u8 g_frame_bitmap[32768];
+static u8 g_frame_bitmap[32768];
 u32 g_total_frames;
 u32 g_free_frame_count;
 void* g_last_frame;
 
-void frame_set(u32 frame) {
+static void frame_set(u32 frame) {
     u32 byte_index = frame / 8;
     u8 mask = (u8) (1 << (frame % 8));
     g_frame_bitmap[byte_index] = g_frame_bitmap[byte_index] | mask;
 }
 
-bool frame_test(u32 frame) {
+static bool frame_test(u32 frame) {
     u32 byte_index = frame / 8;
     u8 mask = (u8) (1 << (frame % 8));
     return (g_frame_bitmap[byte_index] & mask) != 0;
 }
 
-void frame_clear(u32 frame) {
+static void frame_clear(u32 frame) {
     u32 byte_index = frame / 8;
     u8 mask = (u8) (1 << (frame % 8));
-    g_frame_bitmap[byte_index] = g_frame_bitmap[byte_index] & (~mask);
+    g_frame_bitmap[byte_index] = g_frame_bitmap[byte_index] & (u8) (~mask);
 }
 
 // Everything starts "used"; the multiboot memory map (type 1 = available
 // RAM) clears the frames that are actually free to hand out. The first
 // 4MB is reserved unconditionally regardless of what the map says -
-// simpler than computing exactly where the kernel image/heap arena/this
+// simpler than computing exactly where the kernel image/heap region/this
 // very bitmap end, and there's plenty of room to spare.
-void frames_init() {
+void frames_init(void) {
     u32 i = 0;
     while (i < 32768) {
         g_frame_bitmap[i] = 255;
         i = i + 1;
     }
-    g_total_frames = 262144;   // 1GB / 4KB
+    g_total_frames = 262144;  // 1GB / 4KB
     g_free_frame_count = 0;
 
     multiboot_info* info = (multiboot_info*) ((u64) g_multiboot_info_ptr);
@@ -103,7 +105,7 @@ void frames_init() {
     }
 }
 
-void* alloc_frame() {
+void* alloc_frame(void) {
     u32 i = 0;
     while (i < g_total_frames) {
         if (!frame_test(i)) {
@@ -114,7 +116,7 @@ void* alloc_frame() {
         }
         i = i + 1;
     }
-    return null;
+    return NULL;
 }
 
 void free_frame(void* addr) {

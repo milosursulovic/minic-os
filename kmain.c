@@ -12,12 +12,11 @@
 #include "drivers/io.h"
 #include "drivers/interrupts_init.h"
 #include "drivers/keyboard.h"
+#include "mm/frames.h"
+#include "mm/paging.h"
+#include "sched/task.h"
+#include "proc/channel.h"
 #include "shell/shell.h"
-
-// Referenced by boot.s (`.extern g_multiboot_info_ptr`) - stashes the
-// multiboot info pointer GRUB/QEMU hand off in EBX, since `_start` takes
-// no parameters.
-u32 g_multiboot_info_ptr;
 
 void _start(void) {
     volatile vga_char* vga = (volatile vga_char*) 0xB8000;
@@ -37,6 +36,27 @@ void _start(void) {
     idt_init();
     pic_remap();
     pit_init();
+    frames_init();
+    read_pml4();
+
+    // Scheduler state must exist *before* interrupts are live - the timer
+    // ISR calls yield() unconditionally now (preemption), and yield()
+    // divides by g_task_count; a timer tick landing between `sti` and
+    // scheduler_init() would hit g_task_count==0.
+    scheduler_init();
+    create_task(&task1_entry);
+    create_task(&task2_entry);
+    create_task(&task3_entry);
+    create_task(&task4_entry);
+    create_isolated_task(&proc_a_entry);
+    create_isolated_task(&proc_b_entry);
+    // g_channel_demo MUST be created first so it keeps channel index 0,
+    // exactly as every existing test/transcript already assumes -
+    // create_channel() just returns g_channel_count at the time of the
+    // call, so creation ORDER is what fixes each channel's index, not
+    // which global variable it's assigned to.
+    g_channel_demo = create_channel();
+    create_isolated_task(&proc_receiver_entry);
 
     __asm__ volatile("sti");
 
