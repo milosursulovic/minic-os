@@ -1,7 +1,7 @@
 // int 0x80 syscall gate. rax = number in, return value out; rdi/rsi/rdx
 // = up to 3 args.
 //
-// 1 print, 3 query handle, 4/5 vfs_read/write, 6 spawn (from a VFS
+// 1 print, 3 query handle (fails for an exited process), 4/5 vfs_read/write, 6 spawn (from a VFS
 // path), 7/8/9 channel send/receive/open, 10 open_process,
 // 11 spawn_builtin (spawn from the kernel-embedded program registry,
 // by index - not a raw pointer, so ring3 can't name an arbitrary
@@ -63,6 +63,9 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
         if (g_objects[obj_index].type == OBJ_PROCESS) {
             int proc_idx = g_objects[obj_index].data_index;
+            if (!g_processes[proc_idx].used) {
+                return (u64) -1;  // exited
+            }
             return (u64) g_processes[proc_idx].task_index;
         }
         return (u64) -1;

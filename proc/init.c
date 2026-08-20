@@ -1,11 +1,16 @@
 // The kernel's first real init process - spawns hello_service.c via
-// spawn_builtin (syscall 11), avoiding the filesystem entirely.
+// spawn_builtin (syscall 11), then supervises it: polls its handle
+// until the exit-aware query (syscall 3) reports it gone, and restarts
+// it once. No yield/sleep syscall exists for ring3 - polling busy-spins.
 
 #include "../types.h"
 
 #define SYS_PRINT 1
+#define SYS_QUERY 3
 #define SYS_SPAWN_BUILTIN 11
+#define SYS_OPEN_PROCESS 10
 
+#define RIGHT_QUERY 1
 #define BUILTIN_HELLO_SERVICE 0
 
 static u64 do_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
@@ -27,8 +32,17 @@ void _start(void) {
     do_syscall(SYS_PRINT, (u64) "init: starting 0x", 1, 0);
 
     u64 child_task_index = do_syscall(SYS_SPAWN_BUILTIN, BUILTIN_HELLO_SERVICE, 0, 0);
-
     do_syscall(SYS_PRINT, (u64) "init: spawned hello_service, task_index=0x", child_task_index, 0);
+
+    u64 handle = do_syscall(SYS_OPEN_PROCESS, child_task_index, RIGHT_QUERY, 0);
+    u64 status;
+    do {
+        status = do_syscall(SYS_QUERY, handle, 0, 0);
+    } while (status != (u64) -1);
+    do_syscall(SYS_PRINT, (u64) "init: hello_service exited, restarting 0x", 1, 0);
+
+    u64 restarted_task_index = do_syscall(SYS_SPAWN_BUILTIN, BUILTIN_HELLO_SERVICE, 0, 0);
+    do_syscall(SYS_PRINT, (u64) "init: restarted hello_service, task_index=0x", restarted_task_index, 0);
 
     for (;;) {
     }

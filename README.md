@@ -136,27 +136,25 @@ every command.
 
 ## Current status
 
-37 milestones shipped, spanning boot → interrupts → heap/paging →
+38 milestones shipped, spanning boot → interrupts → heap/paging →
 scheduler → syscalls/ring3 → per-process isolation → a native File/
 Channel/Process API + POSIX shim → capability/permission hardening →
 PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process → real
-process exit. The first 34 were built in MiniC; the kernel was then
-rewritten by hand into C (see the note at the top of this file).
-Milestone 36 is deliberately narrow: a dedicated ring3 `init` process
-(`proc/init.c`) spawns a real service (`proc/hello_service.c`) via a
-new syscall referencing a small, fixed, kernel-embedded program
-registry - proving a ring3 process can launch another one without
-touching the filesystem, which is still empty on a fresh boot.
-Milestone 37 closes a gap flagged since the earliest process-model
-work: `hello_service.c` now genuinely exits right after starting (a new
-`process_exit` syscall), and the scheduler permanently skips its task
-slot forever after - `ps` shows it as `exited=0x1` while every other
-process stays `exited=0x0`. Resource reclamation (frames, the process
-table slot itself) is deliberately not part of this yet. The existing
-kernel-mode debug shell (`help`/`frames`/`tasks`/`pci`/... - most of it
-touching raw kernel internals no real design should expose to arbitrary
-userspace code directly) deliberately stays exactly as it is; migrating
-it isn't the next step.
+process exit → process supervision. The first 34 were built in MiniC;
+the kernel was then rewritten by hand into C (see the note at the top
+of this file). Milestone 36 added a dedicated ring3 `init` process
+spawning a real service via a kernel-embedded program registry, without
+touching the filesystem. Milestone 37 gave a process a real way to exit
+(`process_exit`, syscall 12) - `ps` shows `exited=0x1` once it does, but
+its resources (frames, table slot) still aren't reclaimed. Milestone 38
+closes the loop: `init` now polls its child's handle (syscall 3, fixed
+to correctly fail once the target has exited, instead of returning a
+stale task_index) and restarts it once it detects the exit - real
+supervision, not just spawn-and-forget. The existing kernel-mode debug
+shell (`help`/`frames`/`tasks`/`pci`/... - most of it touching raw
+kernel internals no real design should expose to arbitrary userspace
+code directly) deliberately stays exactly as it is; migrating it isn't
+the next step.
 
 See [os-docs's Roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for the full
 milestone-by-milestone history with real captured verification output
@@ -200,13 +198,14 @@ for every one of them.
   driver.
 - `spawn_builtin` (syscall 11) can only launch one of a small, fixed,
   compile-time-embedded set of programs (one, today: `hello_service.c`)
-  by index - there's no way for init or anything else to register a
-  new one at runtime, and nothing yet bridges "a real service lives on
-  disk" to this mechanism (that's still `spawn_process_from_path()`/
-  syscall 6, a separate path). `init.c` itself does nothing past
-  spawning its one service - no supervision, no restart when a service
-  exits (real exit does now exist, milestone 37 - init just never
-  watches for it), no dependency ordering.
+  by index - there's no way for init or anything else to register a new
+  one at runtime, and nothing yet bridges "a real service lives on disk"
+  to this mechanism (that's still `spawn_process_from_path()`/syscall 6,
+  a separate path). `init.c` restarts its one service exactly once
+  (milestone 38) - a real restart-on-exit proof, but not a real
+  supervisor: no restart limit/backoff, no dependency ordering, and a
+  second restart would fail outright anyway once the fixed 4-slot
+  process table fills up (see the next bullet).
 - `File.write()`'s syscall return value has been observed to
   intermittently read back as `-1` even though the write itself
   demonstrably succeeds (a subsequent read/`ls` always shows the
