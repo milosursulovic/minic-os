@@ -38,7 +38,7 @@ CFLAGS := -ffreestanding -m64 -mgeneral-regs-only -mno-red-zone \
 ASM_SRCS := boot/boot.s boot/interrupts.s sched/switch.s syscall/usermode.s
 ASM_OBJS := $(ASM_SRCS:.s=.o)
 
-C_SRCS := $(shell find . -name '*.c' -not -path './proc/ring3prog.c')
+C_SRCS := $(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './.claude/*')
 C_OBJS := $(C_SRCS:.c=.o)
 
 .PHONY: all run iso disk clean

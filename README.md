@@ -1,4 +1,4 @@
-# MiniC kernel
+# MiniC-OS kernel
 
 The start of the OS kernel phase: a multiboot1-compliant kernel image
 that boots to 64-bit long mode, handles real interrupts (timer +
@@ -15,9 +15,9 @@ ring0/ring3 privilege boundary with a working syscall gate (`int 0x80`),
 real per-process address-space isolation (each task can get its own PML4,
 switched on every context switch, with a private region no other task can
 see even at the identical virtual address), a real loader that copies a
-real, `minicc`-compiled MiniC program into a freshly cloned address space
-and schedules it as a genuine preemptible ring3 task (not a MiniC
-function of the *kernel's own* address space pretending), a kernel
+real, compiled program into a freshly cloned address space
+and schedules it as a genuine preemptible ring3 task (not a function of
+the *kernel's own* address space pretending), a kernel
 object model with per-process handle tables (ring3
 code only ever sees a small integer, never a raw kernel pointer, and an
 out-of-range or never-allocated handle is rejected rather than trusted),
@@ -33,16 +33,18 @@ function call, real `process.spawn()` from disk (a second, independently
 loaded ring3 process, its image bytes read through the VFS from a real
 MiniFS file rather than a pointer into the kernel's own image, running
 concurrently with the first thanks to a per-task `TSS.RSP0` fix), a real
-native "File" API - `msg_file.write(...)`/`msg_file.read(...)`, real
-method calls (MiniC's own `obj.method()` syntax) from inside an actual
-ring3 process, wrapping two new syscalls rather than raw syscall
-numbers - real `channel`/`process` methods too (`spawn_trigger.receive()`
-blocking a ring3 process on a real syscall for the first time,
-`child_image.spawn(...)` letting a ring3 process launch another one
-itself, not just the kernel/shell doing it on its behalf), and a thin
-POSIX-shaped shim (`open`/`read`/`write`/`close`, real position-tracking
-across multiple calls) implemented entirely in ring3 MiniC on top of the
-native File API, no kernel changes needed, a real capability/permission
+native "File" API - `file_write(&msg_file, ...)`/`file_read(&msg_file, ...)`
+(a plain function taking an explicit `self` pointer, C's own shape for
+what MiniC once expressed as `msg_file.write(...)` method-call sugar)
+from inside an actual ring3 process, wrapping two new syscalls rather
+than raw syscall numbers - real `channel`/`process` functions too
+(`channel_receive(&spawn_trigger)` blocking a ring3 process on a real
+syscall for the first time, `process_spawn(&child_image, ...)` letting a
+ring3 process launch another one itself, not just the kernel/shell doing
+it on its behalf), and a thin POSIX-shaped shim (`open`/`read`/`write`/
+`close`, real position-tracking across multiple calls) implemented
+entirely in ring3 C on top of the native File API, no kernel changes
+needed, a real capability/permission
 system on top of the handle table (a handle carries fixed rights,
 granted once at open time - a ring3 process handed a receive-only
 channel handle genuinely cannot use it to send, not just "isn't
@@ -84,37 +86,62 @@ sent, not just "something came back"), a real UDP layer (a real pseudo-
 header checksum binding the datagram to its own source/destination
 addresses) with a genuine DNS query to QEMU's own resolver proxy as
 proof - a real answer, from a real upstream DNS resolution, not
-self-validation - and
+self-validation - a real TCP client (the first genuinely stateful
+transport protocol here, and the first to talk to something off the
+local subnet at all - a real 3-way handshake, a real HTTP GET, and a
+real HTTP reply from an actual internet host reached through the SLIRP
+gateway, not a self-contained round trip) with a real DNS-resolved
+target rather than a hardcoded address, and
 runs a minimal
 interactive shell over VGA - all real, all verified
 running in QEMU (byte-for-byte checked via the QEMU monitor's memory dump
 and `sendkey`, not just "it didn't crash").
 
-Writing this surfaced six real MiniC language gaps (char literals, `char`
-arithmetic/comparisons, `sizeof`'s int-width flexibility, `break`/
-`continue`, array-to-`void*` decay, `extern` globals) - all fixed as real
-compiler features rather than left as workarounds; see the
-[minic repo's roadmap](https://github.com/milosursulovic/minic#roadmap)
-for the writeup. `kmain.mc`
-uses all of them directly now (`'a'`, `break`, `c - '0'`, etc.), not the
-numeric-ASCII-code/boolean-flag workarounds it launched with.
+**A note on language history.** Milestones 1 through 34 (everything up to
+and including the networking phase) were built in MiniC, a small
+hand-rolled language with its own compiler (`minicc`, developed
+alongside this kernel in a sibling repo). After milestone 34 shipped,
+the entire kernel - every `.mc` file, without exception - was rewritten
+by hand into freestanding C, and the MiniC compiler and its own docs
+site were retired. This wasn't a change of design philosophy: the
+"no external libraries, everything hand-written" rule below is exactly
+as true today as it always was, the architecture (paging, scheduler,
+syscalls, object/handle model, drivers, filesystem, networking) is
+functionally unchanged, and every milestone's own verification was
+re-run and re-confirmed against the rewritten kernel before it replaced
+the MiniC original. What changed is purely the implementation language,
+for faster day-to-day development. The roadmap below keeps the real
+MiniC-era milestone writeups exactly as they originally shipped (some
+example code blocks below show MiniC's own `type.method(self, args)`
+syntax or `import` statements - these are the real, historically
+accurate MiniC source at the time each milestone landed, not stale
+mistakes) - see "Roadmap past milestone 10" for where the rewrite itself
+is marked. New code from that point on is C: `type_method(self, args)`
+for what used to be a method call, `#include` instead of `import`, a
+real per-file `.h`/`.c` split instead of one flat whole-program
+namespace, and real GCC inline asm instead of MiniC's operand-less
+`asm("...")` staged through global variables.
 
 ## Why there's hand-written assembly here
 
-Multiboot drops you in 32-bit protected mode; this compiler only targets
-x86-64. Getting from one to the other - loading a GDT, building page
+Multiboot drops you in 32-bit protected mode; this kernel runs in 64-bit
+long mode. Getting from one to the other - loading a GDT, building page
 tables, enabling long mode, far-jumping into a 64-bit code segment - is
-program *structure*, below what MiniC's `asm("...")` (a function-body
-statement, no operand binding) can express. Every kernel project hand-
-writes an equivalent of this, even ones written in Rust or Zig. Same
-reasoning covers interrupt entry: saving/restoring full register state
-and normalizing "sometimes the CPU pushes an error code, sometimes it
-doesn't" into one common call is calling-convention plumbing, not
-something a MiniC function body can do to itself. A context switch is
-the same kind of gap: MiniC never keeps a value live in a register
-across a statement boundary, but switching tasks means preserving
-register state *across* what looks like one ordinary call into a
-completely different task's stack.
+program *structure*: which instruction stream the CPU is even executing,
+not a value any function body (C's real inline asm included) computes
+and returns from. Every kernel project hand-writes an equivalent of
+this, even ones written in Rust or Zig. Same reasoning covers interrupt
+entry: saving/restoring full register state and normalizing "sometimes
+the CPU pushes an error code, sometimes it doesn't" into one common call
+is calling-convention plumbing that has to exist *outside* any single
+function's own prologue/epilogue, not something even a `__asm__`
+statement inside a C function can arrange for its own caller. A context
+switch is the same kind of gap: it means preserving one task's register
+state *across* what looks to the C compiler like one ordinary call,
+into a completely different task's stack - real inline asm can bind
+operands and clobbers for a single instruction sequence, but "suspend
+this call stack, resume a different one later" is a control-flow shape
+no C function signature can express for itself.
 
 ## Project layout
 
@@ -594,20 +621,20 @@ shell/            the interactive shell
 ## Building and running
 
 Needs `qemu-system-x86_64` (`sudo apt install qemu-system-x86` on
-Debian/Ubuntu/WSL) and a Linux-built `minicc` from the
-[minic](https://github.com/milosursulovic/minic) repo - `build.sh`
-defaults to `../compiler/build-linux/minicc` (a sibling checkout of that
-repo named `compiler/`), override with `MINICC=/path/to/minicc ./build.sh`
-for any other layout.
+Debian/Ubuntu/WSL) and a real GCC toolchain (`gcc`/`as`/`ld`/`objcopy` -
+developed against gcc 15, any recent GCC works). No sibling checkout of
+anything else is needed - the kernel used to build against a `minicc`
+compiler from a separate `compiler/` repo; since the C rewrite, it's
+just a normal freestanding-C project.
 
 ```bash
-./build.sh          # assembles boot.s, compiles+assembles kmain.mc, links kernel.elf
+./build.sh          # runs `make`: compiles every .c, assembles every .s, links kernel.elf
 ./build.sh run       # also boots it in QEMU (curses display, in-terminal), with a disk attached
 ./build.sh iso       # also packages a GRUB-bootable minic-os.iso
-./build.sh disk      # (re)builds disk.img - a 1MB test disk image (milestone 16+), gitignored
+./build.sh disk      # (re)builds disk.img - a 1MB test disk image, gitignored
 ```
 
-`./build.sh run` builds `disk.img` automatically if it isn't already there (a fixed, regenerated-from-scratch test fixture, not real data - see the ATA driver's writeup below) and attaches it via QEMU's `-drive`. Booting and every command *except* `disk`/`diskwrite` work identically with or without it.
+`build.sh` is a thin wrapper over a real `Makefile` - every `.c` file compiles to its own object with real incremental rebuilds (`gcc -S` to assembly, a `.code64` directive prepended, `as --32` to an ELF32 object - see `CLAUDE.md` for why). `./build.sh run` builds `disk.img` automatically if it isn't already there (a fixed, regenerated-from-scratch test fixture, not real data - see the ATA driver's writeup below) and attaches it via QEMU's `-drive`. Booting and every command *except* `disk`/`diskwrite` work identically with or without it.
 
 ## Running outside QEMU (VirtualBox, VMware, real hardware)
 
@@ -1912,21 +1939,107 @@ milestones 1-10 were each scoped just before starting them:
     expression, and in an array index using a `u16` loop counter instead
     of the established `int` convention), fixed by restructuring rather
     than casting inline. A full regression pass (heap, paging, scheduler,
-    `pci`, `ping`'s own continued correctness) stayed clean.~~ Next up:
-    TCP - a substantially bigger, genuinely separate hard problem (real
-    connection state machine, sequence numbers, retransmission)
-    deserving its own dedicated scoping pass, not a quick follow-on to
-    UDP.
+    `pci`, `ping`'s own continued correctness) stayed clean.~~
+
+    ~~**The MiniC → C rewrite** - right as TCP was about to get its own
+    dedicated scoping pass, the decision was made to retire MiniC (and
+    its own compiler/docs repos) entirely and rewrite this whole kernel
+    by hand into freestanding C first, for faster day-to-day development
+    going forward. Every one of the ~34 `.mc` files (and `shell.mc`, kept
+    around one stage longer than the rest purely as a porting reference)
+    was rewritten and independently re-verified in QEMU against its own
+    already-known-good milestone output before being deleted - not a
+    bulk mechanical translation trusted on faith. `os/CLAUDE.md`'s
+    architecture notes cover the toolchain mechanics (why the build still
+    produces an ELF32 container for genuinely 64-bit code, the `-fPIC`/
+    `-fvisibility=hidden` flags that pipeline needs that MiniC's own
+    simpler codegen never did). One real, C-specific bug was found and
+    fixed during the rewrite: `spawn_process()`'s "jump to byte 0 of the
+    loaded image" loader assumed the entry function always lands first,
+    true for MiniC's own single-pass codegen but not for gcc, which laid
+    out `ring3prog.c`'s functions in a different order - fixed with a
+    dedicated linker section pinning `_start` to offset 0 regardless of
+    source order. Everything else carried over unchanged in behavior:
+    same architecture, same milestones, same verification bar, same "no
+    external libraries" rule - only the implementation language changed.
+    See the "A note on language history" paragraph at the top of this
+    file for the full framing, and the git history for one commit per
+    rewrite stage.~~
+
+    ~~**Milestone 35: a real TCP client, verified with a genuine HTTP GET
+    round trip to a real internet host** - Phase X's seventh step, the
+    first genuinely stateful transport protocol in this kernel and the
+    first time any protocol layer here has talked to something off the
+    local SLIRP subnet. New `net/tcp.c`: `tcp_checksum()` (the same
+    pseudo-header shape UDP's own checksum uses, just protocol number 6
+    and a variable-length segment instead of a fixed 8-byte header),
+    `tcp_build_header()` (a real 20-byte header, no options), and
+    `tcp_fetch()` - one client-only, single-connection, no-retransmission
+    round trip: a real 3-way handshake (SYN, wait for a genuinely
+    matching SYN-ACK - right ACK number, not just "something came back" -
+    then ACK), a real data segment carrying an actual HTTP/1.1 GET
+    request, a receive loop that ACKs each arriving segment and keeps
+    polling until the peer's FIN or the caller's buffer fills, and a
+    best-effort graceful close (FIN/ACK both directions - not required
+    for the milestone's own success criterion, so a close timeout doesn't
+    flip the overall result). Extended `net/dns.c` with a real
+    `dns_resolve_a()` alongside the existing `dns_query()` - actually
+    parses the answer section (handling both a DNS-compression name
+    pointer and a literal one, and skipping past any non-A record like a
+    CNAME rather than assuming the first answer is always the one
+    wanted) instead of just checking the header, so the TCP demo's target
+    is a real, freshly-resolved IP rather than a hardcoded address that
+    could go stale.
+    - **The real routing distinction this milestone had to get right,
+    that no earlier protocol layer here ever needed to**: every previous
+    ARP/ICMP/UDP target (the gateway, the DNS proxy) sat on the local
+    10.0.2.0/24 SLIRP subnet, so ARPing the target IP directly and
+    sending straight to its own MAC always worked. A real internet host
+    doesn't answer ARP requests from this guest at all - `tcp_fetch()`
+    ARP-resolves the GATEWAY's MAC for the Ethernet-level destination
+    while putting the real remote IP in the IP header itself, the same
+    "next hop vs. final destination" distinction every real router relies
+    on. Getting this backwards (ARPing the real target IP) would time out
+    silently with no useful error - worth remembering before any future
+    protocol work assumes "resolve target, send to it" is always correct.
+    - Verified in QEMU, twice, independently: `resolved example.com ->
+    0xac.0x42.0x93.0xf3 tcp_fetch_ok=0x1 response_len=0x200
+    elapsed_ticks=0x34 got_http_status=0x1` and, in a second separate
+    boot, `resolved example.com -> 0x68.0x14.0x17.0x9a tcp_fetch_ok=0x1
+    response_len=0x200 elapsed_ticks=0x4 got_http_status=0x1` - two
+    *different* real IPs (Cloudflare's own round-robin DNS answering
+    differently each time, both independently confirmed as genuine
+    answers for example.com via a real `curl` from this same
+    environment), both producing a complete handshake, a full
+    512-byte real HTTP response (`response_len=0x200` - the receive
+    buffer's own cap, meaning the real reply was at least that long, most
+    likely more given `Transfer-Encoding: chunked`), and a confirmed real
+    `HTTP` status line at the start of it - not "some bytes arrived," a
+    specific, checkable claim about what those bytes actually are. `tasks`
+    run immediately afterward in the same session confirmed the scheduler
+    and every other kernel task stayed healthy through the exchange.
+    - **Deliberately still open**: no retransmission or congestion
+    control (a lost segment just times out, same as every prior protocol
+    layer's "narrowest safe first version" scope), no listening/server
+    side, one connection at a time with no connection table, no options
+    (no window scaling, no SACK), close is best-effort only (a peer that
+    never FINs after the milestone's own success criterion is already met
+    just gets abandoned, not tracked as a real leak anywhere). These are
+    real, substantial follow-on work, not oversights.~~ Next up: Phase IX
+    (capability/permission work + security hardening).
 11. **Service architecture + a real `init`** - the current hardcoded
-    `shell/shell.mc` loop migrates to an actual userspace program once
+    `shell/shell.c` loop migrates to an actual userspace program once
     processes/IPC/VFS exist to support that; async I/O as a cross-cutting
     pass once sync I/O works everywhere.
 
-Self-hosting (`minicc` compiled for MiniC OS's own target, running *on*
-MiniC OS to compile something) isn't one of these phases - it's an
-ongoing checkpoint to try after each major phase, with the real
-prerequisites (native API, real file I/O, real process spawning) landing
-around phase 7-8.
+Self-hosting used to be framed as "`minicc` compiled for MiniC OS's own
+target, running *on* MiniC OS to compile something" - that goal doesn't
+carry over as-is now that MiniC itself is retired; getting a real C
+toolchain running natively on this kernel is a substantially bigger
+undertaking than porting one small hand-rolled compiler was, and isn't
+a near-term goal. The real prerequisites this kernel already has either
+way (native API, real file I/O, real process spawning) mean the door
+isn't closed - just not something to plan around until much later.
 
 ## Known limitations (on purpose, for now)
 
@@ -2247,12 +2360,39 @@ around phase 7-8.
   More device files (task count, free heap/frame counts, etc.) are
   straightforward additions of the same shape whenever something needs
   them.
-- Mount dispatch is a tag (`Mount.backend`) plus `if`/`else`, not
-  function pointers - MiniC has real function-pointer support (used
-  elsewhere in this project, e.g. `examples/funcptr_demo.mc` in the
-  `minic` repo), but this kernel had never exercised one as a struct
-  field/callback under freestanding/no-register-allocation constraints,
-  and this milestone's actual point was proving routing works, not
-  testing that specific language feature under kernel constraints for
-  the first time. Worth revisiting once a third+ backend makes the
-  if/else chain genuinely unwieldy.
+- Mount dispatch is a tag (`backend`) plus `if`/`else`, not function
+  pointers - C obviously supports real function pointers as struct
+  fields/callbacks with no caveats, so this is now purely "hasn't been
+  worth the refactor yet" rather than a language-capability question.
+  Worth revisiting once a third+ backend makes the if/else chain
+  genuinely unwieldy.
+- `File.write()`'s syscall return value has been observed to
+  intermittently read back as `-1` (`0xffffffffffffffff`) even though
+  the write itself demonstrably succeeds - a subsequent `File.read()` or
+  the shell's own `ls` in the same session consistently shows the file
+  present with the correct byte count every time this has been seen.
+  First observed during the post-C-rewrite regression pass (not known
+  to have occurred in the MiniC-era kernel, though it may simply never
+  have been exercised under the same timing). Not reproducible on
+  demand - seen in roughly half of a handful of boots, including at
+  least one with only a single ring3 process running (so not purely a
+  multi-process ATA-controller-contention story, though `disk/ata.c`
+  genuinely has no locking around the shared 0x1F0-0x1F7 port range and
+  that remains a real, separate gap worth closing regardless). Data
+  integrity is unaffected in every observed case; only the reported
+  result is occasionally wrong. Needs the project's own "add diagnostics,
+  reason from what they show" treatment in a future session rather than
+  a guessed fix here.
+- `net/tcp.c` is a client only (no listening/server side), one
+  connection at a time (no connection table - a second concurrent
+  `tcp_fetch()` call would stomp the first's state), and has no
+  retransmission or congestion control at all - a single lost segment
+  anywhere in the exchange just times out via the same tick-bounded
+  budget every other protocol layer in this phase uses, rather than
+  being retried. No TCP options either (no window scaling, no SACK, no
+  MSS negotiation - `TCP_WINDOW` is a fixed, generous constant that's
+  never actually been tested against a real flow-control squeeze). Close
+  is best-effort: if the peer never sends a FIN, the connection is simply
+  abandoned once the milestone's own success criterion (a real handshake
+  plus real data) is already met - nothing tracks this as a leak, since
+  there's no connection table for it to leak out of in the first place.

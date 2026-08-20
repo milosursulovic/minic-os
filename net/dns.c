@@ -106,3 +106,91 @@ bool dns_query(char* hostname) {
 
     return reply_id == 0xABCD && is_response && answer_count > 0;
 }
+
+// Returns how many bytes the NAME field starting at buf[offset] occupies -
+// either a 2-byte compression pointer (top two bits of the first byte set,
+// the standard "point back at the question's own QNAME" DNS uses in every
+// answer record in practice) or a real length-prefixed label sequence
+// (walked exactly like dns_encode_name built one, terminated by a zero
+// length byte). Bounded at 256 iterations for the literal-name path, same
+// reasoning as dns_encode_name's own bound.
+static u16 dns_skip_name(u8* buf, u16 offset) {
+    if ((buf[offset] & 0xC0) == 0xC0) {
+        return 2;
+    }
+    u16 pos = offset;
+    int i = 0;
+    while (i < 256) {
+        u8 label_len = buf[pos];
+        if (label_len == 0) {
+            return (u16) (pos - offset + 1);
+        }
+        pos = (u16) (pos + 1 + label_len);
+        i = i + 1;
+    }
+    return (u16) (pos - offset);
+}
+
+// A real minimal DNS resolver: sends the same kind of query dns_query()
+// does, but actually parses the answer section instead of just checking
+// the header - walks past the (echoed) question section, then each
+// answer record's NAME/TYPE/CLASS/TTL/RDLENGTH/RDATA in turn, returning
+// the first TYPE=1 (A) record's 4-byte address. Real DNS responses
+// sometimes lead with a CNAME before the A record even for a name that
+// has no real alias chain configured (a resolver's own caching/rewriting
+// behavior) - skipping non-A records rather than assuming the first
+// answer is always the one wanted is what makes this correct against a
+// real upstream resolver, not just against SLIRP's own simplest case.
+bool dns_resolve_a(char* hostname, u8* ip_out) {
+    u8 dns_proxy_ip[4];
+    dns_proxy_ip[0] = 10;
+    dns_proxy_ip[1] = 0;
+    dns_proxy_ip[2] = 2;
+    dns_proxy_ip[3] = 3;
+
+    u8 query[96];
+    u16 query_len = dns_build_query(&query[0], 0xBEEF, hostname);
+
+    if (!udp_send(&dns_proxy_ip[0], DNS_PORT, DNS_SRC_PORT, &query[0], query_len)) {
+        return false;
+    }
+
+    u8 reply[256];
+    u16 reply_len = udp_receive(&dns_proxy_ip[0], DNS_PORT, DNS_SRC_PORT, &reply[0], 256);
+    if (reply_len < 12) {
+        return false;
+    }
+
+    u16 reply_id = (((u16) reply[0]) << 8) | ((u16) reply[1]);
+    bool is_response = (reply[2] & 0x80) != 0;
+    u16 answer_count = (((u16) reply[6]) << 8) | ((u16) reply[7]);
+    if (reply_id != 0xBEEF || !is_response || answer_count == 0) {
+        return false;
+    }
+
+    // The question section starts right after the 12-byte header and is
+    // exactly query_len - 12 bytes (RFC 1035 requires the server echo it
+    // back unchanged for the reply to even be valid), so this doesn't
+    // need to re-walk it - just skip straight to the answer section.
+    u16 pos = query_len;
+    u16 record = 0;
+    while (record < answer_count && pos < reply_len) {
+        pos = (u16) (pos + dns_skip_name(&reply[0], pos));
+        if (pos + 10 > reply_len) {
+            return false;
+        }
+        u16 rtype = (((u16) reply[pos]) << 8) | ((u16) reply[pos + 1]);
+        u16 rdlength = (((u16) reply[pos + 8]) << 8) | ((u16) reply[pos + 9]);
+        pos = (u16) (pos + 10);
+        if (rtype == 1 && rdlength == 4 && pos + 4 <= reply_len) {
+            ip_out[0] = reply[pos];
+            ip_out[1] = reply[pos + 1];
+            ip_out[2] = reply[pos + 2];
+            ip_out[3] = reply[pos + 3];
+            return true;
+        }
+        pos = (u16) (pos + rdlength);
+        record = record + 1;
+    }
+    return false;
+}

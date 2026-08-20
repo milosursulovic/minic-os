@@ -27,6 +27,7 @@
 #include "../net/ip.h"
 #include "../net/icmp.h"
 #include "../net/dns.h"
+#include "../net/tcp.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -39,8 +40,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns echo <text>\n");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns tcp echo <text>\n");
 }
 
 static void cmd_ticks(void) {
@@ -763,6 +764,61 @@ static void cmd_dns(void) {
     print_hex(elapsed);
 }
 
+// Milestone 35: a real TCP client - the first genuinely stateful
+// transport protocol in this kernel, verified with a genuine HTTP GET
+// round trip to a real internet host (not QEMU SLIRP's own gateway/DNS
+// proxy - the first time any protocol layer here has talked to
+// something off the local subnet, routed through the gateway at the
+// link layer the way a real off-subnet destination has to be). Resolves
+// example.com's real A record first (net/dns.c's dns_resolve_a() - a
+// dynamic lookup, not a hardcoded IP that could go stale), then
+// connects, sends a real `Connection: close` HTTP/1.1 request, and
+// reports whether a genuine `HTTP/1.1 ...` status line came back - not
+// just "some bytes arrived."
+static void cmd_tcp(void) {
+    u8 ip[4];
+    if (!dns_resolve_a("example.com", &ip[0])) {
+        vga_print("tcp: could not resolve example.com");
+        serial_print("tcp: could not resolve example.com\n");
+        return;
+    }
+    vga_print("resolved example.com -> 0x");
+    serial_print("resolved example.com -> 0x");
+    print_hex(ip[0]);
+    vga_print(".0x");
+    serial_print(".0x");
+    print_hex(ip[1]);
+    vga_print(".0x");
+    serial_print(".0x");
+    print_hex(ip[2]);
+    vga_print(".0x");
+    serial_print(".0x");
+    print_hex(ip[3]);
+
+    const char* request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+    u8 response[512];
+    u32 response_len = 0;
+    u64 start_tick = g_tick_count;
+    bool ok = tcp_fetch(&ip[0], 80, request, (u16) strlen_(request), &response[0], 512, &response_len);
+    u64 elapsed = g_tick_count - start_tick;
+
+    vga_print(" tcp_fetch_ok=0x");
+    serial_print(" tcp_fetch_ok=0x");
+    print_hex((u64) ok);
+    vga_print(" response_len=0x");
+    serial_print(" response_len=0x");
+    print_hex((u64) response_len);
+    vga_print(" elapsed_ticks=0x");
+    serial_print(" elapsed_ticks=0x");
+    print_hex(elapsed);
+
+    bool got_http_status = response_len >= 4
+        && response[0] == 'H' && response[1] == 'T' && response[2] == 'T' && response[3] == 'P';
+    vga_print(" got_http_status=0x");
+    serial_print(" got_http_status=0x");
+    print_hex((u64) got_http_status);
+}
+
 static void cmd_echo(void) {
     char* text = &g_line_buffer[5];  // past "echo "
     vga_print(text);
@@ -844,6 +900,8 @@ void run_command(void) {
         cmd_ping();
     } else if (streq(g_line_buffer, "dns")) {
         cmd_dns();
+    } else if (streq(g_line_buffer, "tcp")) {
+        cmd_tcp();
     } else if (starts_with(g_line_buffer, "echo ")) {
         cmd_echo();
     } else if (g_line_len > 0) {
