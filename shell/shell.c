@@ -24,6 +24,7 @@
 #include "../net/tcp.h"
 #include "../drivers/vbe.h"
 #include "../drivers/mouse.h"
+#include "../gfx/window.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -36,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb mouse arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb mouse arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb mouse win arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb mouse win arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -780,6 +781,77 @@ static void cmd_mouse(void) {
     print_hex((u64) g_mouse_raw_byte_count);
 }
 
+// A real window table + Z-order compositor demo: 2 overlapping windows plus
+// a 3rd standalone one, then a raise, a move, and a close - each step
+// checked by reading the actual composited pixels back, not just trusting
+// the calls succeeded.
+static void cmd_win(void) {
+    bool ok = vbe_init(800, 600);
+    if (!ok) {
+        vga_print("window server init failed - no framebuffer");
+        serial_print("window server init failed - no framebuffer");
+        return;
+    }
+
+    int a = window_create(50, 50, 200, 150, 0x00FF0000, 0x00800000);
+    int b = window_create(150, 120, 200, 150, 0x0000FF00, 0x00008000);
+    int c = window_create(500, 400, 150, 100, 0x000000FF, 0x00000080);
+    compositor_redraw();
+
+    vga_print("win a=0x");
+    serial_print("win a=0x");
+    print_hex((u64) a);
+    vga_print(" b=0x");
+    serial_print(" b=0x");
+    print_hex((u64) b);
+    vga_print(" c=0x");
+    serial_print(" c=0x");
+    print_hex((u64) c);
+
+    vga_print(" overlap_b_on_top=0x");
+    serial_print(" overlap_b_on_top=0x");
+    print_hex((u64) fb_get_pixel(200, 150));
+    vga_print(" a_only=0x");
+    serial_print(" a_only=0x");
+    print_hex((u64) fb_get_pixel(60, 180));
+    vga_print(" b_only=0x");
+    serial_print(" b_only=0x");
+    print_hex((u64) fb_get_pixel(300, 150));
+    vga_print(" c_body=0x");
+    serial_print(" c_body=0x");
+    print_hex((u64) fb_get_pixel(550, 450));
+    vga_print(" bg=0x");
+    serial_print(" bg=0x");
+    print_hex((u64) fb_get_pixel(400, 300));
+
+    window_raise(a);
+    compositor_redraw();
+    vga_print(" overlap_a_raised=0x");
+    serial_print(" overlap_a_raised=0x");
+    print_hex((u64) fb_get_pixel(200, 150));
+
+    window_move(c, 550, 420);
+    compositor_redraw();
+    vga_print(" c_old_after_move=0x");
+    serial_print(" c_old_after_move=0x");
+    print_hex((u64) fb_get_pixel(510, 450));
+    vga_print(" c_new_after_move=0x");
+    serial_print(" c_new_after_move=0x");
+    print_hex((u64) fb_get_pixel(670, 470));
+
+    window_close(b);
+    compositor_redraw();
+    vga_print(" b_gone=0x");
+    serial_print(" b_gone=0x");
+    print_hex((u64) fb_get_pixel(300, 150));
+    vga_print(" a_survives=0x");
+    serial_print(" a_survives=0x");
+    print_hex((u64) fb_get_pixel(200, 150));
+    vga_print(" windows_left=0x");
+    serial_print(" windows_left=0x");
+    print_hex((u64) g_window_zorder_count);
+}
+
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
 // proxy, and resolves an unreachable address (must fail cleanly).
 static void cmd_arp(void) {
@@ -1015,6 +1087,8 @@ void run_command(void) {
         cmd_fb();
     } else if (streq(g_line_buffer, "mouse")) {
         cmd_mouse();
+    } else if (streq(g_line_buffer, "win")) {
+        cmd_win();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
     } else if (streq(g_line_buffer, "ping")) {
