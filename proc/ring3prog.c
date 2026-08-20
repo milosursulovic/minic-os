@@ -27,6 +27,19 @@ typedef struct {
 } process_handle;
 
 typedef struct {
+    int id;
+} window;
+
+typedef struct __attribute__((packed)) {
+    i32 x;
+    i32 y;
+    u32 width;
+    u32 height;
+    u32 body_color;
+    u32 title_color;
+} window_create_args;
+
+typedef struct {
     bool used;
     bool for_writing;
     char* path;
@@ -93,6 +106,38 @@ static bool process_handle_open(process_handle* self, int task_index, int reques
 
 static u64 process_handle_query(process_handle* self) {
     return do_syscall(3, (u64) self->handle, 0, 0);
+}
+
+static bool window_create(window* self, i32 x, i32 y, u32 width, u32 height,
+                           u32 body_color, u32 title_color) {
+    window_create_args args;
+    args.x = x;
+    args.y = y;
+    args.width = width;
+    args.height = height;
+    args.body_color = body_color;
+    args.title_color = title_color;
+    u64 result = do_syscall(26, (u64) &args, 0, 0);
+    if (result == (u64) -1) {
+        return false;
+    }
+    self->id = (int) result;
+    return true;
+}
+
+static bool window_move(window* self, i32 x, i32 y) {
+    u64 result = do_syscall(27, (u64) self->id, (u64) x, (u64) y);
+    return result != (u64) -1;
+}
+
+static bool window_raise(window* self) {
+    u64 result = do_syscall(28, (u64) self->id, 0, 0);
+    return result != (u64) -1;
+}
+
+static bool window_close(window* self) {
+    u64 result = do_syscall(29, (u64) self->id, 0, 0);
+    return result != (u64) -1;
 }
 
 // mode 0 = read, mode 1 = write (flushed as a new file on close).
@@ -368,6 +413,31 @@ void _start(void) {
                 do_syscall(1, (u64) &g_async_buf[0], 0, 0);
             }
         }
+    } else if (trigger_value == 11) {
+        // trigger 11 (ring3win): create/raise/move/close real windows via syscalls.
+        window a;
+        bool created_a = window_create(&a, 50, 50, 200, 150, 0x00FF0000, 0x00800000);
+        do_syscall(1, (u64) "window_create(a) ok=0x", (u64) created_a, 0);
+        do_syscall(1, (u64) "window a.id=0x", (u64) a.id, 0);
+
+        window b;
+        bool created_b = window_create(&b, 150, 120, 200, 150, 0x0000FF00, 0x00008000);
+        do_syscall(1, (u64) "window_create(b) ok=0x", (u64) created_b, 0);
+        do_syscall(1, (u64) "window b.id=0x", (u64) b.id, 0);
+
+        window c;
+        bool created_c = window_create(&c, 600, 50, 100, 100, 0x000000FF, 0x00000080);
+        do_syscall(1, (u64) "window_create(c) ok=0x", (u64) created_c, 0);
+        do_syscall(1, (u64) "window c.id=0x", (u64) c.id, 0);
+
+        bool raised = window_raise(&a);
+        do_syscall(1, (u64) "window_raise(a) ok=0x", (u64) raised, 0);
+
+        bool moved = window_move(&c, 600, 400);
+        do_syscall(1, (u64) "window_move(c) ok=0x", (u64) moved, 0);
+
+        bool closed = window_close(&c);
+        do_syscall(1, (u64) "window_close(c) ok=0x", (u64) closed, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

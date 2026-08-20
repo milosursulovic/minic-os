@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb mouse win arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb mouse win arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win pci nic fb mouse win winlist arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win pci nic fb mouse win winlist arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -645,6 +645,18 @@ static void cmd_ring3_async_tcp(void) {
     serial_print("sent ring3 async-tcp trigger");
 }
 
+// Creates/raises/moves/closes real windows via the window syscalls.
+static void cmd_ring3_window(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0xB);
+    if (!ok) {
+        vga_print("ring3win failed - channel full");
+        serial_print("ring3win failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 window trigger");
+    serial_print("sent ring3 window trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -850,6 +862,34 @@ static void cmd_win(void) {
     vga_print(" windows_left=0x");
     serial_print(" windows_left=0x");
     print_hex((u64) g_window_zorder_count);
+}
+
+// Dumps the real window table's current z-order (bottom to top) - id,
+// position, size. Same introspection discipline as netconns/objs.
+static void cmd_winlist(void) {
+    vga_print("windows: 0x");
+    serial_print("windows: 0x");
+    print_hex((u64) g_window_zorder_count);
+    int i = 0;
+    while (i < g_window_zorder_count) {
+        window* w = &g_windows[g_window_zorder[i]];
+        vga_print(" id=0x");
+        serial_print(" id=0x");
+        print_hex((u64) g_window_zorder[i]);
+        vga_print(" x=0x");
+        serial_print(" x=0x");
+        print_hex((u64) w->x);
+        vga_print(" y=0x");
+        serial_print(" y=0x");
+        print_hex((u64) w->y);
+        vga_print(" w=0x");
+        serial_print(" w=0x");
+        print_hex((u64) w->width);
+        vga_print(" h=0x");
+        serial_print(" h=0x");
+        print_hex((u64) w->height);
+        i = i + 1;
+    }
 }
 
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
@@ -1079,6 +1119,8 @@ void run_command(void) {
         cmd_ring3_async_dns();
     } else if (streq(g_line_buffer, "ring3asynctcp")) {
         cmd_ring3_async_tcp();
+    } else if (streq(g_line_buffer, "ring3win")) {
+        cmd_ring3_window();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {
@@ -1089,6 +1131,8 @@ void run_command(void) {
         cmd_mouse();
     } else if (streq(g_line_buffer, "win")) {
         cmd_win();
+    } else if (streq(g_line_buffer, "winlist")) {
+        cmd_winlist();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
     } else if (streq(g_line_buffer, "ping")) {

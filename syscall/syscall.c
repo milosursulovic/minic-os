@@ -6,7 +6,9 @@
 // (registry index, not a raw pointer), 12 process_exit, 13 handle_close,
 // 14/15 register/unregister_service, 16/17 file_read async/wait,
 // 18/19 file_write async/wait, 20/21 net_ping async/wait, 22/23
-// net_dns async/wait, 24/25 net_tcp_fetch async/wait.
+// net_dns async/wait, 24/25 net_tcp_fetch async/wait, 26 window_create
+// (pointer to a packed args struct - too many fields for 3 registers),
+// 27/28/29 window_move/raise/close.
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -21,6 +23,17 @@
 #include "../disk/vfs.h"
 #include "../mm/paging.h"
 #include "../mm/frames.h"
+#include "../drivers/vbe.h"
+#include "../gfx/window.h"
+
+typedef struct __attribute__((packed)) {
+    i32 x;
+    i32 y;
+    u32 width;
+    u32 height;
+    u32 body_color;
+    u32 title_color;
+} window_create_args;
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -590,6 +603,43 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
             return (u64) -1;
         }
         return (u64) response_len;
+    }
+    if (num == 26) {
+        if (!g_fb_enabled) {
+            vbe_init(800, 600);
+        }
+        window_create_args* args = (window_create_args*) a1;
+        int id = window_create(args->x, args->y, args->width, args->height,
+                                args->body_color, args->title_color);
+        if (id < 0) {
+            return (u64) -1;
+        }
+        compositor_redraw();
+        return (u64) id;
+    }
+    if (num == 27) {
+        bool ok = window_move((int) a1, (i32) a2, (i32) a3);
+        if (!ok) {
+            return (u64) -1;
+        }
+        compositor_redraw();
+        return 0;
+    }
+    if (num == 28) {
+        bool ok = window_raise((int) a1);
+        if (!ok) {
+            return (u64) -1;
+        }
+        compositor_redraw();
+        return 0;
+    }
+    if (num == 29) {
+        bool ok = window_close((int) a1);
+        if (!ok) {
+            return (u64) -1;
+        }
+        compositor_redraw();
+        return 0;
     }
     return (u64) -1;  // unknown syscall
 }
