@@ -30,7 +30,12 @@
 // net_ping_wait (blocks until the ping resolves or times out, returns
 // ok/fail), 22 net_dns_async (same worker/pool as net_ping_async, a
 // second request kind), 23 net_dns_wait (blocks until the resolve
-// completes, copies the resolved IP into the caller's own buffer).
+// completes, copies the resolved IP into the caller's own buffer), 24
+// net_tcp_fetch_async (a real handshake+request+receive-loop+close, as
+// one atomic async operation, on its own separate worker/pool from
+// ping/DNS - a full fetch runs several times longer than either), 25
+// net_tcp_fetch_wait (blocks until the fetch completes, copies the
+// response into the caller's own buffer).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -41,6 +46,7 @@
 #include "../proc/channel.h"
 #include "../proc/io_request.h"
 #include "../proc/net_request.h"
+#include "../proc/net_tcp_request.h"
 #include "../disk/vfs.h"
 #include "../mm/paging.h"
 #include "../mm/frames.h"
@@ -540,6 +546,79 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         free_object(obj_index);
         free_handle(caller_process, handle_idx);
         return (u64) ok;
+    }
+    if (num == 24) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        u64 packed = a1;
+        u16 target_port = (u16) (packed & 0xFFFF);
+        u32 packed_ip = (u32) (packed >> 16);
+        u8 target_ip[4];
+        target_ip[0] = (u8) (packed_ip >> 24);
+        target_ip[1] = (u8) (packed_ip >> 16);
+        target_ip[2] = (u8) (packed_ip >> 8);
+        target_ip[3] = (u8) packed_ip;
+        char* payload = (char*) a2;
+        u16 payload_len = (u16) a3;
+        int slot = alloc_net_tcp_request(&target_ip[0], target_port, payload, payload_len);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_NET_TCP_REQUEST, slot);
+        if (obj_index < 0) {
+            free_net_tcp_request(slot);
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, 0);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            free_net_tcp_request(slot);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 25) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_NET_TCP_REQUEST) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        net_tcp_request_wait(slot);
+        bool ok = g_net_tcp_requests[slot].ok;
+        u32 response_len = g_net_tcp_requests[slot].response_len;
+        if (response_len > 0) {
+            u8* buf = (u8*) a2;
+            u32 max_len = (u32) a3;
+            u32 n = response_len;
+            if (n > max_len) {
+                n = max_len;
+            }
+            u32 i = 0;
+            while (i < n) {
+                buf[i] = g_net_tcp_requests[slot].response[i];
+                i = i + 1;
+            }
+        }
+        free_net_tcp_request(slot);
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
+        if (!ok) {
+            return (u64) -1;
+        }
+        return (u64) response_len;
     }
     return (u64) -1;  // unknown syscall
 }

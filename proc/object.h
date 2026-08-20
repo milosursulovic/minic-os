@@ -8,6 +8,7 @@
 #define OBJ_CHANNEL 2
 #define OBJ_IO_REQUEST 3
 #define OBJ_NET_PING_REQUEST 4
+#define OBJ_NET_TCP_REQUEST 5
 
 typedef struct {
     bool used;

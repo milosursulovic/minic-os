@@ -353,6 +353,38 @@ void _start(void) {
                 | ((u64) resolved_ip[2] << 8) | (u64) resolved_ip[3];
             do_syscall(1, (u64) "resolved IP (packed) 0x", packed_ip, 0);
         }
+    } else if (trigger_value == 10) {
+        // trigger 10 (ring3asynctcp): the third ring3-facing network
+        // capability, and the first to chain two async operations - a
+        // real DNS resolve, then a real TCP fetch of the resolved
+        // address, both async, with real work interleaved around each.
+        u64 dns_handle = do_syscall(22, (u64) "example.com", 0, 0);
+        do_syscall(1, (u64) "net_dns_async() got handle 0x", dns_handle, 0);
+        u8 resolved_ip[4];
+        u64 dns_result = do_syscall(23, dns_handle, (u64) &resolved_ip[0], 0);
+        do_syscall(1, (u64) "net_dns_wait() got ok=0x", dns_result, 0);
+
+        if (dns_result != 0) {
+            u64 packed_ip = ((u64) resolved_ip[0] << 24) | ((u64) resolved_ip[1] << 16)
+                | ((u64) resolved_ip[2] << 8) | (u64) resolved_ip[3];
+            u64 packed_ip_and_port = (packed_ip << 16) | 80;
+            char* request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+            u64 tcp_handle = do_syscall(24, packed_ip_and_port, (u64) request, 58);
+            do_syscall(1, (u64) "net_tcp_fetch_async() got handle 0x", tcp_handle, 0);
+
+            int n = 0;
+            while (n < 5) {
+                do_syscall(1, (u64) "doing other work, iteration 0x", (u64) n, 0);
+                n = n + 1;
+            }
+
+            u64 tcp_result = do_syscall(25, tcp_handle, (u64) &g_async_buf[0], 63);
+            do_syscall(1, (u64) "net_tcp_fetch_wait() got response_len=0x", tcp_result, 0);
+            if (tcp_result != (u64) -1) {
+                g_async_buf[tcp_result] = 0;
+                do_syscall(1, (u64) &g_async_buf[0], 0, 0);
+            }
+        }
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

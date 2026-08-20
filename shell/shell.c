@@ -34,8 +34,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns pci nic arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns pci nic arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -604,6 +604,20 @@ static void cmd_ring3_async_dns(void) {
     serial_print("sent ring3 async-dns trigger");
 }
 
+// Chains an async DNS resolve into an async TCP fetch of example.com -
+// the third ring3-facing network capability, and the first to compose
+// two async operations back to back.
+static void cmd_ring3_async_tcp(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0xA);
+    if (!ok) {
+        vga_print("ring3asynctcp failed - channel full");
+        serial_print("ring3asynctcp failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 async-tcp trigger");
+    serial_print("sent ring3 async-tcp trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -890,6 +904,8 @@ void run_command(void) {
         cmd_ring3_async_ping();
     } else if (streq(g_line_buffer, "ring3asyncdns")) {
         cmd_ring3_async_dns();
+    } else if (streq(g_line_buffer, "ring3asynctcp")) {
+        cmd_ring3_async_tcp();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {

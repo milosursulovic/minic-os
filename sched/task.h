@@ -52,6 +52,7 @@ void sleep_ticks(u64 ticks);
 u64 channel_receive(int channel_index);
 void io_request_wait(int slot_index);
 void net_ping_request_wait(int slot_index);
+void net_tcp_request_wait(int slot_index);
 
 void task1_entry(void);
 void task2_entry(void);

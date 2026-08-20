@@ -11,6 +11,7 @@
 #include "../proc/channel.h"
 #include "../proc/io_request.h"
 #include "../proc/net_request.h"
+#include "../proc/net_tcp_request.h"
 
 #pragma GCC visibility push(hidden)
 extern void switch_context(u64* old_rsp_out, u64 new_rsp);
@@ -168,6 +169,15 @@ void net_ping_request_wait(int slot_index) {
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_on = &g_net_ping_requests[slot_index].done;
+        yield();
+    }
+}
+
+void net_tcp_request_wait(int slot_index) {
+    while (!g_net_tcp_requests[slot_index].done) {
+        task* self = &g_tasks[g_current_task];
+        self->blocked = true;
+        self->waiting_on = &g_net_tcp_requests[slot_index].done;
         yield();
     }
 }
