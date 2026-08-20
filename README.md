@@ -147,62 +147,99 @@ no C function signature can express for itself.
 
 One folder per subsystem, with room to split further as each one grows
 (e.g. `shell/` gaining one file per command, `isr/` gaining one per
-vector) rather than everything staying flat in a single file:
+vector) rather than everything staying flat in a single file. Each
+subsystem is now a real `.c`/`.h` pair rather than one flat MiniC
+module: C has no whole-program `import` merge the way MiniC did, so a
+file's public surface has to be declared explicitly in its own header
+instead of just being visible kernel-wide by default - `disk/minifs.c`
+exposing a clean `fs_superblock_info()`/`fs_list_entry()` API instead of
+letting `shell.c` reach into its on-disk struct layout directly (see
+below) is the real encapsulation win that split buys, one MiniC's flat
+namespace never offered. Every header in this kernel wraps its
+declarations in `#pragma GCC visibility push(hidden)`/`pop` - not a
+stylistic choice, load-bearing: it matches the Makefile's own
+`-fvisibility=hidden`, and without it a plain `extern` declaration of a
+symbol some other translation unit defines would compile to a
+GOT/PLT-indirected reference that `as --32` can't assemble at all (see
+`CLAUDE.md` for the fuller mechanics). `types.h` (`u8`-`u64`/`i8`-`i64`
+typedefs over `<stdint.h>`, plus `<stdbool.h>`/`<stddef.h>`) is the one
+header nearly every other file includes first.
 
 ```
-kmain.mc          entry point (_start) + the imports wiring everything together
+types.h           u8-u64/i8-i64 typedefs, plus bool/NULL - included almost everywhere
+kmain.c           entry point (_start) + #includes wiring everything together
 boot/             hand-written assembly - below what asm(...) can express
   boot.s            multiboot header, 32-to-64-bit transition. Milestone
                      28: also sets EFER.NXE (bit 11) alongside the
                      existing EFER.LME, in the same rdmsr/wrmsr round
                      trip - required before any page table entry
                      anywhere can safely set the NX bit
-  interrupts.s       ISR/IRQ entry stubs (save/restore, call into MiniC)
+  interrupts.s       ISR/IRQ entry stubs (save/restore, call into C)
   linker.ld          places the multiboot header + code at the 1MB load address
 drivers/          hardware setup and I/O
-  io.mc              VGA text buffer, serial port, raw in/out port I/O.
+  io.c/.h            VGA text buffer, serial port, raw in/out port I/O.
                      Milestone 29: outl/inl (32-bit port I/O), PCI config
-                     space is dword-addressed
-  interrupts_init.mc IDT + 8259 PIC remap + PIT reconfiguration
-  keyboard.mc        scancode table + the shell's line buffer
-  pci.mc             Milestone 29 (Phase X's first step): PCI bus
+                     space is dword-addressed. Real GCC inline asm has
+                     real operand binding, so outb/inb etc. bind the
+                     port/value straight into the instruction now -
+                     no more MiniC-era relay through a module global
+  interrupts_init.c/.h  IDT + 8259 PIC remap + PIT reconfiguration
+  keyboard.c/.h      scancode table + the shell's line buffer
+  pci.c/.h           Milestone 29 (Phase X's first step): PCI bus
                      enumeration via the legacy CONFIG_ADDRESS/
                      CONFIG_DATA mechanism - bus 0 only, no bridge
                      recursion yet (see Known limitations). Milestone
                      30: pci_config_write_dword() (this kernel's first PCI
                      config space WRITE) and pci_read_bar0()
 net/              networking (milestone 30 onward)
-  e1000.mc           the e1000 NIC driver - PCI enable, MMIO register
+  e1000.c/.h         the e1000 NIC driver - PCI enable, MMIO register
                      mapping, real MAC/link-status readback. Milestone
                      31: real TX/RX descriptor rings (packed structs
                      matching the hardware's own 16-byte layout),
                      e1000_send()/e1000_receive() - a genuine packet round
                      trip, verified via a hand-crafted ARP request/reply
                      (see Known limitations for what's still ahead)
-  arp.mc             milestone 32: a real ARP resolver - a genuine
+  arp.c/.h           milestone 32: a real ARP resolver - a genuine
                      cache, arp_resolve() working for any target address,
                      a real tick-bounded timeout on a miss. Client
                      (resolver) only, no responder (see Known limitations)
-  ip.mc              milestone 33: real IPv4 header build + the RFC 791
+  ip.c/.h            milestone 33: real IPv4 header build + the RFC 791
                      checksum algorithm, and g_my_ip - this kernel's own
                      first concept of "my IP address" (still static, no
                      DHCP - see Known limitations)
-  icmp.mc            milestone 33: icmp_ping() - a real echo request/reply
+  icmp.c/.h          milestone 33: icmp_ping() - a real echo request/reply
                      round trip, the minimal verification vehicle for
                      "does IP actually work," the same relationship
                      milestone 31's ARP had to proving TX/RX worked
-  udp.mc             milestone 34: real UDP - udp_checksum() (the real
+  udp.c/.h           milestone 34: real UDP - udp_checksum() (the real
                      pseudo-header algorithm), udp_build_header(),
                      udp_send()/udp_receive()
-  dns.mc             milestone 34: dns_query() - a hand-crafted,
+  dns.c/.h           milestone 34: dns_query() - a hand-crafted,
                      minimal DNS query, the verification vehicle for
                      UDP the same way ICMP's ping was for IP. Not a
-                     real DNS client (see Known limitations)
+                     real DNS client (see Known limitations). Milestone
+                     35 added dns_resolve_a() - real answer-section
+                     parsing (a DNS-compression name pointer or a literal
+                     one, skipping past any non-A record like a CNAME) so
+                     tcp.c's own demo target is a freshly-resolved IP,
+                     not a hardcoded one
+  tcp.c/.h           milestone 35 (Phase X's seventh step): a real TCP
+                     client - tcp_fetch() does a genuine 3-way handshake,
+                     sends one data segment, ACKs each arriving reply
+                     segment until the peer's FIN or the buffer fills,
+                     then a best-effort graceful close. The first
+                     protocol layer here to talk to a host off the local
+                     SLIRP subnet - ARP-resolves the GATEWAY's MAC for
+                     the Ethernet destination while the real remote IP
+                     goes in the IP header, the routing-vs-resolution
+                     distinction no earlier protocol layer needed. Client
+                     only, one connection at a time, no retransmission
+                     (see Known limitations)
 mm/               memory management
-  heap.mc            kalloc/kfree free-list allocator, grows on demand via
-                     mm/paging.mc; every grown page is PAGE_NX (milestone 28)
-  frames.mc          multiboot memory map parser + physical frame bitmap allocator
-  paging.mc          dynamic PML4/PDPT/PD/PT paging, per-process address
+  heap.c/.h          kalloc/kfree free-list allocator, grows on demand via
+                     mm/paging.c; every grown page is PAGE_NX (milestone 28)
+  frames.c/.h        multiboot memory map parser + physical frame bitmap allocator
+  paging.c/.h        dynamic PML4/PDPT/PD/PT paging, per-process address
                      spaces, per-task TSS.RSP0 (set_tss_rsp0). Milestone 26:
                      clone_address_space() strips the user bit from its
                      copy of the kernel's shared PDPT[0]/[1] entries -
@@ -218,19 +255,22 @@ mm/               memory management
                      PAGE_NX-marked page's reported physical address came
                      back with bit 63 still stuck in it)
 lib/              no-libc helpers
-  strings.mc         streq/starts_with/strlen/parse_hex/print_hex/format_hex
+  strings.c/.h       streq/starts_with/strlen_/parse_hex/print_hex/format_hex -
+                     strlen_ rather than strlen, so it can never collide
+                     with the compiler's own builtin knowledge of that
+                     exact name even under -fno-builtin
 isr/              interrupt dispatch
-  isr.mc             interrupt_handler, called from interrupts.s's stubs.
+  isr.c/.h           interrupt_handler, called from interrupts.s's stubs.
                      Milestone 28: vector 14 (page fault) now also prints
                      the raw error code - bit 4 distinguishes an
                      instruction-fetch (NX) violation from a read/write one
 sched/            preemptive task scheduler
   switch.s           hand-written context switch (below what asm(...) can express)
-  task.mc            Task table (each with its own CR3 + TSS.RSP0), create_task/
-                     yield/sleep/channel_receive, eight demo tasks (four processes)
+  task.c/.h          Task table (each with its own CR3 + TSS.RSP0), create_task/
+                     yield/sleep_ticks/channel_receive, eight demo tasks (four processes)
 syscall/          ring0/ring3 boundary
   usermode.s         hand-written ring3 entry (below what asm(...) can express)
-  syscall.mc         syscall dispatcher: print, handle-query, vfs_read/
+  syscall.c/.h       syscall dispatcher: print, handle-query, vfs_read/
                      vfs_write (milestone 22, numbers 4/5), spawn/
                      channel_send/channel_receive (milestone 23, numbers
                      6/7/8 - channel_receive is this kernel's first
@@ -248,76 +288,118 @@ syscall/          ring0/ring3 boundary
                      rights intersected against what's actually
                      grantable
 proc/             process loading + the kernel object model + IPC
-  ring3prog.mc       a real, minicc-compiled MiniC ring3 "program" -
-                     the loaded blob; see ring3.ld/ring3blob.s for how a
-                     compiled program's separate ELF sections get
-                     flattened into the one contiguous blob the loader
-                     below expects. As of milestone 22, also the first
-                     real use of MiniC's method-call syntax for
-                     something real: a `file` struct with `.write()`/
-                     `.read()` methods wrapping the new syscalls.
-                     Milestone 23 added `channel`/`process` the same
-                     way - `.receive()` blocks on a real syscall until
-                     the shell's `ring3go` command triggers it, then
-                     `.spawn()` launches a second copy of this same
-                     blob as an independent process. Milestone 24 added
-                     a thin POSIX shim (open/read/write/close, plain
-                     free functions) entirely in this file, layered on
-                     top of File - no new syscalls, no kernel changes.
-                     Milestone 25 added `channel.open()`, and deliberately
-                     exercises an unauthorized `channel.send()` on the
-                     resulting receive-only handle to prove real rights
-                     enforcement, not just handle-vs-index indirection
-  ring3.ld           standalone linker script for ring3prog.mc's own
+  ring3prog.c        a real, gcc-compiled ring3 "program" - the loaded
+                     blob; see ring3.ld/ring3blob.s for how a compiled
+                     program's separate ELF sections get flattened into
+                     the one contiguous blob the loader below expects.
+                     As of milestone 22, also the first real use of the
+                     native File API for something real: a `file` struct
+                     with `file_write(&self, ...)`/`file_read(&self, ...)`
+                     wrapping the new syscalls - plain C functions taking
+                     an explicit `self` pointer (MiniC's own version of
+                     this file used real `.write()`/`.read()` method-call
+                     syntax on the same struct; C has no method-call
+                     sugar, so `type_method(&self, args)` is this
+                     codebase's standing convention for it now, e.g.
+                     `channel_send(&spawn_trigger, value)`). Milestone 23
+                     added `channel`/`process` the same way -
+                     `channel_receive(&self)` blocks on a real syscall
+                     until the shell's `ring3go` command triggers it,
+                     then `process_spawn(&self, ...)` launches a second
+                     copy of this same blob as an independent process.
+                     Milestone 24 added a thin POSIX shim (open/read/
+                     write/close, plain free functions matching POSIX's
+                     own shape rather than extending the native one)
+                     entirely in this file, layered on top of File - no
+                     new syscalls, no kernel changes. Milestone 25 added
+                     `channel_open(&self, ...)`, and deliberately
+                     exercises an unauthorized `channel_send(&self, ...)`
+                     on the resulting receive-only handle to prove real
+                     rights enforcement, not just handle-vs-index
+                     indirection. Real GCC inline asm has real operand
+                     binding, so `do_syscall()` passes its arguments
+                     straight into `rax`/`rdi`/`rsi`/`rdx` via register
+                     variables - none of the MiniC-era global-staging
+                     trick every `asm(...)` block here used to need. See
+                     `ring3.ld` below for a genuine bug the C rewrite hit
+                     compiling this file
+  ring3.ld           standalone linker script for ring3prog.c's own
                      link (keeps .text/.rodata/.data/.bss contiguous;
                      build.sh's objcopy step forces .bss to be
                      represented as real zero bytes too, see milestone
-                     24's bug notes below)
+                     24's bug notes below). Also pins `_start` to a
+                     dedicated `.text.start` section at offset 0 - a real
+                     bug found during the C rewrite: spawn_process()
+                     always jumps to byte 0 of the loaded image, which
+                     happened to always be the entry point under MiniC's
+                     own single-pass codegen but isn't guaranteed under
+                     gcc, which placed a different function first once
+                     this file grew past one function. `.text.start`
+                     (paired with `__attribute__((section(".text.start")))`
+                     directly on `_start()` in ring3prog.c) pins it to
+                     offset 0 regardless of source order or any future
+                     gcc reordering
   ring3blob.s        wraps the objcopy'd flat blob in g_test_prog_start/
                      g_test_prog_end, same marker names every earlier
                      milestone's hand-assembled testprog.s exported
-  process.mc         Process table + spawn_process()/spawn_process_from_path():
+  process.c/.h       Process table + spawn_process()/spawn_process_from_path():
                      the real loader, from a pointer range or a VFS path
                      (g_loaded_image_buf is 16KB as of milestone 24, not
-                     4096 - see milestone 24's bug notes below)
-  object.mc          KernelObject table + per-process handle tables;
+                     4096 - see milestone 24's bug notes below). Jumps to
+                     the loaded image's byte 0 as its entry point - see
+                     ring3.ld above for the real bug that assumption hit
+                     once the loaded program was gcc-compiled instead of
+                     MiniC-compiled
+  object.c/.h        KernelObject table + per-process handle tables;
                      milestone 25 gave each `handle` a real `rights`
                      bitmask, fixed forever at grant time - the first
                      step of the roadmap's Phase IX (capability/
                      permission work). Milestone 27 removed
                      resolve_handle() (unused once every caller also
                      needed the handle's rights, not just its object
-                     index - each syscall inlines its own check now)
-  channel.mc         Channel table + channel_send/channel_has_message
+                     index - each syscall inlines its own check now).
+                     `g_handle_tables` is a genuine 2D C array
+                     (`handle g_handle_tables[4][8]`) - process P's
+                     handle H lives at `g_handle_tables[P][H]` directly,
+                     no manual flattening needed
+  channel.c/.h       Channel table + channel_send/channel_has_message
 disk/             storage
-  ata.mc             legacy ATA PIO driver - real sector read/write
-  minifs.mc          MiniFS: a minimal custom filesystem (superblock +
-                     flat directory + contiguous per-file storage)
-  vfs.mc             VFS: path -> mount -> backend routing (tag+if/else)
-  devfs.mc           the "/devices" backend - live kernel state, no disk
+  ata.c/.h           legacy ATA PIO driver - real sector read/write
+  minifs.c/.h        MiniFS: a minimal custom filesystem (superblock +
+                     flat directory + contiguous per-file storage).
+                     Exposes a small `fs_superblock_info()`/
+                     `fs_list_entry()` API for `ls` rather than handing
+                     callers the raw on-disk `superblock`/`dir_entry`
+                     structs - a real encapsulation boundary C's
+                     separate translation units give for free, unlike
+                     the MiniC-era version's flat single-namespace
+                     `import` model where `shell.mc` read `minifs.mc`'s
+                     on-disk structs directly
+  vfs.c/.h           VFS: path -> mount -> backend routing (tag+if/else)
+  devfs.c/.h         the "/devices" backend - live kernel state, no disk
 shell/            the interactive shell
-  shell.mc           cmd* functions + run_command dispatch
+  shell.c/.h         cmd* functions + run_command dispatch
 ```
 
 - **`boot/boot.s`** - the multiboot header and the 32-to-64-bit
   transition, plus stashing EBX (multiboot's pointer to its info
   structure, handed to the kernel at entry and never overwritten since)
-  into a MiniC global before calling `_start` - `_start` takes no
-  parameters, same global-relay trick as `outb`'s port/value. Written
-  directly against the real hardware, not through MiniC. Also where the
-  GDT and TSS live: a ring3 code/data segment pair alongside the
-  original ring0 ones, and a TSS whose `RSP0` field tells the CPU which
-  stack to switch to on any ring3->ring0 transition (interrupt/exception
-  firing while in ring3) - boot.s only ever sets it *once*, to its own
-  dedicated stack (`int_stack_top`, deliberately not the one `_start`'s
-  own C-style call chain runs on - see that label's comment for the real
-  bug that discovery fixed), as a safe initial value before scheduling
-  begins. From milestone 19 on, `mm/paging.mc`'s `set_tss_rsp0()` repoints
-  it per-task at every context switch instead - `tss_start` is exported
-  (`.global`) specifically so that MiniC function can reach it directly.
+  into a real C global (`g_multiboot_info_ptr`) before calling `_start` -
+  `_start` takes no parameters. Written directly against the real
+  hardware, not through C. Also where the GDT and TSS live: a ring3
+  code/data segment pair alongside the original ring0 ones, and a TSS
+  whose `RSP0` field tells the CPU which stack to switch to on any
+  ring3->ring0 transition (interrupt/exception firing while in ring3) -
+  boot.s only ever sets it *once*, to its own dedicated stack
+  (`int_stack_top`, deliberately not the one `_start`'s own C-style call
+  chain runs on - see that label's comment for the real bug that
+  discovery fixed), as a safe initial value before scheduling begins.
+  From milestone 19 on, `mm/paging.c`'s `set_tss_rsp0()` repoints it
+  per-task at every context switch instead - `tss_start` is exported
+  (`.global`) specifically so that C function can reach it directly.
 - **`boot/interrupts.s`** - entry stubs for the exceptions/IRQs the
   kernel handles (divide-by-zero, GPF, page fault, timer, keyboard): save
-  every register, call into MiniC with the vector number + error code,
+  every register, call into C with the vector number + error code,
   restore, `iretq`. Same "below what `asm(...)` can express" reasoning as
   boot.s.
 - **`sched/switch.s`** - `switch_context(old_rsp_out, new_rsp)`: pushes the
@@ -329,7 +411,7 @@ shell/            the interactive shell
   is what makes preemption actually work rather than deadlock - see the
   file's own comment for why it has to live exactly there (the one place
   execution transfers to *any* task, resuming or brand new) and not in
-  MiniC's `yield()`.
+  `task.c`'s `yield()`.
 - **`syscall/usermode.s`** - `run_ring3_test(entry, user_stack)`: builds a
   fake `iretq` frame (the same trick `interrupts.s` already relies on for
   returning *from* an interrupt, just used here to enter ring3 for the
@@ -337,98 +419,109 @@ shell/            the interactive shell
   (no process-teardown mechanism exists yet at all). Milestone 11 also
   had a one-shot "exit" trick here (pop-and-`ret` back to a saved kernel
   rsp, bypassing `isr_syscall`'s `iretq`) for its now-retired one-shot
-  ring3 demo - removed in milestone 13, see `proc/process.mc`'s comment
+  ring3 demo - removed in milestone 13, see `proc/process.c`'s comment
   for why keeping it around actively conflicted with real per-task ring3.
-- **`proc/ring3prog.mc`** - the loaded ring3 "program": real MiniC, compiled
-  by `minicc --freestanding`, as of milestone 21 (`proc/testprog.s`, a
-  hand-assembled version, is what this replaced). Same behavior as the
-  old hand-assembled version: two `int 0x80` print syscalls with an
+- **`proc/ring3prog.c`** - the loaded ring3 "program", real C compiled
+  standalone via gcc (see the Makefile's dedicated `proc/ring3prog.bin`
+  rule and `ring3.ld`). Milestone 21 first replaced a hand-assembled
+  version (`proc/testprog.s`) with a compiled one - then MiniC via
+  `minicc --freestanding`, gcc since the C rewrite. Its original
+  behavior still opens every run: two `int 0x80` print syscalls with an
   embedded message, a self-handle query and an invalid-handle query each
-  printed, then spins forever. Still deliberately *not* linked straight
-  into the kernel image the way `kmain.mc` is (that would put its
+  printed - milestones 22-25 (see the tree comment above) then layered
+  the native File/Channel/Process API, the POSIX shim, and the
+  rights-enforcement demos directly on top before it spins forever, all
+  in this one file, no kernel changes. Still deliberately *not* linked
+  straight into the kernel image the way `kmain.c` is (that would put its
   `.text` and `.rodata` in different places than a simple byte-range copy
   can handle - see `proc/ring3.ld`) - the kernel still treats the final
   flattened blob as opaque bytes it never inspects beyond copying them,
-  same as before. Position-independent by construction, same reasoning
-  as ever (every global/string addressed `[rip+label]`, every call a
-  plain relative `call name` - this codegen's ordinary conventions,
-  not anything special-cased for this file), but now that guarantee only
-  holds because `ring3.ld`'s standalone link keeps `.text`/`.rodata`/
-  `.data`/`.bss` contiguous - if this were linked into `kernel.elf`
-  directly instead, `ld` would separate them from every other object's
-  same-named sections and break the RIP-relative offsets between them.
-  `asm(...)`'s lack of operand binding means syscall arguments can't be
-  received in a register and used immediately - `do_syscall()` stages
-  them into globals first, loads them into `rax`/`rdi`/`rsi` from
-  `[rip+global]` right before `int 0x80`, same pattern every other
-  `asm()` block in this kernel already uses.
+  same as before. Position-independent by construction: gcc's `-fPIC`
+  (the Makefile's CFLAGS) addresses every global/string `[rip+label]` and
+  every call as a plain relative `call name`, the same RIP-relative
+  convention MiniC's own codegen always used unconditionally - but that
+  guarantee only holds here because `ring3.ld`'s standalone link keeps
+  `.text`/`.rodata`/`.data`/`.bss` contiguous; if this were linked into
+  `kernel.elf` directly instead, `ld` would separate them from every
+  other object's same-named sections and break the RIP-relative offsets
+  between them.
 - **`proc/ring3.ld`** / **`proc/ring3blob.s`** - the standalone link +
-  `objcopy -O binary` + `.incbin` pipeline that turns `ring3prog.mc`'s
+  `objcopy -O binary` + `.incbin` pipeline that turns `ring3prog.c`'s
   compiled output into one flat, contiguous blob and re-exports it under
   the same `g_test_prog_start`/`g_test_prog_end` symbol names the old
-  hand-assembled `testprog.s` always used - see `build.sh` for the exact
-  steps. Nothing in `proc/process.mc`, `kmain.mc`, or `shell.mc` needed
-  to change: only how those bytes get produced is new.
-- **`proc/process.mc`** - `spawn_process(image_start, image_end, load_vaddr,
+  hand-assembled `testprog.s` always used - see the Makefile for the
+  exact steps. Nothing in `proc/process.c`, `kmain.c`, or `shell.c` needed
+  to change: only how those bytes get produced is new. `ring3.ld`'s
+  `.text.start` section (see the tree comment above for the real bug
+  this fixed) is the one place this pipeline itself changed shape for
+  the C rewrite.
+- **`proc/process.c`** - `spawn_process(image_start, image_end, load_vaddr,
   stack_vaddr)`: the real loader. Clones a fresh address space
-  (`mm/paging.mc`'s `clone_address_space()`), maps and copies the image
+  (`mm/paging.c`'s `clone_address_space()`), maps and copies the image
   into it page by page (writing through each frame's own physical
   address - no need to switch into the new space first, the same
   reasoning `map_page_in()`'s own comment gives), maps a one-page user
   stack, then creates a real scheduler task via `create_task_with_cr3()`
   whose kernel-mode entry (`process_entry_trampoline()`) does exactly one
-  thing: call `run_ring3_test()` with the loaded entry point. From then
-  on the task only ever runs in ring3, preemptible by the timer like any
-  other task - the first time this kernel has proven that, rather than
-  disabling interrupts around a one-shot ring3 excursion.
-- **`kmain.mc`** and its imports - everything past "here's the vector
-  number," in ordinary MiniC. `kmain.mc` itself is just the entry point
-  (`_start`) plus an `import` of every module above, using nothing beyond
-  what the freestanding/systems phase already built (`volatile`,
-  `packed struct`, pointer indexing, `asm(...)` for the handful of raw
-  instructions - `out`/`in`/`lidt`/`sti`/`invlpg`/reading `cr2`/`cr3` -
-  MiniC has no other way to express). `mm/paging.mc`'s `map_page` walks/
-  creates a PML4->PDPT->PD->PT chain of 4KB pages, allocating fresh
-  frames (from `mm/frames.mc`) for any missing table level - reads CR3
-  once at boot into a MiniC global the same way `g_multiboot_info_ptr`
+  thing: call `run_ring3_test()` with the loaded entry point (byte 0 of
+  the image - see `ring3.ld`'s tree comment above for the real bug that
+  assumption surfaced during the C rewrite, fixed there rather than
+  here). From then on the task only ever runs in ring3, preemptible by
+  the timer like any other task - the first time this kernel has proven
+  that, rather than disabling interrupts around a one-shot ring3
+  excursion.
+- **`kmain.c`** and its includes - everything past "here's the vector
+  number," in ordinary C. `kmain.c` itself is just the entry point
+  (`_start`) plus a `#include` of every module's header above, using
+  nothing beyond ordinary freestanding C (`volatile`,
+  `__attribute__((packed))` structs, pointer indexing, real GCC inline
+  asm - `__asm__ volatile(...)` with real operand binding, not MiniC's
+  operand-less `asm("...")` staged through globals - for the handful of
+  raw instructions - `out`/`in`/`lidt`/`sti`/`invlpg`/reading `cr2`/`cr3` -
+  freestanding C still has no other syntax for). `mm/paging.c`'s `map_page`
+  walks/creates a PML4->PDPT->PD->PT chain of 4KB pages, allocating fresh
+  frames (from `mm/frames.c`) for any missing table level - reads CR3
+  once at boot into a real C global the same way `g_multiboot_info_ptr`
   works, since every physical address it touches, table pages included,
   lands inside the boot-time flat 1GB identity map and so is directly
   dereferenceable as an ordinary pointer, no temporary-mapping trick
-  needed. `mm/frames.mc`'s multiboot parser uses `MultibootInfo`/
-  `MmapEntry`, both `packed struct` - `MmapEntry` in particular has a
-  genuinely unaligned field by the real spec, exactly the case `packed`
-  exists for. `mm/heap.mc` is what all of that unblocks: `kalloc`
-  starts the heap at a 64KB mapping and grows it a chunk at a time
-  (`alloc_frame` + `map_page`, at a dedicated virtual base well clear of
-  both the static identity map and the `map` command's demo page) once
-  the free list runs dry, up to a 16MB cap - not the fixed `.bss` arena
-  earlier milestones used. `sched/task.mc` is a fixed table of kernel
-  tasks, each with its own `kalloc`'d stack; `create_task()` hand-builds a
-  new task's initial stack to look exactly like what `switch_context()`
-  would have left behind, with the task's entry point as a fake "return
-  address," so the first switch into it lands there via an ordinary
-  `ret`. `yield()` round-robins to the next task - called voluntarily by
-  cooperative tasks, and *also* called from inside `isr/isr.mc`'s timer
-  handler now, which is what makes this preemptive: since
-  `interrupt_handler` is just an ordinary nested MiniC call on whichever
+  needed. `mm/frames.c`'s multiboot parser uses `multiboot_info`/
+  `mmap_entry`, both `__attribute__((packed))` - `mmap_entry` in
+  particular has a genuinely unaligned field by the real spec, exactly
+  the case `packed` exists for. `mm/heap.c` is what all of that unblocks:
+  `kalloc` starts the heap at a 64KB mapping and grows it a chunk at a
+  time (`alloc_frame` + `map_page`, at a dedicated virtual base well
+  clear of both the static identity map and the `map` command's demo
+  page) once the free list runs dry, up to a 16MB cap - not the fixed
+  `.bss` arena earlier milestones used. `sched/task.c` is a fixed table
+  of kernel tasks, each with its own `kalloc`'d stack; `create_task()`
+  hand-builds a new task's initial stack to look exactly like what
+  `switch_context()` would have left behind, with the task's entry point
+  as a fake "return address," so the first switch into it lands there via
+  an ordinary `ret`. `yield()` round-robins to the next task - called
+  voluntarily by cooperative tasks, and *also* called from inside
+  `isr/isr.c`'s timer handler now, which is what makes this preemptive:
+  since `interrupt_handler` is just an ordinary nested C call on whichever
   task's stack the CPU happened to interrupt, calling `yield()` from
   inside it suspends that call exactly like a voluntary `yield()` would -
   the timer's full trap frame (pushed by `interrupts.s` below it on the
   stack) rides along for free and gets `iretq`'d correctly whenever the
-  ring cascades back around to it. `sleep(ticks)` adds real blocking on
-  top: a task marks itself `blocked` with a wake tick and yields away;
-  `yield()`'s task-selection scan skips blocked tasks (waking one up the
-  moment its wake tick arrives) instead of always picking "whoever's
+  ring cascades back around to it. `sleep_ticks(ticks)` adds real blocking
+  on top (named `sleep_ticks`, not `sleep`, to avoid any name collision
+  with the POSIX libc function of that name even though nothing here
+  links libc): a task marks itself `blocked` with a wake tick and yields
+  away; `yield()`'s task-selection scan skips blocked tasks (waking one up
+  the moment its wake tick arrives) instead of always picking "whoever's
   next" - task 0 (the shell) never blocks itself, which is what
   guarantees the scan always finds something runnable. `syscall/
-  syscall.mc`'s `syscall_dispatch(num, arg1, arg2, arg3)` is what
+  syscall.c`'s `syscall_dispatch(num, arg1, arg2, arg3)` is what
   `boot/interrupts.s`'s `isr_syscall` calls for every `int 0x80` - the
   calling convention (`rax` = number in / return value out, `rdi`/`rsi`/
   `rdx` = up to three arguments) is this kernel's own, since going
   through a software interrupt gate rather than the `SYSCALL`/`SYSRET`
   instruction pair means there's no fixed convention to inherit.
   **Milestone 12** added
-  `mm/paging.mc`'s `clone_address_space()`: a fresh PML4 whose entry 0
+  `mm/paging.c`'s `clone_address_space()`: a fresh PML4 whose entry 0
   points at a fresh PDPT that shares PDPT[0] (the static identity map)
   and PDPT[1] (heap/dynamic-demo region) with the kernel's own PDPT -
   literally the same physical sub-tables, so kernel code/stack/heap stay
@@ -441,70 +534,64 @@ shell/            the interactive shell
   `map_page(...)` convenience wrapper for the kernel's own space, and a new
   read-only `translate_in(pml4_phys, vaddr)` walk for verifying which
   physical frame a given address space's mapping actually points at.
-  `sched/task.mc`'s `task` struct gained a `cr3` field; `create_task()`
+  `sched/task.c`'s `task` struct gained a `cr3` field; `create_task()`
   keeps giving new tasks the kernel's own space unchanged, while
   `create_isolated_task()` calls `clone_address_space()` first. `yield()`
-  loads the incoming task's `cr3` (via a `[rip+global]`-relayed `mov cr3`)
-  right before `switch_context()` - safe even while still running on the
-  outgoing task's stack for that one instruction, since PDPT[0]/[1] are
-  identical across every address space. Two demo tasks, `proc_a_entry`/
-  `proc_b_entry`, both map the *same* virtual address (`0x80000000`) in
-  their own private space to their own physical frame and write a
-  different constant there - proving real isolation, not just separate
-  stacks. **Milestone 13** added `proc/process.mc`'s `spawn_process()`,
-  wiring milestones 11 and 12 together into a real loader: `proc/
-  testprog.s` is a hand-assembled, position-independent ring3 program -
-  not a MiniC function, an opaque byte blob - that `spawn_process()`
-  clones a private address space for, maps and copies page by page, and
-  schedules as a genuine task via `create_task_with_cr3()`, whose one-line
-  kernel-mode entry (`process_entry_trampoline()`) calls `run_ring3_test()`
-  and never returns to kernel mode again. This is the first ring3 code in
-  this kernel that runs preemptible, coexisting with ordinary tasks under
-  the same round-robin scheduler, rather than milestone 11's one-shot
-  demo (`cli`'d around the whole thing, now retired - see below). Doing
-  this surfaced a real bug: the retired demo and this new mechanism both
-  used the *same* `TSS.RSP0` stack for ring3->ring0 transitions, safe
-  only as long as at most one such transition could ever be "in flight"
+  loads the incoming task's `cr3` right before `switch_context()` - safe
+  even while still running on the outgoing task's stack for that one
+  instruction, since PDPT[0]/[1] are identical across every address
+  space. Two demo tasks, `proc_a_entry`/`proc_b_entry`, both map the
+  *same* virtual address (`0x80000000`) in their own private space to
+  their own physical frame and write a different constant there - proving
+  real isolation, not just separate stacks. **Milestone 13** added
+  `proc/process.c`'s `spawn_process()`, wiring milestones 11 and 12
+  together into a real loader: `proc/testprog.s` is a hand-assembled,
+  position-independent ring3 program - not a compiled function, an opaque
+  byte blob - that `spawn_process()` clones a private address space for,
+  maps and copies page by page, and schedules as a genuine task via
+  `create_task_with_cr3()`, whose one-line kernel-mode entry
+  (`process_entry_trampoline()`) calls `run_ring3_test()` and never
+  returns to kernel mode again. This is the first ring3 code in this
+  kernel that runs preemptible, coexisting with ordinary tasks under the
+  same round-robin scheduler, rather than milestone 11's one-shot demo
+  (`cli`'d around the whole thing, now retired - see below). Doing this
+  surfaced a real bug: the retired demo and this new mechanism both used
+  the *same* `TSS.RSP0` stack for ring3->ring0 transitions, safe only as
+  long as at most one such transition could ever be "in flight"
   (suspended, not yet resumed) at a time - true for the demo alone, false
   the moment a real preemptible ring3 task could also be mid-suspension
   when the demo fired. Fixed by retiring the demo entirely rather than
-  coordinating two incompatible mechanisms - see `syscall/syscall.mc`'s
+  coordinating two incompatible mechanisms - see `syscall/syscall.c`'s
   comment for the full diagnosis. **Milestone 14** added `proc/
-  object.mc`: a kernel-wide `kernel_object` table plus a *separate*
-  per-process handle table (`g_handle_tables`, flattened to one array since
-  MiniC has no 2D array declarations - process P's handle H lives at
-  `g_handle_tables[P * HANDLES_PER_PROCESS + H]`), the NT-style piece of
-  the long-term plan. `resolve_handle(process_index, handle)` (removed in
-  milestone 27 - see below - once every caller also needed the handle's
-  `rights` field, not just its object index, and inlined the same
-  bounds/existence check directly) was the one place a small
-  ring3-supplied integer got turned into an object index - bounds-
-  checked and existence-checked, never trusted as a raw array index.
-  `spawn_process()` gives every new process a handle to itself for
-  free, guaranteed to land in slot 0 (a fresh handle table is empty, so
-  the first allocation into it always takes slot 0) - "handle 0 =
-  myself," no syscall needed just to discover it. `sched/task.mc`'s
-  `task` gained a `process_index` field (-1 for plain kernel tasks) so
-  `syscall_dispatch` can find *whose* handle table a syscall's handle
-  argument should be resolved against. New syscall number 3 (query
-  handle) returns a process object's `task_index` - arbitrary but real
-  ground truth, independently checkable against the `ps` shell command's
-  own output - or the same `-1` sentinel any invalid handle produces. Writing this surfaced two more
-  real MiniC language gaps (multi-dimensional array declarations,
-  `const`) - fixed the same session in the `minic` repo, then used here
-  to remove `g_handle_tables`' manual flattening and `OBJ_PROCESS`'s
-  only-by-convention constness, the same "go back and remove the
-  workaround once the real feature exists" discipline this project
-  always follows. **Milestone 15** added `proc/channel.mc`: a `channel`
+  object.c`: a kernel-wide `kernel_object` table plus a *separate*
+  per-process handle table (`g_handle_tables[4][8]`, a genuine
+  two-dimensional C array - process P's handle H lives at
+  `g_handle_tables[P][H]`), the NT-style piece of the long-term plan.
+  `resolve_handle(process_index, handle)` (removed in milestone 27 - see
+  below - once every caller also needed the handle's `rights` field, not
+  just its object index, and inlined the same bounds/existence check
+  directly) was the one place a small ring3-supplied integer got turned
+  into an object index - bounds-checked and existence-checked, never
+  trusted as a raw array index. `spawn_process()` gives every new process
+  a handle to itself for free, guaranteed to land in slot 0 (a fresh
+  handle table is empty, so the first allocation into it always takes
+  slot 0) - "handle 0 = myself," no syscall needed just to discover it.
+  `sched/task.c`'s `task` gained a `process_index` field (-1 for plain
+  kernel tasks) so `syscall_dispatch` can find *whose* handle table a
+  syscall's handle argument should be resolved against. New syscall
+  number 3 (query handle) returns a process object's `task_index` -
+  arbitrary but real ground truth, independently checkable against the
+  `ps` shell command's own output - or the same `-1` sentinel any invalid
+  handle produces. **Milestone 15** added `proc/channel.c`: a `channel`
   is a single-slot mailbox (one `u64` message) - `channel_send()` is
   non-blocking (fails outright if the mailbox is already full, rather
   than overwriting an unread message or blocking the sender too - a
   second hard problem, deliberately not tackled here). The one genuinely
-  new mechanism is `sched/task.mc`'s `channel_receive()`: it blocks the
-  calling task exactly the way `sleep()` already does - marks itself
-  blocked, this time with the new `waiting_channel` field set instead of
-  a `wake_tick`, and yields away. `yield()`'s blocked-task scan gained a
-  second wake condition alongside the tick check
+  new mechanism is `sched/task.c`'s `channel_receive()`: it blocks the
+  calling task exactly the way `sleep_ticks()` already does - marks
+  itself blocked, this time with the new `waiting_channel` field set
+  instead of a `wake_tick`, and yields away. `yield()`'s blocked-task
+  scan gained a second wake condition alongside the tick check
   (`channel_has_message(waiting_channel)`) - the exact generalization the
   roadmap called for, reusing milestone 10's blocking mechanism for IPC
   rather than inventing a second one next to it. A real bug surfaced
@@ -512,11 +599,11 @@ shell/            the interactive shell
   task1-4 + proc_a/proc_b + the one spawned ring3 process, so the two new
   demo tasks silently failed to create (`create_task_with_cr3` returning
   `false`, unchecked) - fixed by growing the table to 16 with headroom,
-  not just enough for today. **Milestone 16** added `disk/ata.mc`: a
+  not just enough for today. **Milestone 16** added `disk/ata.c`: a
   legacy ATA PIO driver talking directly to the classic ISA IDE ports
   (`0x1F0`-`0x1F7`, primary bus) - the first real storage I/O this
   kernel has ever done, same hand-rolled direct-port-I/O style as VGA/
-  keyboard/PIT before it. `drivers/io.mc` gained `outw`/`inw` (16-bit
+  keyboard/PIT before it. `drivers/io.c` gained `outw`/`inw` (16-bit
   port I/O) since the ATA data port genuinely transfers a sector two
   bytes at a time, not one - every earlier port-I/O user only ever
   needed 8 bits. Polling, not interrupt-driven (one fewer moving part to
@@ -524,97 +611,98 @@ shell/            the interactive shell
   before preemptive), with a *bounded* wait instead of a bare
   `while (busy) {}` - a missing/misconfigured drive fails cleanly after
   ~1,000,000 spins instead of hanging the kernel forever on hardware
-  that isn't there. `build.sh disk` creates a small (1MB, 2048-sector)
-  raw disk image with a known ASCII signature at LBA 1 and zeros
-  everywhere else - not a filesystem yet (that's milestone 17+), just
-  known bytes at known addresses so read/write have something real to
-  check themselves against. **Milestone 17** added `disk/minifs.mc`:
-  MiniFS, a minimal custom filesystem built directly on `ata_read_sector`/
-  `ata_write_sector` - a fixed-layout superblock (LBA 500) + a one-sector,
-  16-entry flat directory (LBA 501, each 32-byte `dir_entry` exactly
-  filling the sector) + a contiguous data region (LBA 502+), chosen
-  specifically clear of milestone 16's own `disk`/`diskwrite` test LBAs
-  so neither regressed. `fs_write_file()` recomputes the next free LBA by
-  scanning existing directory entries each time rather than maintaining
-  a persistent free list - the same "prove the mechanism first" scoping
-  that put a bump allocator before the heap's free list. `sizeof`'s
-  struct-layout guarantees did real work here: `dir_entry`'s `char
-  name[20]` plus two `u32`s plus a `bool`, naturally padded to 32 bytes,
-  is *exactly* what makes 16 entries fill one 512-byte sector precisely -
-  not a coincidence, a deliberate size choice. Verified in QEMU: `mkfs`
-  then two `mkfile`/`cat` round trips, each creating a file whose name
-  and content both embed a running index (`file0.mfs`/`file1.mfs`,
-  distinct content each) - `cat`-ing each one back showed the *correct,
-  distinct* content for both (not the first file's content leaking into
-  the second), and `ls` listed both with matching sizes and a superblock
-  `file_count` that agreed with the actual directory contents. Independently
-  confirmed on the **host** side afterward: reading `disk.img` directly
-  at the superblock, directory, and both files' data LBAs showed the
-  exact same bytes the kernel reported - genuine persistence to the
-  backing store, not just something the kernel believed happened.
-  **Milestone 18** added `disk/vfs.mc` (routing) and `disk/devfs.mc`
-  (a second backend): a basic namespace (`/system`, `/devices`) so
-  `vfs_read`/`vfs_write` can take a real path, find which mount prefix it
-  falls under, strip it, and dispatch to whichever backend owns that
-  mount - tag + if/else on `Mount.backend`, the same dispatch style
-  `proc/object.mc`'s `kernel_object.type` already established, not
-  function pointers (untested in this kernel's freestanding/no-register-
-  allocation constraints, and unnecessary for what this milestone
-  actually needed to prove). `disk/devfs.mc`'s `/devices/ticks` reflects
-  `g_tick_count` live, composed into the caller's buffer on the spot -
-  nothing touches disk for it at all, which is the actual point: the
-  identical `vfs_read()` call reaches two completely different mechanisms
-  depending only on the path prefix, not a renamed MiniFS API. Needed
-  two typeable characters the shell never had before (`/` and `.`, both
-  purely kernel-generated in every earlier command's own output, never
-  typed at the keyboard) - `drivers/keyboard.mc`'s scancode table gained
-  both. Verified in QEMU: `vfscat /system/file0.mfs` (routes to MiniFS,
-  matches the same content `mkfile`/`cat` already proved) and `vfscat
-  /devices/ticks` (routes to devfs, a live hex tick count, no disk
-  touched) back to back - same function, two mechanisms. `vfswrite`
-  writes a fixed file through `vfs_write()` rather than `fs_write_file()`
-  directly; `vfscat`-ing it back, and separately running MiniFS's own
-  `ls` (which has no idea the file arrived via VFS) both confirmed it
-  landed in the exact same underlying MiniFS directory - the two layers
-  genuinely share one filesystem, not parallel storage. **Milestone 19**
-  made "the shell launches a program" genuinely real: `proc/process.mc`'s
-  `spawn_process_from_path(path, load_vaddr, stack_vaddr)` calls `vfs_read()`
-  into a scratch buffer, then hands that range to `spawn_process()`
-  completely unchanged - loading from disk turned out to be nothing more
-  than "get the bytes into RAM first," reusing the whole milestone-13
-  loader as-is rather than needing a second one. The new `install` shell
-  command writes the kernel's own compiled-in test program out to a real
-  MiniFS file (`/system/testprog.bin`) through `vfs_write()`, simulating
-  a program actually being installed on disk; `spawn` reads it back and
-  launches a brand-new, independent instance from those bytes. This is
-  the first time this kernel has ever run *two* ring3-capable processes
-  at once (the milestone-13 boot-time one, still spinning, plus the
-  newly spawned one) - which immediately reproduced the exact `TSS.RSP0`
-  collision README's Known Limitations had been flagging as a
-  prerequisite since milestone 13: a real GPF the moment both existed
-  together, the second process's own syscalls corrupting the first's
-  still-pending suspended state on the one shared RSP0 stack. Fixed for
-  real this time (not deferred again): `sched/task.mc`'s `task` gained a
-  `kernel_stack_top` field - each task's own already-`kalloc`'d stack,
-  otherwise abandoned the moment `run_ring3_test()` iretqs into ring3
-  and never returns through it, reused as that task's *private* RSP0
-  target rather than allocating a separate stack just for this.
-  `yield()` now calls `mm/paging.mc`'s new `set_tss_rsp0()` for the
-  incoming task whenever it's ring3-capable, right alongside the
-  existing `load_cr3()` call - the exact fix the earlier postmortems
-  called for. Verified in QEMU: `spawn` completes cleanly, the new
-  process's own `handle 0 (self) -> task_index` syscall reads back a
-  *different* task index than the original process's, `ps` (extended
-  from showing only process 0 to looping over every real process) lists
-  both with distinct `cr3` values, and the system stays stable through
-  an extended regression pass with both running concurrently.
-  `shell/shell.mc`
-  is the interactive
-  shell (`help`/`clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/
-  `mem`/`reset`/`frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/
-  `objs`/`chan`/`send`/`disk`/`diskwrite`/`mkfs`/`mkfile`/`cat`/`ls`/
-  `vfscat <path>`/`vfswrite`/`install`/`spawn`/`echo <text>`) built on
-  `drivers/keyboard.mc`'s line buffer.
+  that isn't there. `make disk` (via `./build.sh disk`) creates a small
+  (1MB, 2048-sector) raw disk image with a known ASCII signature at LBA 1
+  and zeros everywhere else - not a filesystem yet (that's milestone
+  17+), just known bytes at known addresses so read/write have something
+  real to check themselves against. **Milestone 17** added
+  `disk/minifs.c`: MiniFS, a minimal custom filesystem built directly on
+  `ata_read_sector`/`ata_write_sector` - a fixed-layout superblock (LBA
+  500) + a one-sector, 16-entry flat directory (LBA 501, each 32-byte
+  `dir_entry` exactly filling the sector) + a contiguous data region (LBA
+  502+), chosen specifically clear of milestone 16's own `disk`/
+  `diskwrite` test LBAs so neither regressed. `fs_write_file()`
+  recomputes the next free LBA by scanning existing directory entries
+  each time rather than maintaining a persistent free list - the same
+  "prove the mechanism first" scoping that put a bump allocator before
+  the heap's free list. `sizeof`'s struct-layout guarantees did real work
+  here: `dir_entry`'s `char name[20]` plus two `u32`s plus a `bool`,
+  naturally padded to 32 bytes, is *exactly* what makes 16 entries fill
+  one 512-byte sector precisely - not a coincidence, a deliberate size
+  choice. Verified in QEMU: `mkfs` then two `mkfile`/`cat` round trips,
+  each creating a file whose name and content both embed a running index
+  (`file0.mfs`/`file1.mfs`, distinct content each) - `cat`-ing each one
+  back showed the *correct, distinct* content for both (not the first
+  file's content leaking into the second), and `ls` listed both with
+  matching sizes and a superblock `file_count` that agreed with the
+  actual directory contents. Independently confirmed on the **host** side
+  afterward: reading `disk.img` directly at the superblock, directory,
+  and both files' data LBAs showed the exact same bytes the kernel
+  reported - genuine persistence to the backing store, not just something
+  the kernel believed happened. **Milestone 18** added `disk/vfs.c`
+  (routing) and `disk/devfs.c` (a second backend): a basic namespace
+  (`/system`, `/devices`) so `vfs_read`/`vfs_write` can take a real path,
+  find which mount prefix it falls under, strip it, and dispatch to
+  whichever backend owns that mount - a `backend` tag field plus if/else,
+  the same dispatch style `proc/object.c`'s `kernel_object.type` already
+  established, not function pointers (C obviously supports real function
+  pointers with no caveats MiniC's codegen had - this is now purely
+  "hasn't been worth the refactor yet," see Known limitations).
+  `disk/devfs.c`'s `/devices/ticks` reflects `g_tick_count` live,
+  composed into the caller's buffer on the spot - nothing touches disk
+  for it at all, which is the actual point: the identical `vfs_read()`
+  call reaches two completely different mechanisms depending only on the
+  path prefix, not a renamed MiniFS API. Needed two typeable characters
+  the shell never had before (`/` and `.`, both purely kernel-generated
+  in every earlier command's own output, never typed at the keyboard) -
+  `drivers/keyboard.c`'s scancode table gained both. Verified in QEMU:
+  `vfscat /system/file0.mfs` (routes to MiniFS, matches the same content
+  `mkfile`/`cat` already proved) and `vfscat /devices/ticks` (routes to
+  devfs, a live hex tick count, no disk touched) back to back - same
+  function, two mechanisms. `vfswrite` writes a fixed file through
+  `vfs_write()` rather than `fs_write_file()` directly; `vfscat`-ing it
+  back, and separately running MiniFS's own `ls` (which has no idea the
+  file arrived via VFS) both confirmed it landed in the exact same
+  underlying MiniFS directory - the two layers genuinely share one
+  filesystem, not parallel storage. **Milestone 19** made "the shell
+  launches a program" genuinely real: `proc/process.c`'s
+  `spawn_process_from_path(path, load_vaddr, stack_vaddr)` calls
+  `vfs_read()` into a scratch buffer, then hands that range to
+  `spawn_process()` completely unchanged - loading from disk turned out
+  to be nothing more than "get the bytes into RAM first," reusing the
+  whole milestone-13 loader as-is rather than needing a second one. The
+  new `install` shell command writes the kernel's own compiled-in test
+  program out to a real MiniFS file (`/system/testprog.bin`) through
+  `vfs_write()`, simulating a program actually being installed on disk;
+  `spawn` reads it back and launches a brand-new, independent instance
+  from those bytes. This is the first time this kernel has ever run
+  *two* ring3-capable processes at once (the milestone-13 boot-time one,
+  still spinning, plus the newly spawned one) - which immediately
+  reproduced the exact `TSS.RSP0` collision README's Known Limitations
+  had been flagging as a prerequisite since milestone 13: a real GPF the
+  moment both existed together, the second process's own syscalls
+  corrupting the first's still-pending suspended state on the one shared
+  RSP0 stack. Fixed for real this time (not deferred again): `sched/
+  task.c`'s `task` gained a `kernel_stack_top` field - each task's own
+  already-`kalloc`'d stack, otherwise abandoned the moment
+  `run_ring3_test()` iretqs into ring3 and never returns through it,
+  reused as that task's *private* RSP0 target rather than allocating a
+  separate stack just for this. `yield()` now calls `mm/paging.c`'s new
+  `set_tss_rsp0()` for the incoming task whenever it's ring3-capable,
+  right alongside the existing `load_cr3()` call - the exact fix the
+  earlier postmortems called for. Verified in QEMU: `spawn` completes
+  cleanly, the new process's own `handle 0 (self) -> task_index` syscall
+  reads back a *different* task index than the original process's, `ps`
+  (extended from showing only process 0 to looping over every real
+  process) lists both with distinct `cr3` values, and the system stays
+  stable through an extended regression pass with both running
+  concurrently. `shell/shell.c` is the interactive shell (`help`/
+  `clear`/`ticks`/`alloc`/`bigalloc`/`free`/`free <addr>`/`mem`/`reset`/
+  `frame`/`unframe`/`frames`/`map`/`tasks`/`procs`/`ps`/`objs`/`chan`/
+  `send`/`disk`/`diskwrite`/`mkfs`/`mkfile`/`cat`/`ls`/`vfscat <path>`/
+  `vfswrite`/`install`/`spawn`/`ring3go`/`ring3fault`/`ring3nx`/`pci`/
+  `nic`/`arp`/`ping`/`dns`/`echo <text>`) built on `drivers/keyboard.c`'s
+  line buffer.
 - **`boot/linker.ld`** - places the multiboot header + code at the
   conventional 1MB load address multiboot expects.
 
@@ -669,14 +757,16 @@ For VirtualBox specifically:
 VMware and real hardware (via a USB stick written with `dd` or similar)
 should work the same way, unverified so far.
 
-`build.sh` assembles both files as **32-bit ELF objects** even though
-`kmain.mc`'s code (and `boot.s`'s post-transition half) runs in 64-bit
-long mode - multiboot1's loader (and QEMU's/GRUB's implementation of it)
-only understands a 32-bit ELF *container*. `.code32`/`.code64` are
+The build assembles every object as a **32-bit ELF container** even
+though `kmain.c`'s code (and `boot.s`'s post-transition half) runs in
+64-bit long mode - multiboot1's loader (and QEMU's/GRUB's implementation
+of it) only understands a 32-bit ELF *container*. `.code32`/`.code64` are
 per-region encoding directives, independent of that container format, so
-minicc's output gets a `.code64` directive prepended before assembly (it
-only ever targets hosted 64-bit ELF on its own, so it doesn't emit one
-itself).
+the Makefile compiles each `.c` file to assembly (`gcc -S`) and prepends
+a `.code64` directive before handing it to `as --32` (gcc only ever
+targets hosted 64-bit ELF on its own, so it doesn't emit one itself) -
+see `CLAUDE.md` for the two real wrinkles C introduces here that MiniC's
+own simpler codegen never hit (`-fPIC`/`-fvisibility=hidden`).
 
 To check output without a display, redirect the serial port to a file
 (add `-drive file=disk.img,format=raw,if=ide` too if testing `disk`/
