@@ -22,6 +22,7 @@
 #include "../net/icmp.h"
 #include "../net/dns.h"
 #include "../net/tcp.h"
+#include "../drivers/vbe.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -34,8 +35,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -705,6 +706,56 @@ static void cmd_nic(void) {
     print_hex((u64) link_up);
 }
 
+// Sets an 800x600x32 linear framebuffer, draws a background fill plus a
+// contrasting rect, then reads pixels back (not just the values we sent) to
+// prove real hardware round trips, including exact rect-boundary precision.
+static void cmd_fb(void) {
+    bool ok = vbe_init(800, 600);
+    if (!ok) {
+        vga_print("framebuffer init failed - no Bochs VBE VGA device found");
+        serial_print("framebuffer init failed - no Bochs VBE VGA device found");
+        return;
+    }
+
+    vga_print("fb lfb_phys=0x");
+    serial_print("fb lfb_phys=0x");
+    print_hex((u64) vbe_lfb_phys());
+    vga_print(" vaddr=0x");
+    serial_print(" vaddr=0x");
+    print_hex(g_fb_vaddr);
+    vga_print(" xres=0x");
+    serial_print(" xres=0x");
+    print_hex((u64) vbe_read_reg(1));
+    vga_print(" yres=0x");
+    serial_print(" yres=0x");
+    print_hex((u64) vbe_read_reg(2));
+    vga_print(" bpp=0x");
+    serial_print(" bpp=0x");
+    print_hex((u64) vbe_read_reg(3));
+    vga_print(" pitch=0x");
+    serial_print(" pitch=0x");
+    print_hex((u64) g_fb_pitch);
+
+    fb_fill_rect(0, 0, 800, 600, 0x00001133);
+    fb_fill_rect(100, 100, 200, 150, 0x00FF0000);
+
+    vga_print(" bg=0x");
+    serial_print(" bg=0x");
+    print_hex((u64) fb_get_pixel(0, 0));
+    vga_print(" just_outside=0x");
+    serial_print(" just_outside=0x");
+    print_hex((u64) fb_get_pixel(99, 100));
+    vga_print(" rect_topleft=0x");
+    serial_print(" rect_topleft=0x");
+    print_hex((u64) fb_get_pixel(100, 100));
+    vga_print(" rect_bottomright=0x");
+    serial_print(" rect_bottomright=0x");
+    print_hex((u64) fb_get_pixel(299, 249));
+    vga_print(" past_rect=0x");
+    serial_print(" past_rect=0x");
+    print_hex((u64) fb_get_pixel(300, 250));
+}
+
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
 // proxy, and resolves an unreachable address (must fail cleanly).
 static void cmd_arp(void) {
@@ -936,6 +987,8 @@ void run_command(void) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {
         cmd_nic();
+    } else if (streq(g_line_buffer, "fb")) {
+        cmd_fb();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
     } else if (streq(g_line_buffer, "ping")) {

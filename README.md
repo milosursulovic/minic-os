@@ -6,11 +6,14 @@ paging with per-process address-space isolation, a preemptive
 scheduler, a real ring0/ring3 syscall boundary with a kernel object/
 handle-table capability model, IPC channels, a disk driver with a
 custom filesystem and a small VFS, a native File/Channel/Process API
-with a POSIX-shaped shim on top, and a real networking stack (PCI
+with a POSIX-shaped shim on top, a real networking stack (PCI
 enumeration, an e1000 NIC driver, ARP, IPv4/ICMP, UDP/DNS, and TCP —
-verified with a genuine HTTP round trip to a real internet host). Every
-subsystem is implemented from scratch, verified running in QEMU with a
-concrete, checkable assertion each time — never just "it didn't crash."
+verified with a genuine HTTP round trip to a real internet host), and a
+real graphics framebuffer (a genuine linear framebuffer set via the
+VGA device's own hardware interface, pixels written and read back for
+real, not just VGA text mode). Every subsystem is implemented from
+scratch, verified running in QEMU with a concrete, checkable assertion
+each time — never just "it didn't crash."
 
 Written in hand-written, freestanding C (plus a handful of hand-written
 `.s` files for exactly what's below what C's inline asm can express:
@@ -35,6 +38,9 @@ drivers/          hardware setup and I/O
   interrupts_init.c/.h  IDT + 8259 PIC remap + PIT reconfiguration
   keyboard.c/.h      scancode table + the shell's line buffer
   pci.c/.h           PCI bus enumeration (legacy CONFIG_ADDRESS/CONFIG_DATA)
+  vbe.c/.h           a real linear framebuffer via the Bochs/QEMU VBE
+                     "DISPI" port interface, LFB base from the VGA PCI
+                     device's own BAR0 - pixel read/write, rect fill
 net/              networking
   e1000.c/.h         the e1000 NIC driver - PCI enable, MMIO registers, TX/RX rings
   arp.c/.h           a real ARP resolver with a cache
@@ -212,6 +218,21 @@ internals no real design
 should expose to arbitrary userspace code directly) deliberately stays
 exactly as it is.
 
+The kernel can also drive real graphics now, not just VGA text mode: it
+sets an 800x600, 32-bit-per-pixel linear framebuffer through the VGA
+device's own hardware mode-setting interface, discovers that
+framebuffer's real physical address from the device's own PCI
+configuration space (the same discover-then-map pattern the e1000
+driver already established for its own registers), and maps it into
+kernel address space for direct pixel access. Verified with real
+hardware round trips, not just "a write didn't crash": the mode
+registers are read back from the device after being set (proving the
+hardware actually latched the requested resolution, not just that
+bytes were sent to a port), a filled background and a rect drawn on
+top of it are read back pixel-by-pixel afterward - including the exact
+boundary pixels just inside and just outside the rect - confirming
+precise placement, and a real screen capture shows the expected image.
+
 See [os-docs's Capabilities overview](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for
 a subsystem-by-subsystem breakdown with real captured verification
 output for everything above.
@@ -288,6 +309,11 @@ output for everything above.
   restart-on-exit proof, but not a real supervisor: no restart
   limit/backoff, no dependency ordering, and a second restart would
   fail outright once the fixed 4-slot process table fills up.
+- The framebuffer (`drivers/vbe.c`) is a fixed 800x600x32 mode, set
+  once via a kernel-mode shell command with no ring3-facing syscall at
+  all yet. Only `fb_put_pixel`/`fb_get_pixel`/`fb_fill_rect` exist - no
+  lines, circles, images, fonts/text, or double buffering, and no
+  resolution/mode negotiation beyond the one hardcoded request.
 - `File.write()`'s syscall return value has been observed to
   intermittently read back as `-1` even though the write itself
   demonstrably succeeds (a subsequent read/`ls` always shows the
