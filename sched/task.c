@@ -74,9 +74,7 @@ int create_task_with_cr3(void (*entry)(void), u64 cr3) {
     t->ring3_entry_vaddr = 0;
     t->ring3_user_stack_top = 0;
     t->process_index = -1;    // -1, not 0, so it can't look like g_processes[0]
-    t->waiting_channel = -1;  // -1, not 0, so it can't look like g_channels[0]
-    t->waiting_io_request = -1;  // -1, not 0, so it can't look like g_io_requests[0]
-    t->waiting_net_ping = -1;  // -1, not 0, so it can't look like g_net_ping_requests[0]
+    t->waiting_on = NULL;
     t->kernel_stack_top = stack_top;  // reused as this task's TSS.RSP0 target
     return index;
 }
@@ -107,21 +105,15 @@ void yield(void) {
             continue;  // exited - never runnable again
         }
         if (candidate->blocked) {
-            bool wake = false;
-            if (candidate->waiting_channel >= 0) {
-                wake = channel_has_message(candidate->waiting_channel);
-            } else if (candidate->waiting_io_request >= 0) {
-                wake = g_io_requests[candidate->waiting_io_request].done;
-            } else if (candidate->waiting_net_ping >= 0) {
-                wake = g_net_ping_requests[candidate->waiting_net_ping].done;
+            bool wake;
+            if (candidate->waiting_on != NULL) {
+                wake = *(candidate->waiting_on);
             } else {
                 wake = g_tick_count >= candidate->wake_tick;
             }
             if (wake) {
                 candidate->blocked = false;
-                candidate->waiting_channel = -1;
-                candidate->waiting_io_request = -1;
-                candidate->waiting_net_ping = -1;
+                candidate->waiting_on = NULL;
             }
         }
         if (!candidate->blocked) {
@@ -154,7 +146,7 @@ u64 channel_receive(int channel_index) {
     while (!channel_has_message(channel_index)) {
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
-        self->waiting_channel = channel_index;
+        self->waiting_on = &g_channels[channel_index].full;
         yield();
     }
     u64 value = g_channels[channel_index].message;
@@ -166,7 +158,7 @@ void io_request_wait(int slot_index) {
     while (!g_io_requests[slot_index].done) {
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
-        self->waiting_io_request = slot_index;
+        self->waiting_on = &g_io_requests[slot_index].done;
         yield();
     }
 }
@@ -175,7 +167,7 @@ void net_ping_request_wait(int slot_index) {
     while (!g_net_ping_requests[slot_index].done) {
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
-        self->waiting_net_ping = slot_index;
+        self->waiting_on = &g_net_ping_requests[slot_index].done;
         yield();
     }
 }
