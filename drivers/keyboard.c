@@ -1,8 +1,5 @@
-// The keyboard side of the shell: a hand-built scancode table (set 1,
-// lowercase letters/digits/space/enter only, no shift/modifier handling
-// yet) and the line buffer the IRQ1 handler (isr.c) fills a character at
-// a time. The main loop - not the interrupt handler, kept minimal -
-// processes a line once Enter sets g_line_ready.
+// Scancode set 1 table (lowercase only, no shift/modifiers) and the line buffer
+// the IRQ1 handler (isr.c) fills a character at a time.
 
 #include "keyboard.h"
 
@@ -25,14 +22,11 @@ void init_scancode_table(void) {
     g_scancode_table[0x39] = ' ';
     g_scancode_table[0x1C] = '\n';  // enter -> newline
 
-    // digit row, for typing hex addresses back into `free <addr>`
     g_scancode_table[0x02] = '1'; g_scancode_table[0x03] = '2'; g_scancode_table[0x04] = '3';
     g_scancode_table[0x05] = '4'; g_scancode_table[0x06] = '5'; g_scancode_table[0x07] = '6';
     g_scancode_table[0x08] = '7'; g_scancode_table[0x09] = '8'; g_scancode_table[0x0A] = '9';
     g_scancode_table[0x0B] = '0';
 
-    // VFS paths need '/' and '.' typeable at the shell (`vfscat
-    // /system/file0.mfs`).
     g_scancode_table[0x34] = '.';
     g_scancode_table[0x35] = '/';
 }

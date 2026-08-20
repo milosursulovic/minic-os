@@ -1,20 +1,5 @@
-// A generic kernel object model + per-process handle tables - the
-// NT-style piece of this kernel's architecture. Deliberately not
-// introduced any earlier: a handle only means something once there's a
-// real user/kernel boundary worth protecting (ring3+syscalls) and real
-// per-process state worth wrapping (per-process address spaces) -
-// before that, everything was ring 0 and saw everything anyway, so a
-// handle indirection would have been pure ceremony.
-//
-// Two tables, matching the real NT design this is modeled on: a single
-// kernel-wide object table (g_objects) holding the actual objects, and a
-// SEPARATE table per process (g_handle_tables) of small integers that
-// index into it. Ring3 code only ever sees the small integer - it can
-// never walk straight into g_objects[] itself; every syscall that
-// resolves a handle does its own inline bounds/existence/rights check
-// directly against g_handle_tables rather than through a shared helper,
-// since rights checking needs the handle's `rights` field, not just its
-// object_index.
+// Kernel object table + per-process handle tables (NT-style). Ring3
+// code only ever sees a small integer handle, never a raw object index.
 
 #include "object.h"
 

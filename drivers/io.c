@@ -1,10 +1,4 @@
-// Low-level output: the VGA text buffer, the serial port, and raw port
-// I/O (`in`/`out`). Real GCC inline asm has real operand binding, so
-// unlike the old MiniC version (which had to stage every value through a
-// module-level global before an `asm("...")` block with no operand
-// binding could reach it - see the removed g_out_port/g_out_byte-style
-// relay globals in the kernel's MiniC-era history) this is direct: the
-// value goes straight into the instruction via a real constraint.
+// Low-level output: VGA text buffer, serial port, raw port I/O.
 
 #include "io.h"
 
@@ -71,6 +65,6 @@ void new_line(void) {
     serial_putc('\n');
     g_vga_cursor = ((g_vga_cursor / 80) + 1) * 80;
     if (g_vga_cursor >= 2000) {
-        g_vga_cursor = 80;  // wrap - no real scrolling yet, row 0 stays the boot message
+        g_vga_cursor = 80;  // wrap; row 0 keeps the boot message (no real scrolling yet)
     }
 }

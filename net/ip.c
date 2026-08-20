@@ -1,14 +1,5 @@
-// Milestone 33 (Phase X's fifth step): a real IPv4 layer - header
-// construction, the real one's-complement checksum algorithm (RFC 791),
-// and this kernel's own long-overdue concept of "my IP address."
-//
-// `g_my_ip` used to be a hardcoded literal duplicated wherever a sender IP
-// was needed (net/arp.c's own arp_send_request()) - now one real, named,
-// shared value. Still deliberately static/hardcoded, not DHCP-obtained:
-// this kernel has no real IP configuration mechanism at all yet (see
-// Known limitations) - matches QEMU SLIRP's own conventional default
-// guest address, the same value arp.c's sender-IP field already
-// assumed before this milestone gave it a real name.
+// IPv4 layer: header construction, RFC 791 checksum, and g_my_ip - still
+// static/hardcoded (QEMU SLIRP's default guest address), not DHCP-obtained.
 
 #include "ip.h"
 
@@ -21,11 +12,7 @@ void ip_init(void) {
     g_my_ip[3] = 15;
 }
 
-// The standard IPv4/ICMP checksum: sum every 16-bit word (a trailing odd
-// byte is padded with a zero low byte), fold any carry back into the
-// low 16 bits, then take the one's complement. The same algorithm
-// covers both an IP header and an ICMP message - only the byte range
-// checksummed differs.
+// Sum 16-bit words (odd trailing byte zero-padded), fold carry, one's complement.
 u16 ip_checksum(u8* data, u32 len) {
     u32 sum = 0;
     u32 i = 0;
@@ -43,11 +30,7 @@ u16 ip_checksum(u8* data, u32 len) {
     return (u16) (~sum & 0xFFFF);
 }
 
-// Builds a 20-byte IPv4 header (no options - IHL=5) at out[0..19].
-// Version/IHL, TOS, total length, ID/flags/fragment-offset are all
-// fixed/simple choices appropriate for a single, unfragmented packet -
-// this kernel never needs to fragment anything it sends, since every
-// payload it builds today fits in one frame well under the Ethernet MTU.
+// Builds a 20-byte IPv4 header (no options, unfragmented) at out[0..19].
 void ip_build_header(u8* out, u8* src_ip, u8* dst_ip, u8 protocol, u16 payload_len) {
     out[0] = 0x45;   // version 4, IHL 5 (20 bytes, no options)
     out[1] = 0x00;   // type of service

@@ -1,14 +1,4 @@
-// Milestone 33 (Phase X's fifth step): ICMP echo (ping) - the minimal,
-// natural verification vehicle for "does the IP layer genuinely work,"
-// the same relationship the original hardcoded ARP request had to
-// proving TX/RX worked. A bare IP packet with no upper-layer protocol
-// has nothing that could reply to it; ICMP echo is the smallest real
-// protocol that gets an external, independently-meaningful response.
-//
-// Deliberately just echo request/reply - no other ICMP message types
-// (destination unreachable, time exceeded, etc.), the same "narrowest
-// safe first version" every driver/protocol-layer milestone in this
-// phase has used.
+// ICMP echo (ping) only - no other message types.
 
 #include "icmp.h"
 #include "ip.h"
@@ -20,14 +10,8 @@ static const u8 ICMP_ECHO_REQUEST = 8;
 static const u8 ICMP_ECHO_REPLY = 0;
 static const u8 IP_PROTOCOL_ICMP = 1;
 
-// Resolves target_ip's MAC (reusing arp.c's real resolver - a cache hit
-// here costs nothing), builds a real Ethernet+IPv4+ICMP echo request,
-// sends it, and polls (real g_tick_count-bounded, not a raw spin) for a
-// reply that genuinely matches: right EtherType, right IP protocol,
-// right source IP, right ICMP type, AND the exact identifier/sequence
-// this request sent - not just "something ICMP arrived." Returns false
-// (a real, honest failure) if ARP resolution fails or nothing matching
-// arrives within the timeout.
+// Resolves target_ip's MAC, sends an echo request, and polls (tick-bounded)
+// for a reply matching EtherType/protocol/source IP/type/identifier/sequence.
 bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
     u8 dest_mac[6];
     if (!arp_resolve(target_ip, &dest_mac[0])) {
@@ -94,10 +78,7 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
         if (len > 0) {
             bool is_ip = reply[12] == 0x08 && reply[13] == 0x00;
             if (is_ip) {
-                // IP header assumed IHL=5 (20 bytes, no options) - a
-                // real assumption, safe here since nothing this kernel
-                // ever sends includes options, so nothing it's talking
-                // to has a reason to reply with any either.
+                // Assumes IHL=5 (no options) - safe since we never send options.
                 u8 proto = reply[14 + 9];
                 bool is_icmp = proto == IP_PROTOCOL_ICMP;
                 bool src_matches = reply[14 + 12] == target_ip[0]
@@ -113,8 +94,6 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
                     return true;
                 }
             }
-            // Something else arrived (not a matching echo reply) -
-            // ignore it and keep polling within the remaining budget.
         }
     }
     return false;

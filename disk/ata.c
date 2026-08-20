@@ -1,12 +1,4 @@
-// A legacy ATA (IDE) PIO driver - the first real storage I/O this kernel
-// does. Same hand-rolled, direct-port-I/O style as every earlier driver
-// (VGA/keyboard/PIT): no libc, no BIOS calls, just the raw registers a
-// real IDE controller exposes at the classic ISA port addresses every
-// PC-compatible (including QEMU's default machine type) still wires up
-// for backward compatibility.
-//
-// Deliberately polling, not interrupt-driven - one fewer moving part
-// while proving the basic read/write path works.
+// ATA (IDE) PIO driver, polling not interrupt-driven.
 
 #include "ata.h"
 #include "../drivers/io.h"
@@ -28,12 +20,7 @@ static const u8 ATA_CMD_READ = 0x20;
 static const u8 ATA_CMD_WRITE = 0x30;
 static const u8 ATA_CMD_FLUSH = 0xE7;
 
-// Bounded, not an unconditional `while (busy) {}` - a real IDE
-// controller answers in microseconds, so hitting this cap means
-// something is genuinely wrong (no disk attached, wrong port, a bad
-// QEMU `-drive` flag) and the caller should get a clean failure back
-// instead of the kernel hanging forever waiting on hardware that isn't
-// there.
+// Bounded spin, not `while (busy) {}` - avoids hanging forever if no disk is attached.
 bool ata_wait_ready(void) {
     u32 spins = 0;
     while (spins < 1000000) {
@@ -60,10 +47,7 @@ bool ata_wait_drq(void) {
     return false;
 }
 
-// Selects the primary master drive in LBA28 mode and loads a 28-bit
-// sector address + count into the command block - shared setup for
-// both read and write, which differ only in the command byte and which
-// direction the data port gets used.
+// Shared setup for read/write: selects primary master, LBA28 mode.
 static bool ata_setup(u32 lba, u8 sector_count) {
     if (!ata_wait_ready()) {
         return false;
@@ -77,9 +61,7 @@ static bool ata_setup(u32 lba, u8 sector_count) {
     return true;
 }
 
-// Reads exactly one 512-byte sector into buffer (must have room for
-// 512 bytes). Transfers 256 16-bit words, not 512 bytes one at a time -
-// the data port is genuinely 16 bits wide on real ATA hardware.
+// Transfers 256 16-bit words - the ATA data port is 16 bits wide.
 bool ata_read_sector(u32 lba, u8* buffer) {
     if (!ata_setup(lba, 1)) {
         return false;
@@ -97,10 +79,7 @@ bool ata_read_sector(u32 lba, u8* buffer) {
     return true;
 }
 
-// Writes exactly one 512-byte sector from buffer, then flushes the
-// drive's write cache and waits for that to finish - without this, a
-// read of the same sector immediately after could plausibly still see
-// stale data depending on the (emulated) drive's caching behavior.
+// Flushes the write cache after writing so an immediate re-read sees fresh data.
 bool ata_write_sector(u32 lba, u8* buffer) {
     if (!ata_setup(lba, 1)) {
         return false;

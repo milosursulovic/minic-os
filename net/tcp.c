@@ -1,24 +1,9 @@
-// Milestone 35, Phase X's seventh step: a real TCP client - the first
-// genuinely stateful transport protocol in this kernel, and the first
-// time any protocol layer here talks to a host that ISN'T on the local
-// SLIRP subnet (the gateway at 10.0.2.2, the DNS proxy at 10.0.2.3).
-// That matters at the framing level: a real internet host is reached by
-// sending the Ethernet frame to the GATEWAY's MAC address (ARP-resolved,
-// same as every earlier protocol layer) while the IP header's own
-// destination address is the real remote host - routing, not resolution,
-// decides where an off-subnet frame's link-layer destination is, and
-// this is the first file in this kernel that has to make that
-// distinction instead of ARPing the real destination directly (which
-// would just time out - nothing off-subnet ever answers an ARP request
-// from this guest).
+// TCP client only: one connection at a time, no connection table, no
+// listening side, no retransmission/congestion control.
 //
-// Deliberately scoped as a CLIENT only, one connection at a time, no
-// connection table, no listening/server side, no retransmission or
-// congestion control (a lost segment just times out, the same "narrowest
-// safe first version" every earlier protocol-layer milestone in this
-// phase used) - real handshake, real data exchange, and a best-effort
-// graceful close is the whole scope. Retransmission/congestion control
-// is real, substantially separate follow-on work, not attempted here.
+// Off-subnet hosts are reached by sending the frame to the gateway's MAC
+// (ARP-resolved) while the IP header's destination is the real remote host -
+// routing, not ARP, decides the link-layer next hop.
 
 #include "tcp.h"
 #include "ip.h"
@@ -35,17 +20,9 @@ static const u8 TCP_FLAG_RST = 0x04;
 static const u8 TCP_FLAG_PSH = 0x08;
 static const u8 TCP_FLAG_ACK = 0x10;
 
-// Real internet hosts sit off the 10.0.2.0/24 SLIRP subnet - every frame
-// bound for one still has to leave through the gateway at the link
-// layer, same as any real router hop.
 static const u8 GATEWAY_IP[4] = {10, 0, 2, 2};
 
-// The real TCP checksum: a 12-byte pseudo-header (source IP, dest IP, a
-// zero byte, protocol number 6, and the TCP segment length) PLUS the
-// real TCP header+payload - the exact same shape udp.c's own
-// udp_checksum() already established for UDP's pseudo-header, just a
-// different protocol number and covering a variable-length segment
-// instead of a fixed 8-byte header.
+// 12-byte pseudo-header (src/dst IP, protocol 6, segment length) + TCP segment.
 static u16 tcp_checksum(u8* src_ip, u8* dst_ip, u8* segment, u16 segment_len) {
     u8 buf[1500];
     int i = 0;
@@ -71,10 +48,8 @@ static u16 tcp_checksum(u8* src_ip, u8* dst_ip, u8* segment, u16 segment_len) {
     return ip_checksum(&buf[0], total_len);
 }
 
-// Builds a 20-byte TCP header (no options) at out[0..19], optionally
-// followed by `payload` (already placed by the caller at out[20..]) -
-// the checksum has to cover both, so payload_len is passed in rather
-// than the caller filling the checksum field itself.
+// Payload (already placed by the caller at out[20..]) must exist before this runs,
+// since the checksum covers it.
 static void tcp_build_header(u8* out, u16 src_port, u16 dst_port, u32 seq, u32 ack,
                               u8 flags, u16 window, u8* src_ip, u8* dst_ip, u16 payload_len) {
     out[0] = (u8) (src_port >> 8);
@@ -104,18 +79,12 @@ static void tcp_build_header(u8* out, u16 src_port, u16 dst_port, u32 seq, u32 a
     out[17] = (u8) (csum & 0xFF);
 }
 
-// A generous default window - this client never has more than one
-// connection's worth of state in flight and never needs to throttle a
-// real sender, so there's no real flow-control story to get right here.
 static const u16 TCP_WINDOW = 8192;
 
 static const u16 LOCAL_PORT = 43981;
 
-// Sends one segment (SYN/ACK/FIN/PSH combinations, with or without a
-// real payload) to target_ip:target_port over the gateway's own MAC -
-// every send in this file goes through this one helper so the
-// "off-subnet destination, on-subnet link-layer next hop" distinction
-// only has to be handled correctly in one place.
+// Every send goes through this helper, so the gateway-vs-destination
+// distinction is handled in exactly one place.
 static bool tcp_send_segment(u8* gateway_mac, u8* target_ip, u16 target_port,
                               u32 seq, u32 ack, u8 flags, u8* payload, u16 payload_len) {
     u8 frame[1500];
@@ -148,9 +117,6 @@ static bool tcp_send_segment(u8* gateway_mac, u8* target_ip, u16 target_port,
     return e1000_send(&frame[0], frame_len);
 }
 
-// One received-segment's worth of parsed-out fields - every poll in
-// this file wants the same handful of values, so pulling them out once
-// keeps tcp_fetch()'s own state machine readable.
 typedef struct {
     u32 seq;
     u32 ack;
@@ -159,12 +125,7 @@ typedef struct {
     u16 payload_offset;   // into the caller's own receive buffer
 } tcp_segment_info;
 
-// Polls (real g_tick_count-bounded, the same timing discipline every
-// protocol layer in this phase has used since milestone 31's own
-// spin-vs-tick lesson) for a TCP segment genuinely from target_ip:
-// target_port to this client's LOCAL_PORT. Ignores anything else -
-// broadcast noise, unrelated traffic, stray retransmits from an earlier
-// step - and keeps polling within the remaining budget.
+// Tick-bounded poll for a segment genuinely from target_ip:target_port to LOCAL_PORT.
 static bool tcp_wait_segment(u8* target_ip, u16 target_port, u64 timeout_ticks,
                               u8* buf, u16 buf_len, tcp_segment_info* info_out) {
     u64 start_tick = g_tick_count;
@@ -218,10 +179,7 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
     }
     ip_init();
 
-    // A tick-derived initial sequence number - real TCP stacks use
-    // something harder to predict for real security reasons, but
-    // nothing in this client's own threat model depends on that; this
-    // just needs to be *a* number, not the security-relevant kind.
+    // Tick-derived, not cryptographically random - fine, nothing here needs that.
     u32 my_seq = 0x10000 + (u32) g_tick_count;
     u32 peer_seq = 0;
 
@@ -236,10 +194,10 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
         return false;
     }
     if ((seg.flags & TCP_FLAG_RST) != 0) {
-        return false;   // connection actively refused - a real, honest failure
+        return false;   // connection refused
     }
     if ((seg.flags & TCP_FLAG_SYN) == 0 || (seg.flags & TCP_FLAG_ACK) == 0 || seg.ack != my_seq + 1) {
-        return false;   // not a genuine matching SYN-ACK
+        return false;   // not a matching SYN-ACK
     }
     my_seq = my_seq + 1;
     peer_seq = seg.seq + 1;
@@ -255,16 +213,15 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
     }
     my_seq = my_seq + request_len;
 
-    // --- Receive whatever real reply arrives, across as many segments
-    // as show up within the budget, ACKing each - until the peer sends
-    // a FIN (done replying) or the caller's buffer is full. ---
+    // Receive across as many segments as arrive within the budget, ACKing each,
+    // until the peer sends FIN or the buffer fills.
     bool peer_finished = false;
     u32 total_received = 0;
     u64 recv_deadline = g_tick_count + 3000;
     while (g_tick_count < recv_deadline && total_received < max_response_len) {
         if (!tcp_wait_segment(target_ip, target_port, recv_deadline - g_tick_count,
                                &recv_buf[0], 1500, &seg)) {
-            break;   // timed out waiting for the next segment - stop with whatever arrived
+            break;   // timed out - stop with whatever arrived
         }
         if (seg.payload_len > 0) {
             u32 copy_len = seg.payload_len;
@@ -283,10 +240,7 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
             peer_seq = peer_seq + 1;
             peer_finished = true;
         }
-        // Ack whatever we just processed (new data and/or a FIN both
-        // consume sequence space that needs acknowledging) - real TCP
-        // etiquette, and keeps peer_seq/my_seq honest for the close
-        // below regardless of how this loop eventually exits.
+        // ACK whatever was just processed - keeps peer_seq/my_seq honest for the close below.
         tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq, peer_seq, TCP_FLAG_ACK, NULL, 0);
         if (peer_finished) {
             break;
@@ -294,9 +248,7 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
     }
     *response_len_out = total_received;
 
-    // --- Best-effort graceful close - not required for the milestone's
-    // own success criterion (a real handshake + real data exchange),
-    // so a timeout here doesn't flip the overall return value. ---
+    // Best-effort close; a timeout here doesn't flip the overall return value.
     if (!peer_finished) {
         tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq, peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
         if (tcp_wait_segment(target_ip, target_port, 500, &recv_buf[0], 1500, &seg)) {

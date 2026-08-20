@@ -1,13 +1,5 @@
-// Milestone 34: a minimal, hand-crafted DNS query - deliberately NOT a
-// real DNS client (no compression, no caching, no multiple questions,
-// no record types beyond A). This exists purely as a real, external
-// verification vehicle for UDP, the same "one hardcoded real-protocol
-// message as a test vehicle, not a general implementation" discipline
-// the ARP request and ICMP ping both already used. QEMU SLIRP's own
-// built-in DNS proxy (10.0.2.3, the same address the `arp` command
-// already resolves) forwards a real query to a real resolver and sends
-// back a real answer - genuinely external verification, not
-// self-validation.
+// Minimal DNS client: single question, A records only, no compression on
+// encode. Queries QEMU SLIRP's built-in DNS proxy at 10.0.2.3.
 
 #include "dns.h"
 #include "udp.h"
@@ -17,10 +9,7 @@
 static const u16 DNS_PORT = 53;
 static const u16 DNS_SRC_PORT = 12345;
 
-// Encodes a dotted hostname ("example.com") into DNS label format:
-// each segment prefixed by its own length byte, terminated by a zero
-// length byte ("\7example\3com\0"). Bounded at 256 iterations - real
-// headroom past any hostname this milestone actually uses.
+// "example.com" -> "\7example\3com\0" (length-prefixed labels).
 static u16 dns_encode_name(u8* out, char* hostname) {
     u16 pos = 1;
     u16 len_pos = 0;
@@ -49,10 +38,7 @@ static u16 dns_encode_name(u8* out, char* hostname) {
     return pos;
 }
 
-// Builds a real, minimal DNS query message: a 12-byte header (one
-// question, recursion desired, no answers/authority/additional records
-// - a real, standard query shape) followed by the encoded QNAME, QTYPE
-// (1 = A record), and QCLASS (1 = IN).
+// 12-byte header (one question) followed by QNAME, QTYPE=A, QCLASS=IN.
 static u16 dns_build_query(u8* out, u16 transaction_id, char* hostname) {
     out[0] = (u8) (transaction_id >> 8);
     out[1] = (u8) (transaction_id & 0xFF);
@@ -74,12 +60,7 @@ static u16 dns_build_query(u8* out, u16 transaction_id, char* hostname) {
     return pos + 4;
 }
 
-// Sends the query to QEMU SLIRP's built-in DNS proxy over real UDP and
-// verifies a genuinely matching response: the exact transaction ID this
-// query sent (the same "identifier must match" discipline ARP/ICMP
-// already used), the QR (response) bit set, and at least one real
-// answer record - proving SLIRP's proxy actually resolved the name
-// against a real resolver, not just echoed something malformed back.
+// Verifies the reply's transaction ID matches, QR bit set, and answer_count > 0.
 bool dns_query(char* hostname) {
     u8 dns_proxy_ip[4];
     dns_proxy_ip[0] = 10;
@@ -107,13 +88,8 @@ bool dns_query(char* hostname) {
     return reply_id == 0xABCD && is_response && answer_count > 0;
 }
 
-// Returns how many bytes the NAME field starting at buf[offset] occupies -
-// either a 2-byte compression pointer (top two bits of the first byte set,
-// the standard "point back at the question's own QNAME" DNS uses in every
-// answer record in practice) or a real length-prefixed label sequence
-// (walked exactly like dns_encode_name built one, terminated by a zero
-// length byte). Bounded at 256 iterations for the literal-name path, same
-// reasoning as dns_encode_name's own bound.
+// Bytes occupied by the NAME field: 2 for a compression pointer (top two
+// bits set), or a walked length-prefixed label sequence otherwise.
 static u16 dns_skip_name(u8* buf, u16 offset) {
     if ((buf[offset] & 0xC0) == 0xC0) {
         return 2;
@@ -131,16 +107,8 @@ static u16 dns_skip_name(u8* buf, u16 offset) {
     return (u16) (pos - offset);
 }
 
-// A real minimal DNS resolver: sends the same kind of query dns_query()
-// does, but actually parses the answer section instead of just checking
-// the header - walks past the (echoed) question section, then each
-// answer record's NAME/TYPE/CLASS/TTL/RDLENGTH/RDATA in turn, returning
-// the first TYPE=1 (A) record's 4-byte address. Real DNS responses
-// sometimes lead with a CNAME before the A record even for a name that
-// has no real alias chain configured (a resolver's own caching/rewriting
-// behavior) - skipping non-A records rather than assuming the first
-// answer is always the one wanted is what makes this correct against a
-// real upstream resolver, not just against SLIRP's own simplest case.
+// Parses the answer section and returns the first TYPE=1 (A) record's address -
+// skips non-A records since a real resolver may lead with a CNAME.
 bool dns_resolve_a(char* hostname, u8* ip_out) {
     u8 dns_proxy_ip[4];
     dns_proxy_ip[0] = 10;
@@ -168,10 +136,7 @@ bool dns_resolve_a(char* hostname, u8* ip_out) {
         return false;
     }
 
-    // The question section starts right after the 12-byte header and is
-    // exactly query_len - 12 bytes (RFC 1035 requires the server echo it
-    // back unchanged for the reply to even be valid), so this doesn't
-    // need to re-walk it - just skip straight to the answer section.
+    // The server echoes the question unchanged, so query_len also marks its end.
     u16 pos = query_len;
     u16 record = 0;
     while (record < answer_count && pos < reply_len) {

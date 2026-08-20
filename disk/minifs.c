@@ -1,19 +1,6 @@
-// A minimal custom filesystem ("MiniFS") on top of the ATA PIO driver -
-// deliberately simpler than FAT32/ext2 for this first pass. Flat
-// namespace (no directories), fixed-size directory, contiguous per-file
-// allocation recomputed from the directory each time rather than a
-// persistent free list.
-//
-// On-disk layout, entirely within a reserved region starting at LBA
-// 500 - chosen specifically clear of the driver's own test fixtures
-// (the `disk` command's signature at LBA 1, `diskwrite`'s scratch
-// sector at LBA 100):
-//
-//   LBA 500          Superblock (magic + file count, rest unused)
-//   LBA 501          Directory - 16 fixed 32-byte dir_entry slots,
-//                    exactly filling one 512-byte sector
-//   LBA 502+         Data region - each file's bytes, sector-aligned,
-//                    laid out back to back in creation order
+// MiniFS: flat namespace, fixed-size directory, on-disk from LBA 500
+// (clear of the `disk`/`diskwrite` test fixtures at LBA 1/100).
+//   LBA 500 superblock, LBA 501 directory (16 x 32-byte entries), LBA 502+ data.
 
 #include "minifs.h"
 #include "ata.h"
@@ -23,16 +10,14 @@ static const u32 SUPERBLOCK_LBA = 500;
 static const u32 DIRECTORY_LBA = 501;
 static const u32 DATA_START_LBA = 502;
 static const u32 MAX_FILES = 16;
-static const u32 MINIFS_MAGIC = 0x3153464D;  // ascii "MFS1", little-endian in the sector
+static const u32 MINIFS_MAGIC = 0x3153464D;  // "MFS1"
 
 typedef struct {
     u32 magic;
     u32 file_count;
 } superblock;
 
-// 20 + 4 + 4 + 1 = 29 bytes, rounded up to the struct's own 4-byte
-// alignment (from the u32 fields) = 32 bytes - exactly divides the
-// 512-byte directory sector into 16 slots, matching MAX_FILES.
+// Padded to 32 bytes so 16 entries exactly fill one 512-byte sector.
 typedef struct {
     char name[20];
     u32 start_lba;
@@ -56,11 +41,7 @@ void copy_name(char* dst, const char* src) {
     }
 }
 
-// Formats a fresh filesystem: a superblock carrying the magic number
-// (mostly so a future fsck/mount step has something to sanity-check -
-// nothing reads it back yet) and an all-zero (all-unused) directory.
-// Anything previously sitting in the data region becomes unreachable,
-// not explicitly wiped - harmless since nothing can name it anymore.
+// Writes superblock + zeroed directory; old data region is left in place but unreachable.
 bool mkfs(void) {
     u8 sb_buf[512];
     int i = 0;
@@ -95,9 +76,7 @@ static int find_entry(dir_entry* entries, const char* name) {
     return -1;
 }
 
-// Creates a new file and writes its full contents in one call - no
-// separate create/open/write/close steps, no partial writes. Fails
-// outright (rather than overwriting) if the name already exists.
+// No create/open/write/close split; fails if the name already exists.
 bool fs_write_file(const char* name, u8* data, u32 len) {
     u8 dir_buf[512];
     if (!ata_read_sector(DIRECTORY_LBA, dir_buf)) {
@@ -157,11 +136,6 @@ bool fs_write_file(const char* name, u8* data, u32 len) {
         return false;
     }
 
-    // Keep the superblock's file_count honest - nothing reads it back yet
-    // (find_entry scans `used` flags directly), but a stale "0 files"
-    // sitting next to a real directory full of entries is exactly the
-    // kind of misleading on-disk state a future fsck/mount step would
-    // trip over.
     u8 sb_buf[512];
     if (!ata_read_sector(SUPERBLOCK_LBA, sb_buf)) {
         return false;
@@ -195,11 +169,7 @@ bool fs_list_entry(int index, char* name_out, u32* size_out) {
     return true;
 }
 
-// Reads a file's full contents into out_buffer (caller-owned, must hold
-// at least the file's real size). Returns the byte count read, -1 if
-// the file doesn't exist, or -2 if it exists but is too big for max_len -
-// two genuinely different failures a caller might want to react to
-// differently.
+// Returns byte count read, -1 if not found, -2 if too big for max_len.
 int fs_read_file(const char* name, u8* out_buffer, u32 max_len) {
     u8 dir_buf[512];
     if (!ata_read_sector(DIRECTORY_LBA, dir_buf)) {

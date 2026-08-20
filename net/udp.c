@@ -1,11 +1,5 @@
-// Milestone 34 (Phase X's sixth step): a real UDP layer - the simpler
-// of the two transport protocols (no connection state, no
-// retransmission/congestion control, just a port-addressed datagram
-// wrapper over ip.c's now-working IP layer). TCP's real connection
-// state machine, sequence numbers, and retransmission are a
-// substantially bigger, genuinely separate hard problem, deliberately
-// left for a later milestone - the same "narrowest safe first version"
-// discipline every protocol-layer milestone in this phase has used.
+// UDP: no connection state or retransmission, just a port-addressed datagram
+// wrapper over ip.c.
 
 #include "udp.h"
 #include "ip.h"
@@ -15,15 +9,8 @@
 
 static const u8 IP_PROTOCOL_UDP = 17;
 
-// The real UDP checksum: unlike IP's own header checksum (which covers
-// only the 20 header bytes), UDP's checksum covers a 12-byte
-// "pseudo-header" (source IP, dest IP, a zero byte, the protocol
-// number, and the UDP length) PLUS the real UDP header and payload -
-// binding the checksum to the addresses it's actually being delivered
-// between, not just the datagram's own bytes. Reuses ip.c's
-// ip_checksum() algorithm unchanged (the same one's-complement sum
-// covers both) by assembling the pseudo-header + message into one
-// scratch buffer first.
+// 12-byte pseudo-header (src/dst IP, protocol, UDP length) + UDP header+payload,
+// binding the checksum to the addresses, not just the datagram bytes.
 static u16 udp_checksum(u8* src_ip, u8* dst_ip, u8* udp_msg, u16 udp_len) {
     u8 buf[128];
     int i = 0;
@@ -49,9 +36,7 @@ static u16 udp_checksum(u8* src_ip, u8* dst_ip, u8* udp_msg, u16 udp_len) {
     return ip_checksum(&buf[0], total_len);
 }
 
-// Builds an 8-byte UDP header at out[0..7] - the caller must have
-// already placed the real payload at out[8..8+payload_len) before
-// calling this, since the checksum has to cover it.
+// Caller must place the payload at out[8..8+payload_len) first - the checksum covers it.
 static void udp_build_header(u8* out, u16 src_port, u16 dst_port, u16 payload_len, u8* src_ip, u8* dst_ip) {
     u16 udp_len = 8 + payload_len;
     out[0] = (u8) (src_port >> 8);
@@ -67,11 +52,6 @@ static void udp_build_header(u8* out, u16 src_port, u16 dst_port, u16 payload_le
     out[7] = (u8) (csum & 0xFF);
 }
 
-// Resolves the target's MAC (arp.c's real arp_resolve()), builds a real
-// Ethernet+IPv4+UDP datagram carrying `payload`, and sends it. Real
-// hardware confirmation of the send comes from e1000_send()'s own
-// descriptor-done check, same as every other protocol built on top of
-// it so far.
 bool udp_send(u8* target_ip, u16 dst_port, u16 src_port, u8* payload, u16 payload_len) {
     u8 dest_mac[6];
     if (!arp_resolve(target_ip, &dest_mac[0])) {
@@ -113,12 +93,8 @@ bool udp_send(u8* target_ip, u16 dst_port, u16 src_port, u8* payload, u16 payloa
     return e1000_send(&frame[0], frame_len);
 }
 
-// Polls (real g_tick_count-bounded, the already-learned timing lesson
-// from arp.c/icmp.c) for a UDP datagram genuinely matching every field
-// that matters: right EtherType, right IP protocol, right source IP,
-// right source AND destination port. Copies the real payload into `out`
-// and returns its length, or 0 (a real, honest "nothing matching
-// arrived") if the timeout expires.
+// Tick-bounded poll for a datagram matching EtherType/protocol/source IP/ports.
+// Returns 0 if nothing matching arrives before the timeout.
 u16 udp_receive(u8* expected_src_ip, u16 expected_src_port, u16 expected_dst_port, u8* out, u16 max_len) {
     u8 reply[160];
     u64 start_tick = g_tick_count;
@@ -150,8 +126,6 @@ u16 udp_receive(u8* expected_src_ip, u16 expected_src_port, u16 expected_dst_por
                     return payload_len;
                 }
             }
-            // Something else arrived (not a matching datagram) - ignore
-            // it and keep polling within the remaining budget.
         }
     }
     return 0;

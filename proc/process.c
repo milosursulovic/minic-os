@@ -1,10 +1,5 @@
-// A real loader on top of per-process address spaces and the ring3
-// mechanism. spawn_process() is a genuine loader: it treats a byte range
-// as an opaque blob (no assumption it was compiled by this kernel),
-// copies it into a freshly cloned private address space, and schedules
-// a real task whose first and only act is entering ring3 at the loaded
-// address - reusing run_ring3_test() unchanged, just called from inside
-// the scheduler this time instead of a one-shot shell command.
+// Process loader on top of per-process address spaces + the ring3 entry
+// mechanism.
 
 #include "process.h"
 #include "../mm/frames.h"
@@ -22,23 +17,15 @@ extern u8 g_test_prog_end;
 process g_processes[4];
 int g_process_count;
 
-// The kernel-side "entry point" every loaded process's task starts at -
-// looked up via g_current_task exactly like proc_a_entry/proc_b_entry
-// already do, so one shared trampoline works for every loaded process
-// without needing per-task function pointers. run_ring3_test() never
-// returns - this is genuinely the last kernel-mode code this task ever
-// runs; from here on it's ring3 only, preemptible by the timer like any
-// other task.
+// run_ring3_test() never returns - last kernel-mode code this task runs.
 void process_entry_trampoline(void) {
     task* self = &g_tasks[g_current_task];
     run_ring3_test(self->ring3_entry_vaddr, self->ring3_user_stack_top);
 }
 
-// Loads [image_start, image_end) into a brand-new private address space at
-// load_vaddr (page-granular, rounded up), maps a one-page user stack at
-// stack_vaddr, and schedules a real task that jumps straight into ring3
-// at load_vaddr. Returns the new process's index into g_processes, or -1
-// on failure (out of frames, out of task slots, or out of process slots).
+// Loads [image_start, image_end) into a fresh address space, maps a
+// user stack, schedules a task entering ring3 at load_vaddr. Returns
+// the process index, or -1 on failure.
 int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vaddr) {
     if (g_process_count >= 4) {
         return -1;
@@ -62,9 +49,7 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
             free_frame(frame);
             return -1;
         }
-        // Every frame alloc_frame() hands out lives inside the flat 1GB
-        // identity map, so write the image bytes straight through the
-        // frame's own physical address, no need to switch into cr3 first.
+        // frame's address is identity-mapped, so write straight through it.
         u8* dst = (u8*) frame;
         u32 i = 0;
         while (i < 4096 && copied < image_size) {
@@ -79,13 +64,8 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
     if (stack_frame == NULL) {
         return -1;
     }
-    // PAGE_NX - the classic stack-hardening win (injected "shellcode" on
-    // the stack can no longer be jumped to and executed). Deliberately
-    // NOT applied to the image mapping above: this loader still flattens
-    // a whole program (code + rodata/data/bss) into one contiguous
-    // copyable blob with no tracked code/data boundary - marking the
-    // WHOLE image NX would block the process's own legitimate code too.
-    if (!map_page_in(cr3, stack_vaddr, (u64) stack_frame, 0x06 | PAGE_NX)) {  // writable + user, non-executable
+    // NX on the stack only - the image itself has no code/data split to mark NX.
+    if (!map_page_in(cr3, stack_vaddr, (u64) stack_frame, 0x06 | PAGE_NX)) {
         free_frame(stack_frame);
         return -1;
     }
@@ -104,23 +84,13 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
     g_process_count = g_process_count + 1;
     g_tasks[task_index].process_index = proc_index;
 
-    // Every process gets a handle to itself for free, in the one well-
-    // known slot ("handle 0 = myself") - its own handle table starts
-    // completely empty, so the very first allocation into it is
-    // guaranteed to land in slot 0.
+    // handle 0 = myself, free for every process.
     int self_object = alloc_object(OBJ_PROCESS, proc_index);
     alloc_handle(proc_index, self_object, RIGHT_QUERY);
 
     return proc_index;
 }
 
-// "The shell launches a program" is genuinely real - the image bytes
-// come from a real file, read through the VFS, not a pointer range into
-// the kernel's own compiled-in image. Everything past that is
-// spawn_process() completely unchanged.
-//
-// 16KB buffer: generous headroom past this program's compiled size
-// (real room, not just exactly enough).
 static u8 g_loaded_image_buf[16384];
 
 int spawn_process_from_path(const char* path, u64 load_vaddr, u64 stack_vaddr) {

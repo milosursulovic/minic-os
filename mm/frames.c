@@ -1,11 +1,6 @@
-// Physical memory: parsing the multiboot memory map (handed to the
-// kernel via EBX at entry, preserved by boot.s into g_multiboot_info_ptr
-// since `_start` takes no parameters) and a frame bitmap allocator built
-// from it - 1 bit per 4KB frame, covering the whole boot.s-identity-
-// mapped 1GB (32768 bytes * 8 bits * 4KB = 1GB). Distinct from heap.c:
-// that hands out *virtual* bytes within a dynamically-grown region for
-// kernel data structures; this tracks *physical* frames, the raw
-// material paging.c's map_page() uses to back new virtual mappings.
+// Physical frame allocator: 1 bit per 4KB frame over the identity-mapped 1GB,
+// built from the multiboot memory map. Tracks physical frames, not the
+// virtual bytes heap.c hands out.
 
 #include "frames.h"
 
@@ -25,11 +20,7 @@ typedef struct __attribute__((packed)) {
     u32 mmap_addr;
 } multiboot_info;
 
-// `size` is the byte count of the rest of THIS entry, not counting
-// itself - entries aren't necessarily a fixed stride, so `addr` genuinely
-// sits at an unaligned 4-byte offset by the real spec. Without `packed`,
-// the compiler would insert 4 bytes of padding before `addr` to 8-byte-
-// align it and silently read the wrong bytes.
+// packed: `addr` sits at an unaligned 4-byte offset per the real multiboot spec.
 typedef struct __attribute__((packed)) {
     u32 size;
     u64 addr;
@@ -62,11 +53,8 @@ static void frame_clear(u32 frame) {
     g_frame_bitmap[byte_index] = g_frame_bitmap[byte_index] & (u8) (~mask);
 }
 
-// Everything starts "used"; the multiboot memory map (type 1 = available
-// RAM) clears the frames that are actually free to hand out. The first
-// 4MB is reserved unconditionally regardless of what the map says -
-// simpler than computing exactly where the kernel image/heap region/this
-// very bitmap end, and there's plenty of room to spare.
+// Everything starts "used"; the memory map clears what's actually free.
+// First 4MB is reserved unconditionally rather than computed precisely.
 void frames_init(void) {
     u32 i = 0;
     while (i < 32768) {

@@ -1,10 +1,4 @@
-// The minimal interactive shell, built on keyboard.c's line buffer. The
-// main loop (kmain.c's _start) dispatches a line via run_command() once
-// keyboard.c's IRQ1 handler (isr.c) sets g_line_ready.
-//
-// Grows a `cmd_*` + dispatch branch per subsystem as each one gets
-// ported (mm, sched, syscall/proc/net, disk) - kept minimal here through
-// Stage 1 (interrupts/keyboard skeleton only).
+// Interactive shell over keyboard.c's line buffer.
 
 #include "shell.h"
 #include "../drivers/io.h"
@@ -64,10 +58,7 @@ static void cmd_alloc(void) {
 }
 
 static void cmd_big_alloc(void) {
-    // 64KB - bigger than a single heap_grow() chunk, so this reliably
-    // forces at least one on-demand growth cycle in one shot, instead of
-    // needing dozens of plain `alloc`s to exhaust the initial mapping.
-    void* p = kalloc(65536);
+    void* p = kalloc(65536);  // bigger than one heap_grow() chunk
     if (p == NULL) {
         vga_print("bigalloc failed - heap full");
         serial_print("bigalloc failed - heap full");
@@ -283,11 +274,6 @@ static void cmd_objs(void) {
     }
 }
 
-// Reads LBA 1, a sector the disk image is pre-populated with (from the
-// host side, before boot) with a known ASCII signature followed by
-// zero-fill. Printing it as a string is safe precisely because of that
-// zero-fill: the byte right after the signature is a real null
-// terminator, not luck.
 static void cmd_disk(void) {
     u8 buf[512];
     bool ok = ata_read_sector(1, buf);
@@ -303,9 +289,6 @@ static void cmd_disk(void) {
     serial_print(s);
 }
 
-// Writes a fixed pattern to LBA 100 (arbitrary, clear of the signature
-// sector) and immediately reads it back into a SEPARATE buffer -
-// comparing the two proves a real round trip through the driver.
 static void cmd_disk_write(void) {
     u8 write_buf[512];
     int i = 0;
@@ -357,11 +340,7 @@ static void cmd_mkfs(void) {
 static int g_next_file_index;
 static char g_last_file_name[20];
 
-// Creates a new file every call, name and content both embedding the
-// same running index ("file0.mfs" / "file1.mfs" / ...) - running this
-// twice and `cat`-ing after each one is what proves multiple files
-// coexist correctly and that the free-space scan advances past each
-// file already written.
+// Creates a new file each call: file0.mfs, file1.mfs, ...
 static void cmd_mkfile(void) {
     char name_buf[20];
     name_buf[0] = 'f'; name_buf[1] = 'i'; name_buf[2] = 'l'; name_buf[3] = 'e';
@@ -450,11 +429,6 @@ static void cmd_ls(void) {
     }
 }
 
-// Reads an arbitrary path through the VFS - "vfscat /system/file0.mfs"
-// routes to MiniFS (real disk I/O), "vfscat /devices/ticks" routes to
-// devfs (live kernel state, no disk touched at all). Same function
-// call, two completely different mechanisms depending only on the path
-// prefix.
 static void cmd_vfs_cat(void) {
     char* path = &g_line_buffer[7];  // past "vfscat "
     u8 buf[256];
@@ -475,8 +449,6 @@ static void cmd_vfs_cat(void) {
     serial_print(s);
 }
 
-// Writes a fixed demo file through the VFS (not fs_write_file()
-// directly) to prove the write side routes too, not just reads.
 static void cmd_vfs_write(void) {
     const char* content = "This file was written through the VFS layer, not MiniFS directly.";
     int len = strlen_(content) + 1;  // include the null terminator, same as mkfile's content
@@ -490,12 +462,6 @@ static void cmd_vfs_write(void) {
     }
 }
 
-// Writes the kernel's own compiled-in test program (proc/ring3blob.s,
-// g_test_prog_start..g_test_prog_end) out to a real MiniFS file,
-// simulating "this program is now genuinely installed on disk,"
-// addressable by path and indistinguishable from any other file.
-// `spawn` is what actually proves the load-from-disk path; `install`
-// just gets real bytes onto real storage first.
 static void cmd_install(void) {
     u32 len = (u32) ((u64) &g_test_prog_end - (u64) &g_test_prog_start);
     bool ok = vfs_write("/system/testprog.bin", &g_test_prog_start, len);
@@ -511,10 +477,6 @@ static void cmd_install(void) {
     serial_print(" bytes");
 }
 
-// Reads /system/testprog.bin back through the VFS and spawns a
-// brand-new isolated ring3 process from THOSE bytes - a second,
-// independent instance of the same program, loaded from disk this time
-// rather than the kernel's own compiled-in image.
 static void cmd_spawn(void) {
     int idx = spawn_process_from_path("/system/testprog.bin", 0x80000000, 0x80020000);
     if (idx < 0) {
@@ -527,10 +489,8 @@ static void cmd_spawn(void) {
     print_hex((u64) idx);
 }
 
-// Wakes the boot-time ring3 process's own blocking Channel.receive()
-// call. Once the ring3 process receives this, it goes on to call
-// Process.spawn() - run `install` first so the file it spawns actually
-// exists on disk.
+// Wakes the boot-time ring3 process's blocked Channel.receive() -
+// run `install` first so the file it spawns exists on disk.
 static void cmd_ring3_go(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x1);
     if (!ok) {
@@ -542,12 +502,7 @@ static void cmd_ring3_go(void) {
     serial_print("sent ring3 spawn trigger");
 }
 
-// Sends trigger value 0x2 (distinct from ring3go's 0x1) - the boot-time
-// ring3 process branches on this to attempt a deliberate forbidden
-// write instead of spawning. ONE-SHOT, KERNEL-HALTING: if the fix in
-// mm/paging.c's clone_address_space() is working, the write takes a
-// real page fault and the kernel halts right there - run it in its own
-// dedicated session, never interleaved with other regression testing.
+// Triggers a deliberate forbidden write - KERNEL-HALTING, run standalone.
 static void cmd_ring3_fault(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x2);
     if (!ok) {
@@ -559,10 +514,7 @@ static void cmd_ring3_fault(void) {
     serial_print("sent ring3 forbidden-write trigger - expect a page fault");
 }
 
-// Sends trigger value 0x3 - the boot-time ring3 process branches on
-// this to write a `ret` opcode onto its own user stack and attempt to
-// execute it, proving PAGE_NX really is enforced there. Also ONE-SHOT
-// and KERNEL-HALTING.
+// Triggers a stack-execution attempt - KERNEL-HALTING, run standalone.
 static void cmd_ring3_nx(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x3);
     if (!ok) {
@@ -586,10 +538,6 @@ static void print_mac(u8* mac) {
     }
 }
 
-// Milestone 29: enumerates every PCI device on bus 0 and prints its
-// address (bus:device.function) plus vendor/device/class/subclass -
-// the first time this kernel discovers its own hardware instead of
-// everything being a fixed, hardcoded I/O port.
 static void cmd_pci(void) {
     pci_enumerate();
     vga_print("pci devices: 0x");
@@ -623,11 +571,6 @@ static void cmd_pci(void) {
     }
 }
 
-// Milestone 30: initializes the e1000 NIC the `pci` command already
-// found (enables it over PCI, maps its MMIO register file) and reads
-// back real hardware state - its actual MAC address (from RAL0/RAH0,
-// pre-loaded by QEMU's emulated EEPROM the same way real hardware
-// auto-loads its burned-in address) and its link-up status.
 static void cmd_nic(void) {
     bool ok = e1000_init();
     if (!ok) {
@@ -646,20 +589,8 @@ static void cmd_nic(void) {
     print_hex((u64) link_up);
 }
 
-// Milestone 32: exercises the real resolver (net/arp.c). Four real,
-// independently checkable claims in one command:
-//   1. resolve the gateway (10.0.2.2).
-//   2. resolve it AGAIN - a real cache hit, checkable by real elapsed
-//      ticks: the first call sends a packet and waits for an external
-//      reply (nonzero elapsed ticks), the second returns from the cache
-//      alone (zero packets sent, zero elapsed ticks) - a genuine
-//      behavioral difference, not just "returned the same value twice."
-//   3. resolve a SECOND, different real address (10.0.2.3, QEMU
-//      SLIRP's own well-known built-in DNS proxy) - proves the resolver
-//      genuinely generalizes past one fixed address.
-//   4. resolve an address nothing answers for (10.0.2.99) - a real
-//      negative-space proof: arp_resolve() must return false after its
-//      own bounded timeout, not hang forever or return garbage.
+// Resolves the gateway, resolves it again (cache hit), resolves the DNS
+// proxy, and resolves an unreachable address (must fail cleanly).
 static void cmd_arp(void) {
     u8 gateway_ip[4];
     gateway_ip[0] = 10;
@@ -722,14 +653,6 @@ static void cmd_arp(void) {
     print_hex((u64) ok4);
 }
 
-// Milestone 33: a real IPv4 layer, verified with a genuine ICMP echo
-// (ping) round trip to the gateway - the minimal, natural "does IP
-// actually work end to end" test. Resolves the gateway's MAC first
-// (reusing arp.c's real resolver - a cache hit costs nothing here),
-// builds and sends a real Ethernet+IPv4+ICMP echo request, and polls
-// for a genuinely matching reply: right EtherType, right IP protocol,
-// right source IP, right ICMP type, AND the exact identifier/sequence
-// this request sent.
 static void cmd_ping(void) {
     u8 gateway_ip[4];
     gateway_ip[0] = 10;
@@ -749,11 +672,6 @@ static void cmd_ping(void) {
     print_hex(elapsed);
 }
 
-// Milestone 34: a real UDP layer, verified with a genuine DNS query to
-// QEMU SLIRP's built-in DNS proxy (10.0.2.3) - the minimal, natural
-// verification vehicle for "does UDP actually work end to end." Not a
-// general DNS client (no compression, no caching) - one hardcoded
-// query, purely as a real external stimulus.
 static void cmd_dns(void) {
     u64 start_tick = g_tick_count;
     bool ok = dns_query("example.com");
@@ -767,17 +685,6 @@ static void cmd_dns(void) {
     print_hex(elapsed);
 }
 
-// Milestone 35: a real TCP client - the first genuinely stateful
-// transport protocol in this kernel, verified with a genuine HTTP GET
-// round trip to a real internet host (not QEMU SLIRP's own gateway/DNS
-// proxy - the first time any protocol layer here has talked to
-// something off the local subnet, routed through the gateway at the
-// link layer the way a real off-subnet destination has to be). Resolves
-// example.com's real A record first (net/dns.c's dns_resolve_a() - a
-// dynamic lookup, not a hardcoded IP that could go stale), then
-// connects, sends a real `Connection: close` HTTP/1.1 request, and
-// reports whether a genuine `HTTP/1.1 ...` status line came back - not
-// just "some bytes arrived."
 static void cmd_tcp(void) {
     u8 ip[4];
     if (!dns_resolve_a("example.com", &ip[0])) {

@@ -1,22 +1,5 @@
-// Milestone 36 (Phase XI's first step): the kernel's first real init
-// process - a genuine, dedicated ring3 program (compiled standalone and
-// flattened into a blob, same pipeline as proc/ring3prog.c) whose only
-// job is real service orchestration, spawned by kmain.c at boot the
-// same way the existing boot-time demo process always has been.
-//
-// Deliberately narrow scope: proves a ring3 process can itself spawn
-// ANOTHER ring3 process from a kernel-embedded program (see syscall.c's
-// new syscall 11, spawn_builtin) without touching the filesystem at all
-// - a fresh disk.img has no files on it until `mkfs`+`install` run
-// manually, so a real "userspace controls what runs next" story can't
-// depend on the VFS existing yet. Does NOT touch or replace the
-// existing boot-time demo process (proc/ring3prog.c, which still
-// exercises the full File/Channel/Process/POSIX-shim/rights surface
-// exactly as before) or the kernel's own debug shell (shell/shell.c,
-// which stays kernel-mode - real per-syscall exposure for the ~40
-// existing debug commands, most of which touch raw kernel internals
-// like physical frames directly, is a substantially bigger, separate
-// problem than "does a real init process exist at all").
+// The kernel's first real init process - spawns hello_service.c via
+// spawn_builtin (syscall 11), avoiding the filesystem entirely.
 
 #include "../types.h"
 

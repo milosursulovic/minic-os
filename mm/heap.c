@@ -1,24 +1,16 @@
-// A real free-list allocator (split on alloc, forward *and* backward
-// coalesce on free) built on frames.c's alloc_frame() + paging.c's
-// map_page(): instead of a fixed 1MB .bss arena, the heap starts small
-// and grows a chunk at a time by mapping fresh frames just past its
-// current end, up to g_heap_cap. Blocks stay in address order, so "the
-// next block" is always `offset + sizeof(header) + size` - no separate
-// `next` pointer needed, and forward-coalescing two adjacent free blocks
-// is just folding one header's size into its neighbor's.
+// Free-list allocator (split on alloc, forward+backward coalesce on free),
+// growing on demand by mapping fresh frames. Blocks stay in address order,
+// so there's no separate `next` pointer.
 
 #include "heap.h"
 #include "frames.h"
 #include "paging.h"
 
 typedef struct {
-    u64 size;  // usable bytes *after* this header, not counting the header itself
+    u64 size;  // usable bytes after this header
     bool free;
 } block_header;
 
-// A dedicated virtual region, well clear of both boot.s's static 1GB
-// identity map (0..0x40000000) and the `map` shell command's demo page
-// at 0x40000000 - nothing else claims this address.
 static const u64 HEAP_BASE = 0x50000000;
 u64 g_heap_size;  // bytes currently mapped/usable, grows over time
 u64 g_heap_cap;   // hard cap on growth, so a runaway allocator can't eat every frame
@@ -29,12 +21,8 @@ static block_header* block_at(u64 offset) {
     return (block_header*) (HEAP_BASE + offset);
 }
 
-// Grows the heap by at least `min_extra` bytes (rounded up to whole
-// pages, at least one 64KB chunk at a time so typical growth isn't one
-// page at a call), mapping fresh frames just past the current end.
-// Returns false (leaving g_heap_size unchanged) if a frame or a mapping
-// fails, or the cap's already been hit - kalloc() treats that as
-// out-of-memory, same as a full arena used to mean.
+// Grows by at least min_extra bytes (rounded up, min 64KB chunk). Returns
+// false on allocation failure or cap hit; kalloc() treats that as OOM.
 bool heap_grow(u64 min_extra) {
     u64 chunk = min_extra;
     if (chunk < 65536) {
@@ -54,9 +42,7 @@ bool heap_grow(u64 min_extra) {
             return false;
         }
         u64 vaddr = HEAP_BASE + g_heap_size + mapped;
-        // The heap is data, never code; nothing legitimate ever executes
-        // from it.
-        if (!map_page(vaddr, (u64) frame, 0x02 | PAGE_NX)) {
+        if (!map_page(vaddr, (u64) frame, 0x02 | PAGE_NX)) {  // heap is data, never executable
             free_frame(frame);
             return false;
         }
@@ -66,14 +52,11 @@ bool heap_grow(u64 min_extra) {
     return true;
 }
 
-// First call ever bootstraps a 64KB mapped region; every later call
-// (e.g. from the `reset` shell command) just collapses the free list
-// back into one block over whatever's *already* mapped - re-growing
-// here would re-map the same virtual addresses over fresh frames
-// without ever freeing the old ones, leaking a frame per byte remapped.
+// Later calls (e.g. `reset`) must not re-grow - that would remap the same
+// vaddrs over fresh frames, leaking the old ones. Just collapse to one free block.
 void heap_init(void) {
     if (g_heap_size == 0) {
-        g_heap_cap = 16777216;  // 16MB - plenty for a hobby kernel, bounds a runaway allocator
+        g_heap_cap = 16777216;  // 16MB cap
         heap_grow(65536);
     }
     u64 header_size = sizeof(block_header);
@@ -97,10 +80,7 @@ void* kalloc(u64 size) {
         while (offset < g_heap_size) {
             block_header* block = block_at(offset);
             if (block->free && block->size >= size) {
-                // Split off the remainder as a new free block, but only
-                // if there's enough room left for another header plus
-                // something worth having - otherwise just hand over the
-                // whole block.
+                // Split only if enough remains for another header + 16 bytes.
                 if (block->size >= size + header_size + 16) {
                     u64 remainder_offset = offset + header_size + size;
                     block_header* remainder = block_at(remainder_offset);
@@ -115,9 +95,7 @@ void* kalloc(u64 size) {
             offset = offset + header_size + block->size;
         }
 
-        // Nothing free was big enough - grow and add the new space as
-        // one more free block at the old end, then retry the scan from
-        // there.
+        // Nothing free was big enough - grow and retry.
         u64 old_size = g_heap_size;
         if (!heap_grow(size + header_size)) {
             return NULL;
@@ -134,10 +112,7 @@ void kfree(void* ptr) {
     }
     u64 header_size = sizeof(block_header);
     u64 ptr_addr = (u64) ptr;
-    // A bogus pointer (e.g. a stale/mistyped address from `free <addr>`)
-    // would otherwise underflow this subtraction to a huge offset and
-    // either corrupt unrelated memory or fault. Ignore it instead of
-    // trusting it.
+    // Reject out-of-range pointers rather than let the offset subtraction underflow.
     if (ptr_addr < HEAP_BASE + header_size || ptr_addr >= HEAP_BASE + g_heap_size) {
         return;
     }
@@ -146,9 +121,7 @@ void kfree(void* ptr) {
     block_header* block = block_at(offset);
     block->free = true;
 
-    // Forward-coalesce: fold in every immediately-following block while
-    // it's also free, since blocks are laid out contiguously in address
-    // order - no pointer-chasing needed to find "the next one".
+    // Forward-coalesce with every immediately-following free block.
     u64 next_offset = offset + header_size + block->size;
     while (next_offset < g_heap_size) {
         block_header* next_block = block_at(next_offset);
@@ -159,10 +132,8 @@ void kfree(void* ptr) {
         next_offset = offset + header_size + block->size;
     }
 
-    // Backward-coalesce: blocks have no back-pointer, so finding the one
-    // immediately *before* this one means rescanning from the arena
-    // start - O(n) per free, fine for a hobby heap, not something a real
-    // allocator would want.
+    // Backward-coalesce: no back-pointer, so find the previous block by rescanning
+    // from the start - O(n) per free.
     u64 scan_offset = 0;
     u64 prev_offset = offset;
     bool found_prev = false;

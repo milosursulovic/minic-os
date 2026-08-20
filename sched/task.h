@@ -17,11 +17,6 @@ typedef struct {
     u64 kernel_stack_top;    // this task's own TSS.RSP0 target - see set_tss_rsp0's comment
 } task;
 
-// Sized with headroom past what boots today (task 0 + task1-4 + proc_a/
-// proc_b + the spawned ring3 process + the channel demo's sender/
-// receiver = 10) - task structs are cheap (no heap cost, each task's
-// real 16KB stack is a separate kalloc()), so oversizing this array
-// costs nothing but a few dozen bytes of zeroed .bss.
 extern task g_tasks[16];
 extern int g_task_count;
 extern int g_current_task;

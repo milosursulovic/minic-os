@@ -1,7 +1,5 @@
-// Small string/number helpers - no libc, so these are hand-rolled.
-// (`strlen_` rather than `strlen`: avoids any ambiguity with the
-// compiler's own builtin knowledge of that exact name, even under
-// -fno-builtin/-ffreestanding - simpler to just not share the name.)
+// Hand-rolled string/number helpers (no libc). `strlen_` avoids colliding
+// with gcc's builtin knowledge of the name `strlen`.
 
 #include "strings.h"
 #include "../drivers/io.h"
@@ -36,9 +34,7 @@ bool starts_with(const char* s, const char* prefix) {
     return true;
 }
 
-// Accepts an optional "0x" prefix; any non-hex-digit character is simply
-// skipped rather than treated as an error - good enough for a shell
-// that's only ever fed its own print_hex() output back.
+// Accepts an optional "0x" prefix; non-hex characters are silently skipped.
 u64 parse_hex(const char* s) {
     u64 value = 0;
     int i = 0;
@@ -85,10 +81,8 @@ void print_hex(u64 value) {
     serial_print(&buf[i + 1]);
 }
 
-// Same digit-generation logic as print_hex, but writes into a caller-
-// owned buffer (no null terminator) and returns the digit count instead
-// of printing - the devices VFS backend needs hex text composed into a
-// byte buffer, not sent straight to VGA/serial.
+// Like print_hex but writes into a caller buffer (no null terminator) and
+// returns the digit count, for callers that need hex text, not output.
 int format_hex(u64 value, u8* out) {
     const char* digits = "0123456789abcdef";
     char buf[16];

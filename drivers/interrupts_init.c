@@ -1,11 +1,4 @@
-// Everything needed to get interrupts flowing: the IDT (an ordinary
-// array of packed entries) and the 8259 PIC/PIT config that makes the
-// timer/keyboard lines usable. The entry stubs themselves (isr0/isr13/
-// isr14/irq0/irq1/isr_syscall) are hand-written in boot/interrupts.s -
-// saving/restoring full register state and normalizing "sometimes the
-// CPU pushes an error code, sometimes it doesn't" is below what a C
-// function body can express - so they're declared extern here and just
-// wired into the IDT by address.
+// IDT setup + 8259 PIC/PIT config. Entry stubs are hand-written in boot/interrupts.s.
 
 #include "interrupts_init.h"
 #include "io.h"
@@ -37,10 +30,7 @@ extern void isr_syscall(void);
 static idt_entry g_idt[256];
 static idt_pointer g_idt_ptr;
 
-// `dpl` is the *minimum* privilege level allowed to reach this gate via
-// a software `int n` - 0 for everything hardware-raised (exceptions,
-// IRQs - ring3 code should never trigger those directly), 3 for the
-// syscall gate specifically, since that's the whole point of it.
+// dpl is the minimum privilege allowed to reach this gate via `int n` (3 only for syscall).
 static void set_idt_entry(int vector, u64 handler_addr, u8 dpl) {
     g_idt[vector].offset_low = (u16) handler_addr;
     g_idt[vector].selector = 0x08;  // the code64 selector from boot.s's GDT
@@ -64,9 +54,7 @@ void idt_init(void) {
     __asm__ volatile("lidt %0" : : "m"(g_idt_ptr));
 }
 
-// 8259 PIC: remapped off the CPU's own exception vectors (0-31, where
-// IRQ0-7 collide by default) onto 32-47, with only the timer/keyboard
-// lines (IRQ0/IRQ1) unmasked - nothing else is handled yet.
+// Remaps IRQs off vectors 0-31 (colliding with CPU exceptions) onto 32-47.
 void pic_remap(void) {
     outb(0x20, 0x11);
     outb(0xA0, 0x11);
@@ -80,8 +68,7 @@ void pic_remap(void) {
     outb(0xA1, 0xFF);  // mask everything on the slave PIC - unhandled for now
 }
 
-// ~100Hz (1193182Hz base / 100). Default is ~18.2Hz - too slow to prove
-// the timer's actually ticking within a short test run.
+// ~100Hz (1193182Hz base / 100); default ~18.2Hz is too slow to observe in a short test.
 void pit_init(void) {
     u16 divisor = 11932;
     outb(0x43, 0x36);

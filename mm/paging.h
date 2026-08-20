@@ -4,9 +4,7 @@
 
 #pragma GCC visibility push(hidden)
 
-// PTE bit 63 - EFER.NXE was enabled once, at boot (boot.s), which is
-// what makes setting this bit on a leaf entry mean "disallow instruction
-// fetch here" instead of "reserved bit, fault on every access."
+// PTE bit 63; meaningful because boot.s enables EFER.NXE at boot.
 #define PAGE_NX 0x8000000000000000ULL
 
 extern u64 g_pml4_phys;
