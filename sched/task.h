@@ -15,6 +15,7 @@ typedef struct {
     int process_index;       // -1 = plain kernel task; else an index into g_processes[]
     int waiting_channel;     // -1 = not blocked on a channel, else blocked on g_channels[this]
     int waiting_io_request;  // -1 = not blocked on an io_request, else blocked on g_io_requests[this]
+    int waiting_net_ping;    // -1 = not blocked on a net ping, else blocked on g_net_ping_requests[this]
     u64 kernel_stack_top;    // this task's own TSS.RSP0 target - see set_tss_rsp0's comment
 } task;
 
@@ -46,6 +47,7 @@ void yield(void);
 void sleep_ticks(u64 ticks);
 u64 channel_receive(int channel_index);
 void io_request_wait(int slot_index);
+void net_ping_request_wait(int slot_index);
 
 void task1_entry(void);
 void task2_entry(void);

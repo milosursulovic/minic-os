@@ -5,6 +5,7 @@
 #include "e1000.h"
 #include "ip.h"
 #include "../isr/isr.h"
+#include "../sched/task.h"
 
 typedef struct {
     bool used;
@@ -155,6 +156,7 @@ bool arp_resolve(u8* target_ip, u8* mac_out) {
                 return true;
             }
         }
+        yield();  // cooperative, not just timer-forced - matters when this runs on a background worker task
     }
     return false;
 }

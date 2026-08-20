@@ -11,6 +11,7 @@
 #include "proc/channel.h"
 #include "proc/process.h"
 #include "proc/io_request.h"
+#include "proc/net_request.h"
 #include "disk/vfs.h"
 #include "shell/shell.h"
 
@@ -51,6 +52,7 @@ void _start(void) {
     create_isolated_task(&proc_a_entry);
     create_isolated_task(&proc_b_entry);
     create_task(&io_worker_entry);
+    create_task(&net_worker_entry);
     // Creation order fixes each channel's index (0, 1) - must stay in this order.
     g_channel_demo = create_channel();
     g_ring3_channel_demo = create_channel();

@@ -5,6 +5,7 @@
 #include "arp.h"
 #include "e1000.h"
 #include "../isr/isr.h"
+#include "../sched/task.h"
 
 static const u8 ICMP_ECHO_REQUEST = 8;
 static const u8 ICMP_ECHO_REPLY = 0;
@@ -95,6 +96,7 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
                 }
             }
         }
+        yield();  // cooperative, not just timer-forced - matters when this runs on a background worker task
     }
     return false;
 }

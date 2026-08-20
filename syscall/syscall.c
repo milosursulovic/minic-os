@@ -23,7 +23,12 @@
 // not a busy spin - until that handle's read completes, then copies
 // the result into the caller's own buffer), 18 file_write_async (same
 // shape, payload copied in at issue time), 19 file_write_wait (blocks
-// until the write completes, returns the byte count written).
+// until the write completes, returns the byte count written), 20
+// net_ping_async (the first ring3-facing network capability - issues a
+// real ICMP echo on a dedicated net worker task, separate from the file
+// worker so a slow ping can't starve a pending file request), 21
+// net_ping_wait (blocks until the ping resolves or times out, returns
+// ok/fail).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -33,6 +38,7 @@
 #include "../proc/object.h"
 #include "../proc/channel.h"
 #include "../proc/io_request.h"
+#include "../proc/net_request.h"
 #include "../disk/vfs.h"
 #include "../mm/paging.h"
 #include "../mm/frames.h"
@@ -419,6 +425,58 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         free_object(obj_index);
         free_handle(caller_process, handle_idx);
         return (u64) result;
+    }
+    if (num == 20) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        u32 packed_ip = (u32) a1;
+        u8 target_ip[4];
+        target_ip[0] = (u8) (packed_ip >> 24);
+        target_ip[1] = (u8) (packed_ip >> 16);
+        target_ip[2] = (u8) (packed_ip >> 8);
+        target_ip[3] = (u8) packed_ip;
+        int slot = alloc_net_ping_request(&target_ip[0]);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_NET_PING_REQUEST, slot);
+        if (obj_index < 0) {
+            free_net_ping_request(slot);
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, 0);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            free_net_ping_request(slot);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 21) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_NET_PING_REQUEST) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        net_ping_request_wait(slot);
+        bool ok = g_net_ping_requests[slot].ok;
+        free_net_ping_request(slot);
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
+        return (u64) ok;
     }
     return (u64) -1;  // unknown syscall
 }

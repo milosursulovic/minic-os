@@ -10,6 +10,7 @@
 #include "../isr/isr.h"
 #include "../proc/channel.h"
 #include "../proc/io_request.h"
+#include "../proc/net_request.h"
 
 #pragma GCC visibility push(hidden)
 extern void switch_context(u64* old_rsp_out, u64 new_rsp);
@@ -75,6 +76,7 @@ int create_task_with_cr3(void (*entry)(void), u64 cr3) {
     t->process_index = -1;    // -1, not 0, so it can't look like g_processes[0]
     t->waiting_channel = -1;  // -1, not 0, so it can't look like g_channels[0]
     t->waiting_io_request = -1;  // -1, not 0, so it can't look like g_io_requests[0]
+    t->waiting_net_ping = -1;  // -1, not 0, so it can't look like g_net_ping_requests[0]
     t->kernel_stack_top = stack_top;  // reused as this task's TSS.RSP0 target
     return index;
 }
@@ -110,6 +112,8 @@ void yield(void) {
                 wake = channel_has_message(candidate->waiting_channel);
             } else if (candidate->waiting_io_request >= 0) {
                 wake = g_io_requests[candidate->waiting_io_request].done;
+            } else if (candidate->waiting_net_ping >= 0) {
+                wake = g_net_ping_requests[candidate->waiting_net_ping].done;
             } else {
                 wake = g_tick_count >= candidate->wake_tick;
             }
@@ -117,6 +121,7 @@ void yield(void) {
                 candidate->blocked = false;
                 candidate->waiting_channel = -1;
                 candidate->waiting_io_request = -1;
+                candidate->waiting_net_ping = -1;
             }
         }
         if (!candidate->blocked) {
@@ -162,6 +167,15 @@ void io_request_wait(int slot_index) {
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_io_request = slot_index;
+        yield();
+    }
+}
+
+void net_ping_request_wait(int slot_index) {
+    while (!g_net_ping_requests[slot_index].done) {
+        task* self = &g_tasks[g_current_task];
+        self->blocked = true;
+        self->waiting_net_ping = slot_index;
         yield();
     }
 }

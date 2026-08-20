@@ -316,6 +316,22 @@ void _start(void) {
         g_async_buf[verify_read] = 0;
         do_syscall(1, (u64) "verify File.read() got back 0x", verify_read, 0);
         do_syscall(1, (u64) &g_async_buf[0], 0, 0);
+    } else if (trigger_value == 8) {
+        // trigger 8 (ring3asyncping): the first ring3-facing network
+        // capability - issue a real ICMP echo to QEMU's gateway
+        // (10.0.2.2) asynchronously, do real work before waiting for it.
+        u64 gateway_ip = 0x0A000202;  // 10.0.2.2, same target the kernel-mode `ping` command uses
+        u64 ping_handle = do_syscall(20, gateway_ip, 0, 0);
+        do_syscall(1, (u64) "net_ping_async() got handle 0x", ping_handle, 0);
+
+        int k = 0;
+        while (k < 5) {
+            do_syscall(1, (u64) "doing other work, iteration 0x", (u64) k, 0);
+            k = k + 1;
+        }
+
+        u64 ping_result = do_syscall(21, ping_handle, 0, 0);
+        do_syscall(1, (u64) "net_ping_wait() got ok=0x", ping_result, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

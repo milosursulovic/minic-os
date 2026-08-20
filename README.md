@@ -67,8 +67,10 @@ proc/             process loading + the kernel object model + IPC
   process.c/.h       spawn_process()/spawn_process_from_path() - the real loader
   object.c/.h        kernel object table + per-process handle tables (rights)
   channel.c/.h       IPC channels
-  io_request.c/.h    async file reads - a dedicated worker task + a
-                     fixed pool of pending-request slots
+  io_request.c/.h    async file reads/writes - a dedicated worker task
+                     + a fixed pool of pending-request slots
+  net_request.c/.h   async ICMP ping - its own worker task + slot pool,
+                     separate from io_request's so one never stalls the other
 disk/             storage
   ata.c/.h           legacy ATA PIO driver - real sector read/write
   minifs.c/.h        MiniFS - a minimal custom filesystem
@@ -159,13 +161,22 @@ File reads and writes can also be genuinely asynchronous: a process
 issues one and gets back a handle immediately, does other real work of
 its own choosing, then collects the result whenever it actually needs
 it - it isn't forced to sit idle for the operation's own duration the
-way every other I/O path in this kernel still is. A dedicated kernel
-worker task performs the real disk read or write concurrently (the ATA
-driver is PIO-only, so this is cooperative multitasking doing the work
-real DMA/interrupts would elsewhere, not hardware asynchrony), and the
+way most I/O in this kernel still is. A dedicated kernel worker task
+performs the real disk read or write concurrently (the ATA driver is
+PIO-only, so this is cooperative multitasking doing the work real
+DMA/interrupts would elsewhere, not hardware asynchrony), and the
 caller only actually blocks - via the same scheduler wake-condition
 mechanism blocking IPC receive already uses, not a busy spin - once it
 asks to wait for a result that isn't ready yet.
+
+Ring3 code can also do real networking now, for the first time -
+asynchronously from the start: a process can issue a real ICMP ping
+and get back a handle immediately, the same shape as the file
+operations, backed by its own separate worker task so a slow ping
+can't stall a pending file operation or vice versa. Every network wait
+loop this kernel already had (ARP resolution, ICMP's own reply poll)
+now yields cooperatively while waiting too, not just relying on the
+timer to force a switch eventually.
 
 All of this is verified in QEMU with exact, checkable arithmetic
 throughout, not just "it didn't crash" - the kernel object table's
@@ -174,11 +185,12 @@ a service registered at runtime, unregistered, and re-registered
 reproducibly gets back the exact same registry slot rather than a
 fresh one, an async file read's own result - byte count and content
 both - exactly matches what a synchronous read of the same file already
-returned moments earlier in the same boot, and an async write's own
-result is independently confirmed by reading the file straight back
-afterward - a real round trip, not just a plausible-looking byte count.
-Several real prints from the calling process's own continued execution
-land in between issuing each operation and waiting for it, proving it
+returned moments earlier in the same boot, an async write's own result
+is independently confirmed by reading the file straight back afterward,
+and an async ping genuinely reaches QEMU's real gateway and gets back
+a matching reply - a real external round trip, not a stub. Several
+real prints from the calling process's own continued execution land in
+between issuing each operation and waiting for it, proving it
 genuinely wasn't blocked. The existing kernel-mode debug shell
 (`help`/`frames`/`tasks`/`pci`/... - most of it touching raw kernel
 internals no real design
@@ -221,15 +233,13 @@ output for everything above.
   Unregistering doesn't affect processes already spawned from that
   slot, since a process's image is copied into its own address space
   at spawn time, not referenced from the registry afterward.
-- Async I/O only covers file reads and writes, backed by a fixed pool
-  of 4 pending-request slots with a 512-byte buffer each - a read or
-  write payload larger than that gets silently truncated to the
-  buffer's capacity, same as any other fixed-size table in this
-  kernel. Network I/O (ARP/ICMP/UDP/TCP) has no ring3-facing syscall
-  at all yet, so there's nothing to make async there yet either -
-  every network operation today is a kernel-mode shell command,
-  entirely synchronous, busy-polling with no way for anything else to
-  make progress while it's in flight.
+- Async file I/O is backed by a fixed pool of 4 pending-request slots
+  with a 512-byte buffer each - a read or write payload larger than
+  that gets silently truncated to the buffer's capacity, same as any
+  other fixed-size table in this kernel. Async networking is ICMP ping
+  only, from a separate 2-slot pool - no async ARP/UDP/DNS/TCP for
+  ring3 yet, and every one of those still has no ring3-facing syscall
+  at all (they remain kernel-mode shell commands only, same as before).
 - A loaded ring3 program's own code+data image is fully executable (no
   W^X split within it - the loader has no tracked code/data boundary).
   No ASLR, no sandboxing beyond address-space isolation.
