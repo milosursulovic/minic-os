@@ -96,14 +96,8 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
     g_processes[proc_index].task_index = task_index;
     g_tasks[task_index].process_index = proc_index;
 
-    // Clear stale handles from a reused slot's previous occupant.
-    int h = 0;
-    while (h < HANDLES_PER_PROCESS) {
-        g_handle_tables[proc_index][h].used = false;
-        h = h + 1;
-    }
-
-    // handle 0 = myself, free for every process.
+    // handle 0 = myself, free for every process. (A reused slot's handle
+    // table is already clean - process_exit() clears it at exit time.)
     int self_object = alloc_object(OBJ_PROCESS, proc_index);
     alloc_handle(proc_index, self_object, RIGHT_QUERY);
 

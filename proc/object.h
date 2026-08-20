@@ -32,8 +32,10 @@ typedef struct {
 extern handle g_handle_tables[4][8];
 
 int alloc_object(int type, int data_index);
+void free_object(int object_index);
 // First allocation into a fresh table always lands in slot 0 - used for
 // "handle 0 = myself". rights is fixed forever at grant time.
 int alloc_handle(int process_index, int object_index, int rights);
+void free_handle(int process_index, int handle_index);
 
 #pragma GCC visibility pop

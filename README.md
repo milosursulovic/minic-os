@@ -136,28 +136,27 @@ every command.
 
 ## Current status
 
-40 milestones shipped, spanning boot → interrupts → heap/paging →
+41 milestones shipped, spanning boot → interrupts → heap/paging →
 scheduler → syscalls/ring3 → per-process isolation → a native File/
 Channel/Process API + POSIX shim → capability/permission hardening →
 PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process → real
 process exit → process supervision → frame reclamation on exit →
-process/task slot reuse. The first 34 were built in MiniC; the kernel
-was then rewritten by hand into C (see the note at the top of this
-file). Milestones 36-39 gave this kernel a real init process, a real
-way to exit, real supervision, and real frame reclamation on exit - but
-the process/task table *slot* itself still only ever grew. Milestone 40
-closes that: `spawn_process()`/`create_task_with_cr3()` now search for
-an exited slot before appending, reusing it (and its already-allocated
-kernel stack, so no new heap allocation - the one piece of "the exiting
-task's own stack can't safely free itself" that turns out to have a
-real answer: don't free it, just reinitialize it in place for the next
-occupant) rather than growing the table forever. Verified in QEMU: the
-same `task_index`/`cr3` come back for `hello_service`'s restart every
-time, not a new one, and `ps` never grows past 3 processes across
-repeated cycles. The existing kernel-mode debug shell (`help`/`frames`/
-`tasks`/`pci`/... - most of it touching raw kernel internals no real
-design should expose to arbitrary userspace code directly) deliberately
-stays exactly as it is; migrating it isn't the next step.
+process/task slot reuse → kernel object reclamation on exit. The first
+34 were built in MiniC; the kernel was then rewritten by hand into C
+(see the note at the top of this file). Milestone 41 closes the exact
+gap that broke during milestone 40's own testing: `process_exit` now
+walks the exiting process's own handle table and frees every object it
+referenced (`alloc_object()`/`alloc_handle()` already searched for a
+free slot before appending - they just never had anything freed to
+find). Verified with exact hand arithmetic: `objs` reports `0x4` after
+a full spawn/exit/restart/exit cycle, matching by-hand computation of
+what should still be allocated - and the earlier `install`+`spawn`
+scenario that used to cascade into a broken `Channel.open()` (from
+`g_objects[8]` exhaustion) now works cleanly. The existing kernel-mode
+debug shell (`help`/`frames`/`tasks`/`pci`/... - most of it touching
+raw kernel internals no real design should expose to arbitrary
+userspace code directly) deliberately stays exactly as it is; migrating
+it isn't the next step.
 
 See [os-docs's Roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for the full
 milestone-by-milestone history with real captured verification output
@@ -166,19 +165,24 @@ for every one of them.
 ## Known limitations (on purpose, for now)
 
 - A process can exit (`process_exit`, milestone 37), its private-region
-  frames and PML4/PDPT are freed on exit (milestone 39), and its
+  frames and PML4/PDPT are freed on exit (milestone 39), its
   process/task table slot is reused by the next spawn instead of
   growing the table forever (milestone 40 - the reused slot's kernel
   stack is reinitialized in place too, sidestepping "freeing your own
   currently-executing stack from within itself" entirely rather than
-  solving it). Still not reclaimed: `g_objects[8]` (the kernel object
-  table) - an exited process's self-object and any handles anyone else
-  opened to it stay allocated forever, a real, separate cap that's
-  easier to hit than the process/task tables now that those reuse slots
-  (confirmed during this milestone's own testing: a too-eager restart
-  loop exhausted it and broke an unrelated process's own `Channel.open()`
-  call - fixed by restarting less aggressively, not by reclaiming
-  objects, which remains genuinely unsolved). Any handle still pointing
+  solving it), and its own handle table's objects are freed too
+  (milestone 41 - `alloc_object`/`alloc_handle` already searched for a
+  free slot before appending, they just never had anything freed to
+  find until now). The gap milestone 41 closes was found the hard way,
+  during milestone 40's own testing: a too-eager restart loop exhausted
+  `g_objects[8]` and broke an unrelated process's own `Channel.open()`
+  call. What's still genuinely unreclaimed: a handle another process
+  holds *to* the exiting process (e.g. `init`'s own permanent handle
+  from `open_process`ing `hello_service`) lives in *that other
+  process's* table, not the exiting one's, so it isn't touched - and a
+  process that opens handles to others but never exits itself has no
+  way to release them early, since there's no `handle_close`-style
+  syscall yet. Any handle still pointing
   at an exited-then-reused process slot also now points at a
   *different, live* process, not just a frozen dead one - a sharper,
   more real version of the same "no ownership on handles" gap below.

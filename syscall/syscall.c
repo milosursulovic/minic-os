@@ -6,7 +6,9 @@
 // 11 spawn_builtin (spawn from the kernel-embedded program registry,
 // by index - not a raw pointer, so ring3 can't name an arbitrary
 // address as "a program"), 12 process_exit (also frees the process's
-// private page-table/data frames - not its kernel stack or table slot).
+// private page-table/data frames and its own handle table's objects -
+// not its kernel stack or table slot, both reclaimed on the next
+// spawn_process() reusing this slot instead).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -207,6 +209,14 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         if (caller_process >= 0) {
             g_processes[caller_process].used = false;
             free_address_space(g_processes[caller_process].cr3);
+            int h = 0;
+            while (h < HANDLES_PER_PROCESS) {
+                if (g_handle_tables[caller_process][h].used) {
+                    free_object(g_handle_tables[caller_process][h].object_index);
+                    free_handle(caller_process, h);
+                }
+                h = h + 1;
+            }
         }
         g_tasks[g_current_task].used = false;
         yield();

@@ -23,6 +23,11 @@ int alloc_object(int type, int data_index) {
     return -1;
 }
 
+void free_object(int object_index) {
+    g_objects[object_index].used = false;
+    g_object_count = g_object_count - 1;
+}
+
 int alloc_handle(int process_index, int object_index, int rights) {
     int i = 0;
     while (i < HANDLES_PER_PROCESS) {
@@ -35,4 +40,8 @@ int alloc_handle(int process_index, int object_index, int rights) {
         i = i + 1;
     }
     return -1;
+}
+
+void free_handle(int process_index, int handle_index) {
+    g_handle_tables[process_index][handle_index].used = false;
 }
