@@ -255,6 +255,24 @@ void _start(void) {
 
         u64 spawned_task_index = do_syscall(11, service_index, 0, 0);
         do_syscall(1, (u64) "spawn_builtin(registered) launched task_index 0x", spawned_task_index, 0);
+    } else if (trigger_value == 5) {
+        // trigger 5 (ring3unreg): register, unregister, confirm the slot is
+        // genuinely gone (spawn_builtin fails), then register again and
+        // confirm the SAME index comes back - real reuse, not just growth.
+        u64 first_index = do_syscall(14, (u64) "/system/testprog.bin", 0, 0);
+        do_syscall(1, (u64) "register_service() got index 0x", first_index, 0);
+
+        u64 unreg_result = do_syscall(15, first_index, 0, 0);
+        do_syscall(1, (u64) "unregister_service() result 0x", unreg_result, 0);
+
+        u64 failed_spawn = do_syscall(11, first_index, 0, 0);
+        do_syscall(1, (u64) "spawn_builtin(unregistered) got 0x", failed_spawn, 0);
+
+        u64 second_index = do_syscall(14, (u64) "/system/testprog.bin", 0, 0);
+        do_syscall(1, (u64) "register_service() again got index 0x", second_index, 0);
+
+        u64 reused_task_index = do_syscall(11, second_index, 0, 0);
+        do_syscall(1, (u64) "spawn_builtin(re-registered) launched task_index 0x", reused_task_index, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

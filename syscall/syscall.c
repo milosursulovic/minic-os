@@ -13,7 +13,10 @@
 // release a handle held onto another process before this holder exits),
 // 14 register_service (loads a VFS file into a runtime registry slot,
 // returning an index spawn_builtin can address alongside the fixed
-// compile-time entries).
+// compile-time entries), 15 unregister_service (frees a runtime slot
+// so a future register_service can reuse it - already-spawned
+// processes keep running, since their image was copied into their own
+// address space at spawn time, not referenced from the registry).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -280,6 +283,19 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         g_registered_service_used[slot] = true;
         g_registered_service_len[slot] = (u32) n;
         return (u64) (slot + 1);  // index 0 stays reserved for the compile-time entry
+    }
+    if (num == 15) {
+        int index = (int) a1;
+        int slot = index - 1;
+        if (slot < 0 || slot >= REGISTERED_SERVICE_SLOTS) {
+            return (u64) -1;
+        }
+        if (!g_registered_service_used[slot]) {
+            return (u64) -1;
+        }
+        g_registered_service_used[slot] = false;
+        g_registered_service_len[slot] = 0;
+        return 0;
     }
     return (u64) -1;  // unknown syscall
 }

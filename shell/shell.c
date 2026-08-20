@@ -34,8 +34,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg pci nic arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg pci nic arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg pci nic arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg pci nic arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -539,6 +539,19 @@ static void cmd_ring3_register(void) {
     serial_print("sent ring3 register-service trigger");
 }
 
+// Registers, unregisters, confirms the slot is genuinely gone, then
+// re-registers and confirms the same slot is reused - run `install` first.
+static void cmd_ring3_unregister(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0x5);
+    if (!ok) {
+        vga_print("ring3unreg failed - channel full");
+        serial_print("ring3unreg failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 unregister-service trigger");
+    serial_print("sent ring3 unregister-service trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -815,6 +828,8 @@ void run_command(void) {
         cmd_ring3_nx();
     } else if (streq(g_line_buffer, "ring3reg")) {
         cmd_ring3_register();
+    } else if (streq(g_line_buffer, "ring3unreg")) {
+        cmd_ring3_unregister();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {

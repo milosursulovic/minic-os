@@ -136,15 +136,28 @@ every command.
 
 ## Current status
 
-43 milestones shipped, spanning boot → interrupts → heap/paging →
+44 milestones shipped, spanning boot → interrupts → heap/paging →
 scheduler → syscalls/ring3 → per-process isolation → a native File/
 Channel/Process API + POSIX shim → capability/permission hardening →
 PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process → real
 process exit → process supervision → frame reclamation on exit →
 process/task slot reuse → kernel object reclamation on exit → early
-handle release → runtime service registration. The first 34 were built
-in MiniC; the kernel was then rewritten by hand into C (see the note at
-the top of this file). Milestone 43 adds syscall 14
+handle release → runtime service registration → service
+unregistration. The first 34 were built in MiniC; the kernel was then
+rewritten by hand into C (see the note at the top of this file).
+Milestone 44 adds syscall 15 (`unregister_service`): the fixed 4-slot
+runtime registry milestone 43 added can now be freed and reused,
+closing that milestone's own deliberately-deferred gap - the one
+resource this kernel still couldn't reclaim. Verified in QEMU, twice:
+`register_service()` returns index `0x1`; `unregister_service(0x1)`
+succeeds; a `spawn_builtin(0x1)` attempt right afterward correctly
+fails (`-1`), confirming the slot is genuinely freed, not just marked;
+registering again returns the *same* index `0x1` - real reuse, not
+just a second slot - and `spawn_builtin`ing that reused index launches
+a real process whose own self-query matches. `objs` still lands on the
+same `0x5` milestone 43 already established, confirming the
+register/unregister/re-register cycle itself doesn't touch the
+(unrelated) kernel object table. Milestone 43 adds syscall 14
 (`register_service`): a ring3 process can load a VFS file into a
 runtime registry slot and get back an index `spawn_builtin` (syscall
 11) can launch, alongside the one fixed compile-time entry - the
@@ -156,23 +169,11 @@ first dynamic slot; index `0` stays reserved for the built-in
 self-query independently reports the exact same `task_index`
 `spawn_builtin` returned, and it runs its full self-test sequence
 (File/POSIX/Channel) exactly like any other loaded instance, proving
-the runtime-registered image is genuinely running, not a stub.
-Milestone 42 adds syscall 13 (`handle_close`): a process can now free
-a handle - and the object behind it - before it exits, closing the
-narrower gap milestone 41 left open (a handle one process holds *to*
-another lives in the holder's own table, so only the holder closing it
-early, or exiting, ever frees it). `init.c` now closes its query handle
-to `hello_service` after each restart cycle and loops the restart 3
-times - the exact aggressive-restart scenario that exhausted
-`g_objects[8]` during milestone 40's own testing, before any reclaim
-existed at all. Verified in QEMU, twice: `objs` reports `0x3` after all
-3 restart rounds complete - bit-for-bit the same as the clean-boot
-baseline, proving 3 rounds of open/query/close/restart leave zero net
-growth, not just a smaller leak. The existing kernel-mode debug shell
-(`help`/`frames`/`tasks`/`pci`/... - most of it touching raw kernel
-internals no real design should expose to arbitrary userspace code
-directly) deliberately stays exactly as it is; migrating it isn't the
-next step.
+the runtime-registered image is genuinely running, not a stub. The
+existing kernel-mode debug shell (`help`/`frames`/`tasks`/`pci`/... -
+most of it touching raw kernel internals no real design should expose
+to arbitrary userspace code directly) deliberately stays exactly as it
+is; migrating it isn't the next step.
 
 See [os-docs's Roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for the full
 milestone-by-milestone history with real captured verification output
@@ -206,10 +207,13 @@ for every one of them.
   mounts) has a small, arbitrary capacity, and most boot-time creation
   calls don't check their own return value.
 - `register_service` (milestone 43) has its own small, fixed capacity -
-  4 runtime registry slots, 16KB each - and, unlike every other
-  resource this kernel now reclaims, a registered slot is never freed:
-  there's no `unregister_service`, so 4 registrations is the lifetime
-  cap for a single boot, not a per-moment one.
+  4 runtime registry slots, 16KB each. `unregister_service` (milestone
+  44) can free one for reuse, but doesn't check that the caller is the
+  one who registered it - any process can unregister any slot,
+  matching the existing pointer-ownership gap above rather than closing
+  it. Unregistering doesn't affect processes already spawned from that
+  slot, since a process's image is copied into its own address space
+  at spawn time, not referenced from the registry afterward.
 - A loaded ring3 program's own code+data image is fully executable (no
   W^X split within it - the loader has no tracked code/data boundary).
   No ASLR, no sandboxing beyond address-space isolation.
