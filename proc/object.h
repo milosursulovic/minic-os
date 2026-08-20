@@ -6,6 +6,7 @@
 
 #define OBJ_PROCESS 1
 #define OBJ_CHANNEL 2
+#define OBJ_IO_REQUEST 3
 
 typedef struct {
     bool used;

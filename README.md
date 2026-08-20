@@ -67,6 +67,8 @@ proc/             process loading + the kernel object model + IPC
   process.c/.h       spawn_process()/spawn_process_from_path() - the real loader
   object.c/.h        kernel object table + per-process handle tables (rights)
   channel.c/.h       IPC channels
+  io_request.c/.h    async file reads - a dedicated worker task + a
+                     fixed pool of pending-request slots
 disk/             storage
   ata.c/.h           legacy ATA PIO driver - real sector read/write
   minifs.c/.h        MiniFS - a minimal custom filesystem
@@ -153,15 +155,32 @@ runtime-registered service can be unregistered and its slot reused
 `init.c` is a real init process: it spawns a service, polls it until
 it exits, and restarts it - genuine supervision, not spawn-and-forget.
 
+File reads can also be genuinely asynchronous: a process issues a read
+and gets back a handle immediately, does other real work of its own
+choosing, then collects the result whenever it actually needs it - it
+isn't forced to sit idle for the read's own duration the way every
+other I/O path in this kernel still is. A dedicated kernel worker task
+performs the real disk read concurrently (the ATA driver is PIO-only,
+so this is cooperative multitasking doing the work real DMA/interrupts
+would elsewhere, not hardware asynchrony), and the caller only actually
+blocks - via the same scheduler wake-condition mechanism blocking IPC
+receive already uses, not a busy spin - once it asks to wait for a
+result that isn't ready yet.
+
 All of this is verified in QEMU with exact, checkable arithmetic
 throughout, not just "it didn't crash" - the kernel object table's
 live count matches hand computation after a spawn/exit/restart cycle,
-and a service registered at runtime, unregistered, and re-registered
+a service registered at runtime, unregistered, and re-registered
 reproducibly gets back the exact same registry slot rather than a
-fresh one, confirming genuine reuse. The existing kernel-mode debug
-shell (`help`/`frames`/`tasks`/`pci`/... - most of it touching raw
-kernel internals no real design should expose to arbitrary userspace
-code directly) deliberately stays exactly as it is.
+fresh one, and an async file read's own result - byte count and
+content both - exactly matches what a synchronous read of the same
+file already returned moments earlier in the same boot, with several
+real prints from the calling process's own continued execution
+landing in between the issue and the wait, proving it genuinely wasn't
+blocked. The existing kernel-mode debug shell (`help`/`frames`/`tasks`/
+`pci`/... - most of it touching raw kernel internals no real design
+should expose to arbitrary userspace code directly) deliberately stays
+exactly as it is.
 
 See [os-docs's Capabilities overview](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for
 a subsystem-by-subsystem breakdown with real captured verification
@@ -199,6 +218,14 @@ output for everything above.
   Unregistering doesn't affect processes already spawned from that
   slot, since a process's image is copied into its own address space
   at spawn time, not referenced from the registry afterward.
+- Async I/O only covers file reads, backed by a fixed pool of 4 pending-
+  request slots with a 512-byte result buffer each - a read larger than
+  that gets silently truncated to the buffer's capacity, same as any
+  other fixed-size table in this kernel. No async write, and network
+  I/O (ARP/ICMP/UDP/TCP) is still entirely synchronous, busy-polling
+  with no way for a ring3 process to do anything else while a network
+  operation is in flight - a real, separate follow-on if it's ever
+  needed, not yet attempted.
 - A loaded ring3 program's own code+data image is fully executable (no
   W^X split within it - the loader has no tracked code/data boundary).
   No ASLR, no sandboxing beyond address-space isolation.

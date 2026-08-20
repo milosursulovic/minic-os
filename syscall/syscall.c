@@ -16,7 +16,12 @@
 // compile-time entries), 15 unregister_service (frees a runtime slot
 // so a future register_service can reuse it - already-spawned
 // processes keep running, since their image was copied into their own
-// address space at spawn time, not referenced from the registry).
+// address space at spawn time, not referenced from the registry),
+// 16 file_read_async (issues a read on the dedicated io worker task and
+// returns a handle immediately, without blocking), 17 file_read_wait
+// (blocks - via the same wake-condition mechanism channel_receive uses,
+// not a busy spin - until that handle's read completes, then copies
+// the result into the caller's own buffer).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -25,6 +30,7 @@
 #include "../proc/process.h"
 #include "../proc/object.h"
 #include "../proc/channel.h"
+#include "../proc/io_request.h"
 #include "../disk/vfs.h"
 #include "../mm/paging.h"
 #include "../mm/frames.h"
@@ -296,6 +302,66 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         g_registered_service_used[slot] = false;
         g_registered_service_len[slot] = 0;
         return 0;
+    }
+    if (num == 16) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        char* path = (char*) a1;
+        int slot = alloc_io_request(path);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_IO_REQUEST, slot);
+        if (obj_index < 0) {
+            free_io_request(slot);
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, 0);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            free_io_request(slot);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 17) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_IO_REQUEST) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        io_request_wait(slot);
+        u8* buf = (u8*) a2;
+        u32 max_len = (u32) a3;
+        int result = g_io_requests[slot].result;
+        if (result > 0) {
+            u32 n = (u32) result;
+            if (n > max_len) {
+                n = max_len;
+            }
+            u32 i = 0;
+            while (i < n) {
+                buf[i] = g_io_requests[slot].buffer[i];
+                i = i + 1;
+            }
+        }
+        free_io_request(slot);
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
+        return (u64) result;
     }
     return (u64) -1;  // unknown syscall
 }

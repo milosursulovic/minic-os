@@ -35,6 +35,21 @@ CFLAGS := -ffreestanding -m64 -mgeneral-regs-only -mno-red-zone \
           -fno-stack-protector -fno-builtin -fPIC -fvisibility=hidden \
           -fcf-protection=none -Wall -Wextra -I.
 
+# -MMD -MP emit a per-file .d listing every header a .c actually included,
+# so a header-only change (e.g. adding a struct field) correctly triggers
+# a rebuild of every .o that includes it - without this, `%.o: %.c`'s
+# bare .c-only prerequisite left stale .o files silently linked next to
+# freshly-recompiled ones sharing the SAME struct at a DIFFERENT size, a
+# real bug that cost real debugging time to track down (looked exactly
+# like a nondeterministic memory-corruption race, since which files were
+# stale depended on exactly which .c files a given `make` happened to
+# touch first).
+# -MT $@ makes the generated rule's target the actual .o Make cares
+# about, not the intermediate .gen.s gcc was told to write - otherwise
+# the dependency is attached to a file nothing else's prerequisite list
+# ever references, and doesn't actually trigger anything.
+DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
+
 ASM_SRCS := boot/boot.s boot/interrupts.s sched/switch.s syscall/usermode.s
 ASM_OBJS := $(ASM_SRCS:.s=.o)
 
@@ -54,8 +69,10 @@ $(ASM_OBJS): %.o: %.s
 # stale generated file win over recompiling from source on a later
 # `make`) -> object, via the .code64-prepend trick (see header comment).
 $(C_OBJS): %.o: %.c
-	$(CC) $(CFLAGS) -S -o $(<:.c=.gen.s) $<
+	$(CC) $(CFLAGS) $(DEPFLAGS) -S -o $(<:.c=.gen.s) $<
 	{ echo ".code64"; cat $(<:.c=.gen.s); } | $(AS) --32 -o $@
+
+-include $(C_SRCS:.c=.d)
 
 # The loaded ring3 "program" is real compiled C, not hand-assembled -
 # but spawn_process() (proc/process.c) still just copies one contiguous
@@ -71,28 +88,33 @@ $(C_OBJS): %.o: %.c
 # image, breaking the "one contiguous copyable blob" assumption the
 # whole loader depends on.
 proc/ring3prog.bin: proc/ring3prog.c proc/ring3.ld
-	$(CC) $(CFLAGS) -S -o proc/ring3prog.gen.s proc/ring3prog.c
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/ring3prog.bin -MF proc/ring3prog.d -S -o proc/ring3prog.gen.s proc/ring3prog.c
 	{ echo ".code64"; cat proc/ring3prog.gen.s; } | $(AS) --32 -o proc/ring3prog_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/ring3prog_linked.elf proc/ring3prog_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		proc/ring3prog_linked.elf proc/ring3prog.bin
 
-# Milestone 36's two new standalone-linked ring3 programs (init, and
-# the trivial service it spawns) - same shape as ring3prog.bin above,
-# just two more of them.
+-include proc/ring3prog.d
+
+# Two more standalone-linked ring3 programs (init, and the trivial
+# service it spawns) - same shape as ring3prog.bin above, just two more.
 proc/init.bin: proc/init.c proc/ring3.ld
-	$(CC) $(CFLAGS) -S -o proc/init.gen.s proc/init.c
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/init.bin -MF proc/init.d -S -o proc/init.gen.s proc/init.c
 	{ echo ".code64"; cat proc/init.gen.s; } | $(AS) --32 -o proc/init_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/init_linked.elf proc/init_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		proc/init_linked.elf proc/init.bin
 
+-include proc/init.d
+
 proc/hello_service.bin: proc/hello_service.c proc/ring3.ld
-	$(CC) $(CFLAGS) -S -o proc/hello_service.gen.s proc/hello_service.c
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/hello_service.bin -MF proc/hello_service.d -S -o proc/hello_service.gen.s proc/hello_service.c
 	{ echo ".code64"; cat proc/hello_service.gen.s; } | $(AS) --32 -o proc/hello_service_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/hello_service_linked.elf proc/hello_service_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		proc/hello_service_linked.elf proc/hello_service.bin
+
+-include proc/hello_service.d
 
 # `.incbin` in each *_blob.s resolves relative to the assembler's own
 # working directory, not the .s file's location - `cd proc` first,
@@ -133,6 +155,7 @@ iso: kernel.elf
 clean:
 	find . -name '*.o' -delete
 	find . -name '*.gen.s' -delete
+	find . -name '*.d' -delete
 	rm -f kernel.elf minic-os.iso disk.img
 	rm -f proc/ring3prog.bin proc/ring3prog_linked.elf proc/ring3prog_raw.o
 	rm -f proc/init.bin proc/init_linked.elf proc/init_raw.o

@@ -58,6 +58,7 @@ static u64 file_read(file* self, char* buf, u64 max_len) {
 }
 
 static u8 g_read_buf[64];
+static u8 g_async_buf[64];
 
 static bool channel_open(channel* self, int channel_index) {
     u64 result = do_syscall(9, (u64) channel_index, 0, 0);
@@ -273,6 +274,24 @@ void _start(void) {
 
         u64 reused_task_index = do_syscall(11, second_index, 0, 0);
         do_syscall(1, (u64) "spawn_builtin(re-registered) launched task_index 0x", reused_task_index, 0);
+    } else if (trigger_value == 6) {
+        // trigger 6 (ring3async): issue an async read of the same file
+        // File.write()/File.read() above already wrote and read
+        // synchronously, then do real work (prints) BEFORE waiting for
+        // it - the concrete proof this doesn't block like File.read() does.
+        u64 async_handle = do_syscall(16, (u64) "/system/ring3msg.txt", 0, 0);
+        do_syscall(1, (u64) "file_read_async() got handle 0x", async_handle, 0);
+
+        int i = 0;
+        while (i < 5) {
+            do_syscall(1, (u64) "doing other work, iteration 0x", (u64) i, 0);
+            i = i + 1;
+        }
+
+        u64 async_result = do_syscall(17, async_handle, (u64) &g_async_buf[0], 63);
+        g_async_buf[async_result] = 0;
+        do_syscall(1, (u64) "file_read_wait() got back 0x", async_result, 0);
+        do_syscall(1, (u64) &g_async_buf[0], 0, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

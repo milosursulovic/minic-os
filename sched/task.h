@@ -13,7 +13,8 @@ typedef struct {
     u64 ring3_entry_vaddr;   // 0 = plain kernel task; else jump here via run_ring3_test
     u64 ring3_user_stack_top;  // only meaningful when ring3_entry_vaddr != 0
     int process_index;       // -1 = plain kernel task; else an index into g_processes[]
-    int waiting_channel;     // -1 = blocked on a tick (wake_tick), else blocked on g_channels[this]
+    int waiting_channel;     // -1 = not blocked on a channel, else blocked on g_channels[this]
+    int waiting_io_request;  // -1 = not blocked on an io_request, else blocked on g_io_requests[this]
     u64 kernel_stack_top;    // this task's own TSS.RSP0 target - see set_tss_rsp0's comment
 } task;
 
@@ -44,6 +45,7 @@ bool create_isolated_task(void (*entry)(void));
 void yield(void);
 void sleep_ticks(u64 ticks);
 u64 channel_receive(int channel_index);
+void io_request_wait(int slot_index);
 
 void task1_entry(void);
 void task2_entry(void);
