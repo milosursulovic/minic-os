@@ -13,13 +13,7 @@ typedef struct {
     u64 ring3_entry_vaddr;   // 0 = plain kernel task; else jump here via run_ring3_test
     u64 ring3_user_stack_top;  // only meaningful when ring3_entry_vaddr != 0
     int process_index;       // -1 = plain kernel task; else an index into g_processes[]
-    // NULL = blocked on a tick (wake_tick), else this task wakes once *waiting_on
-    // becomes true - one generic condition every blocking primitive (channel
-    // receive, async I/O waits, ...) builds on, rather than a dedicated field
-    // per domain. Always points at a stable global (a channel's own `full`
-    // flag, a request slot's own `done` flag, ...), never something that
-    // could move or be freed while a task is blocked on it.
-    bool* waiting_on;
+    bool* waiting_on;         // NULL = blocked on wake_tick; else wakes once *waiting_on is true
     u64 kernel_stack_top;    // this task's own TSS.RSP0 target - see set_tss_rsp0's comment
 } task;
 

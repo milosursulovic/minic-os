@@ -4,15 +4,8 @@
 
 #pragma GCC visibility push(hidden)
 
-// Async TCP fetch - a real 3-way handshake, one request segment, a
-// receive loop, and a best-effort close, all as ONE atomic async
-// operation (matching tcp_fetch()'s own existing all-in-one shape)
-// rather than exposing a raw connect/send/recv/close socket API to
-// ring3. Its own separate pool + worker task from net_ping_request's:
-// a full fetch can run several times longer than a single ping/DNS
-// round trip (the handshake and the receive loop each have their own
-// ~2000-3000 tick budget internally), so sharing a worker would let a
-// slow fetch stall a pending ping/DNS request.
+// One atomic async tcp_fetch(), own worker/pool - a fetch runs far
+// longer than a ping/DNS round trip, so sharing would starve them.
 #define TCP_REQUEST_SLOTS 2
 #define TCP_REQUEST_PAYLOAD_SIZE 256
 #define TCP_REQUEST_RESPONSE_SIZE 512

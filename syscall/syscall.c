@@ -1,41 +1,12 @@
 // int 0x80 syscall gate. rax = number in, return value out; rdi/rsi/rdx
 // = up to 3 args.
 //
-// 1 print, 3 query handle (fails for an exited process), 4/5 vfs_read/write, 6 spawn (from a VFS
-// path), 7/8/9 channel send/receive/open, 10 open_process,
-// 11 spawn_builtin (spawn from the kernel-embedded program registry,
-// by index - not a raw pointer, so ring3 can't name an arbitrary
-// address as "a program"), 12 process_exit (also frees the process's
-// private page-table/data frames and its own handle table's objects -
-// not its kernel stack or table slot, both reclaimed on the next
-// spawn_process() reusing this slot instead), 13 handle_close (frees
-// one handle+its object early, without exiting - the only way to
-// release a handle held onto another process before this holder exits),
-// 14 register_service (loads a VFS file into a runtime registry slot,
-// returning an index spawn_builtin can address alongside the fixed
-// compile-time entries), 15 unregister_service (frees a runtime slot
-// so a future register_service can reuse it - already-spawned
-// processes keep running, since their image was copied into their own
-// address space at spawn time, not referenced from the registry),
-// 16 file_read_async (issues a read on the dedicated io worker task and
-// returns a handle immediately, without blocking), 17 file_read_wait
-// (blocks - via the same wake-condition mechanism channel_receive uses,
-// not a busy spin - until that handle's read completes, then copies
-// the result into the caller's own buffer), 18 file_write_async (same
-// shape, payload copied in at issue time), 19 file_write_wait (blocks
-// until the write completes, returns the byte count written), 20
-// net_ping_async (the first ring3-facing network capability - issues a
-// real ICMP echo on a dedicated net worker task, separate from the file
-// worker so a slow ping can't starve a pending file request), 21
-// net_ping_wait (blocks until the ping resolves or times out, returns
-// ok/fail), 22 net_dns_async (same worker/pool as net_ping_async, a
-// second request kind), 23 net_dns_wait (blocks until the resolve
-// completes, copies the resolved IP into the caller's own buffer), 24
-// net_tcp_fetch_async (a real handshake+request+receive-loop+close, as
-// one atomic async operation, on its own separate worker/pool from
-// ping/DNS - a full fetch runs several times longer than either), 25
-// net_tcp_fetch_wait (blocks until the fetch completes, copies the
-// response into the caller's own buffer).
+// 1 print, 3 query handle, 4/5 vfs_read/write, 6 spawn (VFS path),
+// 7/8/9 channel send/receive/open, 10 open_process, 11 spawn_builtin
+// (registry index, not a raw pointer), 12 process_exit, 13 handle_close,
+// 14/15 register/unregister_service, 16/17 file_read async/wait,
+// 18/19 file_write async/wait, 20/21 net_ping async/wait, 22/23
+// net_dns async/wait, 24/25 net_tcp_fetch async/wait.
 
 #include "syscall.h"
 #include "../drivers/io.h"

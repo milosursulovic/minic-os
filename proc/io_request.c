@@ -1,8 +1,4 @@
-// Async file reads/writes: file_read_async()/file_write_async() (syscalls
-// 16/18) issue a request and return immediately; a dedicated kernel worker
-// task performs the real vfs_read()/vfs_write() concurrently;
-// file_read_wait()/file_write_wait() (syscalls 17/19) block the caller
-// only once it actually needs the result.
+// Backs syscalls 16-19 (async file read/write, issue+wait).
 
 #include "io_request.h"
 #include "../disk/vfs.h"

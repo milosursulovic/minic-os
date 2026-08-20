@@ -1,8 +1,4 @@
-// Async TCP fetch: net_tcp_fetch_async() (syscall 24) issues a request
-// and returns immediately; a dedicated kernel worker task performs the
-// real tcp_fetch() (handshake, request, receive loop, close) concurrently;
-// net_tcp_fetch_wait() (syscall 25) blocks the caller only once it
-// actually needs the result.
+// Backs syscalls 24/25 (async TCP fetch, issue+wait).
 
 #include "net_tcp_request.h"
 #include "../net/tcp.h"

@@ -4,12 +4,8 @@
 
 #pragma GCC visibility push(hidden)
 
-// Async network requests, one dedicated worker task away from
-// io_request's file-I/O worker - both a ping and a DNS resolve can
-// take up to 2000 ticks internally, so keeping them off the file
-// worker means neither domain can stall the other. is_dns tags which
-// of the two operations a slot holds, the same shape io_request's own
-// is_write flag already established.
+// Own worker task, separate from io_request's - keeps a slow network
+// op from stalling a pending file one. is_dns picks ping vs DNS.
 #define NET_PING_SLOTS 2
 
 typedef struct {

@@ -247,10 +247,7 @@ void _start(void) {
         fn();
         do_syscall(1, (u64) "stack execution succeeded (BUG!) at 0x", 0x80020000, 0);
     } else if (trigger_value == 4) {
-        // trigger 4 (ring3reg): register /system/testprog.bin (written by
-        // `install`) at runtime, then spawn it through spawn_builtin's
-        // registry index instead of a VFS path - proves the registry isn't
-        // only the fixed compile-time entry anymore.
+        // trigger 4 (ring3reg): register testprog.bin at runtime, spawn it by index.
         u64 service_index = do_syscall(14, (u64) "/system/testprog.bin", 0, 0);
         do_syscall(1, (u64) "register_service() got index 0x", service_index, 0);
 
@@ -258,8 +255,7 @@ void _start(void) {
         do_syscall(1, (u64) "spawn_builtin(registered) launched task_index 0x", spawned_task_index, 0);
     } else if (trigger_value == 5) {
         // trigger 5 (ring3unreg): register, unregister, confirm the slot is
-        // genuinely gone (spawn_builtin fails), then register again and
-        // confirm the SAME index comes back - real reuse, not just growth.
+        // freed (spawn_builtin fails), then register again - real reuse.
         u64 first_index = do_syscall(14, (u64) "/system/testprog.bin", 0, 0);
         do_syscall(1, (u64) "register_service() got index 0x", first_index, 0);
 
@@ -275,10 +271,7 @@ void _start(void) {
         u64 reused_task_index = do_syscall(11, second_index, 0, 0);
         do_syscall(1, (u64) "spawn_builtin(re-registered) launched task_index 0x", reused_task_index, 0);
     } else if (trigger_value == 6) {
-        // trigger 6 (ring3async): issue an async read of the same file
-        // File.write()/File.read() above already wrote and read
-        // synchronously, then do real work (prints) BEFORE waiting for
-        // it - the concrete proof this doesn't block like File.read() does.
+        // trigger 6 (ring3async): async read, do work before waiting.
         u64 async_handle = do_syscall(16, (u64) "/system/ring3msg.txt", 0, 0);
         do_syscall(1, (u64) "file_read_async() got handle 0x", async_handle, 0);
 
@@ -293,10 +286,7 @@ void _start(void) {
         do_syscall(1, (u64) "file_read_wait() got back 0x", async_result, 0);
         do_syscall(1, (u64) &g_async_buf[0], 0, 0);
     } else if (trigger_value == 7) {
-        // trigger 7 (ring3asyncwrite): issue an async write, do real work
-        // before waiting for it, then read the file back synchronously to
-        // prove the write actually landed - a real round trip, not just a
-        // plausible-looking byte count.
+        // trigger 7 (ring3asyncwrite): async write, then verify via sync read.
         char* write_payload = "async write via a real worker task, not a stub!";
         u64 write_handle = do_syscall(18, (u64) "/system/ring3asyncmsg.txt", (u64) write_payload, 47);
         do_syscall(1, (u64) "file_write_async() got handle 0x", write_handle, 0);
@@ -317,10 +307,8 @@ void _start(void) {
         do_syscall(1, (u64) "verify File.read() got back 0x", verify_read, 0);
         do_syscall(1, (u64) &g_async_buf[0], 0, 0);
     } else if (trigger_value == 8) {
-        // trigger 8 (ring3asyncping): the first ring3-facing network
-        // capability - issue a real ICMP echo to QEMU's gateway
-        // (10.0.2.2) asynchronously, do real work before waiting for it.
-        u64 gateway_ip = 0x0A000202;  // 10.0.2.2, same target the kernel-mode `ping` command uses
+        // trigger 8 (ring3asyncping): async ping to the gateway.
+        u64 gateway_ip = 0x0A000202;  // 10.0.2.2
         u64 ping_handle = do_syscall(20, gateway_ip, 0, 0);
         do_syscall(1, (u64) "net_ping_async() got handle 0x", ping_handle, 0);
 
@@ -333,9 +321,7 @@ void _start(void) {
         u64 ping_result = do_syscall(21, ping_handle, 0, 0);
         do_syscall(1, (u64) "net_ping_wait() got ok=0x", ping_result, 0);
     } else if (trigger_value == 9) {
-        // trigger 9 (ring3asyncdns): async DNS resolution, the second
-        // ring3-facing network capability - resolves the same hostname
-        // the kernel-mode TCP demo already targets, asynchronously.
+        // trigger 9 (ring3asyncdns): async DNS resolve.
         u64 dns_handle = do_syscall(22, (u64) "example.com", 0, 0);
         do_syscall(1, (u64) "net_dns_async() got handle 0x", dns_handle, 0);
 
@@ -354,10 +340,7 @@ void _start(void) {
             do_syscall(1, (u64) "resolved IP (packed) 0x", packed_ip, 0);
         }
     } else if (trigger_value == 10) {
-        // trigger 10 (ring3asynctcp): the third ring3-facing network
-        // capability, and the first to chain two async operations - a
-        // real DNS resolve, then a real TCP fetch of the resolved
-        // address, both async, with real work interleaved around each.
+        // trigger 10 (ring3asynctcp): chains async DNS resolve into async TCP fetch.
         u64 dns_handle = do_syscall(22, (u64) "example.com", 0, 0);
         do_syscall(1, (u64) "net_dns_async() got handle 0x", dns_handle, 0);
         u8 resolved_ip[4];

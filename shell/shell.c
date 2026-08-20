@@ -526,8 +526,7 @@ static void cmd_ring3_nx(void) {
     serial_print("sent ring3 stack-execution trigger - expect a page fault");
 }
 
-// Registers /system/testprog.bin at runtime and spawns it via that
-// index instead of a VFS path - run `install` first.
+// Registers testprog.bin at runtime and spawns it by index - run `install` first.
 static void cmd_ring3_register(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x4);
     if (!ok) {
@@ -539,8 +538,7 @@ static void cmd_ring3_register(void) {
     serial_print("sent ring3 register-service trigger");
 }
 
-// Registers, unregisters, confirms the slot is genuinely gone, then
-// re-registers and confirms the same slot is reused - run `install` first.
+// Registers, unregisters, then re-registers to confirm slot reuse - run `install` first.
 static void cmd_ring3_unregister(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x5);
     if (!ok) {
@@ -552,8 +550,7 @@ static void cmd_ring3_unregister(void) {
     serial_print("sent ring3 unregister-service trigger");
 }
 
-// Issues an async read of /system/ring3msg.txt (written earlier at
-// boot), does real work before waiting for it, then collects the result.
+// Issues an async read, does work, then collects the result.
 static void cmd_ring3_async(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x6);
     if (!ok) {
@@ -565,8 +562,7 @@ static void cmd_ring3_async(void) {
     serial_print("sent ring3 async-read trigger");
 }
 
-// Issues an async write, does real work before waiting for it, then
-// reads the file back synchronously to prove the write actually landed.
+// Issues an async write, then verifies it via a sync read.
 static void cmd_ring3_async_write(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x7);
     if (!ok) {
@@ -578,8 +574,7 @@ static void cmd_ring3_async_write(void) {
     serial_print("sent ring3 async-write trigger");
 }
 
-// Issues an async ICMP ping to the gateway, does real work before
-// waiting for it - the first ring3-facing network capability.
+// Issues an async ICMP ping to the gateway.
 static void cmd_ring3_async_ping(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x8);
     if (!ok) {
@@ -591,8 +586,7 @@ static void cmd_ring3_async_ping(void) {
     serial_print("sent ring3 async-ping trigger");
 }
 
-// Issues an async DNS resolve for example.com, does real work before
-// waiting for it - the second ring3-facing network capability.
+// Issues an async DNS resolve for example.com.
 static void cmd_ring3_async_dns(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x9);
     if (!ok) {
@@ -604,9 +598,7 @@ static void cmd_ring3_async_dns(void) {
     serial_print("sent ring3 async-dns trigger");
 }
 
-// Chains an async DNS resolve into an async TCP fetch of example.com -
-// the third ring3-facing network capability, and the first to compose
-// two async operations back to back.
+// Chains an async DNS resolve into an async TCP fetch of example.com.
 static void cmd_ring3_async_tcp(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0xA);
     if (!ok) {

@@ -128,7 +128,7 @@ u16 udp_receive(u8* expected_src_ip, u16 expected_src_port, u16 expected_dst_por
                 }
             }
         }
-        yield();  // cooperative, not just timer-forced - matters when this runs on a background worker task
+        yield();  // this runs on a background worker task now
     }
     return 0;
 }

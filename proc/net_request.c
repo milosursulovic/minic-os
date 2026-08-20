@@ -1,8 +1,4 @@
-// Async network requests: net_ping_async()/net_dns_async() (syscalls
-// 20/22) issue a request and return immediately; a dedicated kernel
-// worker task performs the real icmp_ping()/dns_resolve_a() concurrently;
-// net_ping_wait()/net_dns_wait() (syscalls 21/23) block the caller only
-// once it actually needs the result.
+// Backs syscalls 20-23 (async ping/DNS, issue+wait).
 
 #include "net_request.h"
 #include "../net/icmp.h"

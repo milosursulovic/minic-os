@@ -156,7 +156,7 @@ bool arp_resolve(u8* target_ip, u8* mac_out) {
                 return true;
             }
         }
-        yield();  // cooperative, not just timer-forced - matters when this runs on a background worker task
+        yield();  // this runs on a background worker task now
     }
     return false;
 }

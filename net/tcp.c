@@ -131,7 +131,7 @@ static bool tcp_wait_segment(u8* target_ip, u16 target_port, u64 timeout_ticks,
                               u8* buf, u16 buf_len, tcp_segment_info* info_out) {
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < timeout_ticks) {
-        yield();  // cooperative, not just timer-forced - matters when this runs on a background worker task
+        yield();  // this runs on a background worker task now
         u16 len = e1000_receive(buf, buf_len);
         if (len == 0) {
             continue;

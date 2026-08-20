@@ -96,7 +96,7 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
                 }
             }
         }
-        yield();  // cooperative, not just timer-forced - matters when this runs on a background worker task
+        yield();  // this runs on a background worker task now
     }
     return false;
 }
