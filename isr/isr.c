@@ -47,6 +47,7 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
             char c = g_scancode_table[scancode];
             if (c == '\n') {
                 g_line_buffer[g_line_len] = '\0';
+                new_line();
                 g_line_ready = true;
             } else if (c != '\0' && g_line_len < 127) {
                 g_line_buffer[g_line_len] = c;

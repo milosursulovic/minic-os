@@ -32,5 +32,15 @@ void serial_putc(u8 c);
 void serial_print(const char* s);
 void vga_putc(char c);
 void vga_print(const char* s);
+// Moves both output streams to a fresh line: a real '\n' over serial
+// (which has no cursor concept of its own, unlike VGA text mode - a
+// bare vga_putc('\n') would just draw whatever glyph code 0x0A happens
+// to be, not move to the next row) and the VGA cursor to the start of
+// the next row, wrapping back to row 1 (leaving the boot message on row
+// 0 alone) once the screen fills - no real scrolling yet. Called both
+// when Enter is pressed (so the typed command gets its own line before
+// its output starts) and after a command finishes (so the next prompt
+// starts on a fresh line too).
+void new_line(void);
 
 #pragma GCC visibility pop

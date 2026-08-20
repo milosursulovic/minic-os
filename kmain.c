@@ -95,10 +95,7 @@ void _start(void) {
             run_command();
             g_line_ready = false;
             g_line_len = 0;
-            g_vga_cursor = ((g_vga_cursor / 80) + 1) * 80;  // next row
-            if (g_vga_cursor >= 2000) {
-                g_vga_cursor = 80;  // wrap - no real scrolling yet
-            }
+            new_line();
             print_prompt();
         }
     }

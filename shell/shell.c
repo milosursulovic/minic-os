@@ -41,7 +41,7 @@ void print_prompt(void) {
 
 static void cmd_help(void) {
     vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns tcp echo <text>\n");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -54,7 +54,7 @@ static void cmd_alloc(void) {
     void* p = kalloc(64);
     if (p == NULL) {
         vga_print("alloc failed - heap full");
-        serial_print("alloc failed - heap full\n");
+        serial_print("alloc failed - heap full");
     } else {
         g_last_alloc = p;
         vga_print("allocated 64 bytes at 0x");
@@ -70,7 +70,7 @@ static void cmd_big_alloc(void) {
     void* p = kalloc(65536);
     if (p == NULL) {
         vga_print("bigalloc failed - heap full");
-        serial_print("bigalloc failed - heap full\n");
+        serial_print("bigalloc failed - heap full");
     } else {
         g_last_alloc = p;
         vga_print("allocated 65536 bytes at 0x");
@@ -82,7 +82,7 @@ static void cmd_big_alloc(void) {
 static void cmd_free(void) {
     if (g_last_alloc == NULL) {
         vga_print("nothing to free");
-        serial_print("nothing to free\n");
+        serial_print("nothing to free");
         return;
     }
     vga_print("freed 0x");
@@ -113,7 +113,7 @@ static void cmd_reset(void) {
     heap_init();
     g_last_alloc = NULL;
     vga_print("heap reset");
-    serial_print("heap reset\n");
+    serial_print("heap reset");
 }
 
 static void cmd_frames(void) {
@@ -131,7 +131,7 @@ static void cmd_frame(void) {
     void* f = alloc_frame();
     if (f == NULL) {
         vga_print("out of frames");
-        serial_print("out of frames\n");
+        serial_print("out of frames");
     } else {
         g_last_frame = f;
         vga_print("allocated frame at 0x");
@@ -143,7 +143,7 @@ static void cmd_frame(void) {
 static void cmd_unframe(void) {
     if (g_last_frame == NULL) {
         vga_print("nothing to unframe");
-        serial_print("nothing to unframe\n");
+        serial_print("nothing to unframe");
         return;
     }
     vga_print("freed frame 0x");
@@ -157,14 +157,14 @@ static void cmd_map(void) {
     void* frame = alloc_frame();
     if (frame == NULL) {
         vga_print("out of frames");
-        serial_print("out of frames\n");
+        serial_print("out of frames");
         return;
     }
     u64 vaddr = 0x40000000;  // 1GB - just past boot.s's static identity map
     bool ok = map_page(vaddr, (u64) frame, 0x02 | PAGE_NX);  // writable, non-executable
     if (!ok) {
         vga_print("map failed");
-        serial_print("map failed\n");
+        serial_print("map failed");
         free_frame(frame);
         return;
     }
@@ -230,11 +230,11 @@ static void cmd_send(void) {
     bool ok = channel_send(g_channel_demo, 0xC0FFEE1234);
     if (!ok) {
         vga_print("send failed - channel full");
-        serial_print("send failed - channel full\n");
+        serial_print("send failed - channel full");
         return;
     }
     vga_print("sent 0xc0ffee1234");
-    serial_print("sent 0xc0ffee1234\n");
+    serial_print("sent 0xc0ffee1234");
 }
 
 static void cmd_clear(void) {
@@ -290,7 +290,7 @@ static void cmd_disk(void) {
     bool ok = ata_read_sector(1, buf);
     if (!ok) {
         vga_print("disk read failed");
-        serial_print("disk read failed\n");
+        serial_print("disk read failed");
         return;
     }
     char* s = (char*) &buf[0];
@@ -313,14 +313,14 @@ static void cmd_disk_write(void) {
     bool wrote = ata_write_sector(100, write_buf);
     if (!wrote) {
         vga_print("disk write failed");
-        serial_print("disk write failed\n");
+        serial_print("disk write failed");
         return;
     }
     u8 read_buf[512];
     bool read_ok = ata_read_sector(100, read_buf);
     if (!read_ok) {
         vga_print("disk write ok, readback failed");
-        serial_print("disk write ok, readback failed\n");
+        serial_print("disk write ok, readback failed");
         return;
     }
     bool match = true;
@@ -333,10 +333,10 @@ static void cmd_disk_write(void) {
     }
     if (match) {
         vga_print("write+readback verified, 512/512 bytes match");
-        serial_print("write+readback verified, 512/512 bytes match\n");
+        serial_print("write+readback verified, 512/512 bytes match");
     } else {
         vga_print("MISMATCH - write or read is broken");
-        serial_print("MISMATCH - write or read is broken\n");
+        serial_print("MISMATCH - write or read is broken");
     }
 }
 
@@ -344,10 +344,10 @@ static void cmd_mkfs(void) {
     bool ok = mkfs();
     if (ok) {
         vga_print("filesystem formatted");
-        serial_print("filesystem formatted\n");
+        serial_print("filesystem formatted");
     } else {
         vga_print("mkfs failed");
-        serial_print("mkfs failed\n");
+        serial_print("mkfs failed");
     }
 }
 
@@ -381,7 +381,7 @@ static void cmd_mkfile(void) {
     bool ok = fs_write_file(name_buf, (u8*) &content_buf[0], (u32) i);
     if (!ok) {
         vga_print("mkfile failed");
-        serial_print("mkfile failed\n");
+        serial_print("mkfile failed");
         return;
     }
     copy_name(&g_last_file_name[0], name_buf);
@@ -395,14 +395,14 @@ static void cmd_mkfile(void) {
 static void cmd_cat(void) {
     if (g_last_file_name[0] == '\0') {
         vga_print("no file yet - run mkfile first");
-        serial_print("no file yet - run mkfile first\n");
+        serial_print("no file yet - run mkfile first");
         return;
     }
     u8 buf[65];
     int n = fs_read_file(&g_last_file_name[0], buf, 64);
     if (n < 0) {
         vga_print("cat failed");
-        serial_print("cat failed\n");
+        serial_print("cat failed");
         return;
     }
     buf[n] = 0;
@@ -415,7 +415,7 @@ static void cmd_ls(void) {
     u32 file_count;
     if (!fs_superblock_info(&file_count)) {
         vga_print("ls failed - disk read error");
-        serial_print("ls failed - disk read error\n");
+        serial_print("ls failed - disk read error");
         return;
     }
     vga_print("file_count: 0x");
@@ -458,12 +458,12 @@ static void cmd_vfs_cat(void) {
     int n = vfs_read(path, buf, 256);
     if (n == -2) {
         vga_print("vfscat: file too large to display");
-        serial_print("vfscat: file too large to display\n");
+        serial_print("vfscat: file too large to display");
         return;
     }
     if (n < 0) {
         vga_print("vfscat: not found");
-        serial_print("vfscat: not found\n");
+        serial_print("vfscat: not found");
         return;
     }
     buf[n] = 0;
@@ -480,10 +480,10 @@ static void cmd_vfs_write(void) {
     bool ok = vfs_write("/system/vfsdemo.mfs", (u8*) content, (u32) len);
     if (ok) {
         vga_print("wrote /system/vfsdemo.mfs via VFS");
-        serial_print("wrote /system/vfsdemo.mfs via VFS\n");
+        serial_print("wrote /system/vfsdemo.mfs via VFS");
     } else {
         vga_print("vfswrite failed");
-        serial_print("vfswrite failed\n");
+        serial_print("vfswrite failed");
     }
 }
 
@@ -498,7 +498,7 @@ static void cmd_install(void) {
     bool ok = vfs_write("/system/testprog.bin", &g_test_prog_start, len);
     if (!ok) {
         vga_print("install failed");
-        serial_print("install failed\n");
+        serial_print("install failed");
         return;
     }
     vga_print("installed /system/testprog.bin, 0x");
@@ -516,7 +516,7 @@ static void cmd_spawn(void) {
     int idx = spawn_process_from_path("/system/testprog.bin", 0x80000000, 0x80020000);
     if (idx < 0) {
         vga_print("spawn failed");
-        serial_print("spawn failed\n");
+        serial_print("spawn failed");
         return;
     }
     vga_print("spawned process 0x");
@@ -532,11 +532,11 @@ static void cmd_ring3_go(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x1);
     if (!ok) {
         vga_print("ring3go failed - channel full");
-        serial_print("ring3go failed - channel full\n");
+        serial_print("ring3go failed - channel full");
         return;
     }
     vga_print("sent ring3 spawn trigger");
-    serial_print("sent ring3 spawn trigger\n");
+    serial_print("sent ring3 spawn trigger");
 }
 
 // Sends trigger value 0x2 (distinct from ring3go's 0x1) - the boot-time
@@ -549,11 +549,11 @@ static void cmd_ring3_fault(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x2);
     if (!ok) {
         vga_print("ring3fault failed - channel full");
-        serial_print("ring3fault failed - channel full\n");
+        serial_print("ring3fault failed - channel full");
         return;
     }
     vga_print("sent ring3 forbidden-write trigger - expect a page fault");
-    serial_print("sent ring3 forbidden-write trigger - expect a page fault\n");
+    serial_print("sent ring3 forbidden-write trigger - expect a page fault");
 }
 
 // Sends trigger value 0x3 - the boot-time ring3 process branches on
@@ -564,11 +564,11 @@ static void cmd_ring3_nx(void) {
     bool ok = channel_send(g_ring3_channel_demo, 0x3);
     if (!ok) {
         vga_print("ring3nx failed - channel full");
-        serial_print("ring3nx failed - channel full\n");
+        serial_print("ring3nx failed - channel full");
         return;
     }
     vga_print("sent ring3 stack-execution trigger - expect a page fault");
-    serial_print("sent ring3 stack-execution trigger - expect a page fault\n");
+    serial_print("sent ring3 stack-execution trigger - expect a page fault");
 }
 
 static void print_mac(u8* mac) {
@@ -629,7 +629,7 @@ static void cmd_nic(void) {
     bool ok = e1000_init();
     if (!ok) {
         vga_print("e1000 init failed - device not found at 0:3.0");
-        serial_print("e1000 init failed - device not found at 0:3.0\n");
+        serial_print("e1000 init failed - device not found at 0:3.0");
         return;
     }
     u8 mac[6];
@@ -779,7 +779,7 @@ static void cmd_tcp(void) {
     u8 ip[4];
     if (!dns_resolve_a("example.com", &ip[0])) {
         vga_print("tcp: could not resolve example.com");
-        serial_print("tcp: could not resolve example.com\n");
+        serial_print("tcp: could not resolve example.com");
         return;
     }
     vga_print("resolved example.com -> 0x");
@@ -906,6 +906,6 @@ void run_command(void) {
         cmd_echo();
     } else if (g_line_len > 0) {
         vga_print("unknown command");
-        serial_print("unknown command\n");
+        serial_print("unknown command");
     }
 }

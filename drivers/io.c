@@ -66,3 +66,11 @@ void vga_print(const char* s) {
         i = i + 1;
     }
 }
+
+void new_line(void) {
+    serial_putc('\n');
+    g_vga_cursor = ((g_vga_cursor / 80) + 1) * 80;
+    if (g_vga_cursor >= 2000) {
+        g_vga_cursor = 80;  // wrap - no real scrolling yet, row 0 stays the boot message
+    }
+}
