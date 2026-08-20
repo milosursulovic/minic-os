@@ -12,7 +12,7 @@ SECTIONS
 {
     . = 0;
 
-    .text : { *(.text) }
+    .text : { *(.text.start) *(.text) }
     .rodata : { *(.rodata) }
     .data : { *(.data) }
     .bss : { *(COMMON) *(.bss) }

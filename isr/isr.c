@@ -16,7 +16,7 @@ u64 read_cr2(void) {
     return value;
 }
 
-void interrupt_handler(u64 vector, u64 error_code) {
+void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
     if (vector == 32) {
         g_tick_count = g_tick_count + 1;
         if (g_tick_count % 100 == 0) {
@@ -64,6 +64,8 @@ void interrupt_handler(u64 vector, u64 error_code) {
     } else if (vector == 13) {
         serial_print("general protection fault, error_code=0x");
         print_hex(error_code);
+        serial_print(", rip=0x");
+        print_hex(saved_rip);
         serial_print(", halting\n");
     } else if (vector == 14) {
         u64 fault_addr = read_cr2();
@@ -74,6 +76,8 @@ void interrupt_handler(u64 vector, u64 error_code) {
         // or a not-present fault.
         serial_print(", error_code=0x");
         print_hex(error_code);
+        serial_print(", rip=0x");
+        print_hex(saved_rip);
         serial_print(", halting\n");
     } else {
         serial_print("unhandled exception, halting\n");

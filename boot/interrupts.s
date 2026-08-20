@@ -52,10 +52,11 @@ irq1:
 
 # Stack on entry: [vector, error_code, RIP, CS, RFLAGS, RSP, SS] (CPU pushed
 # the last five; the stub above pushed the first two). Read vector/
-# error_code into the SysV arg registers before any push touches them.
+# error_code/RIP into the SysV arg registers before any push touches them.
 isr_common_stub:
     mov rdi, [rsp]
     mov rsi, [rsp + 8]
+    mov rdx, [rsp + 16]
 
     push rax
     push rbx

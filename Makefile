@@ -57,8 +57,34 @@ $(C_OBJS): %.o: %.c
 	$(CC) $(CFLAGS) -S -o $(<:.c=.gen.s) $<
 	{ echo ".code64"; cat $(<:.c=.gen.s); } | $(AS) --32 -o $@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS)
-	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS)
+# The loaded ring3 "program" is real compiled C, not hand-assembled -
+# but spawn_process() (proc/process.c) still just copies one contiguous
+# byte range and jumps to its first byte, so the compiled program needs
+# its own SEPARATE standalone link (proc/ring3.ld keeps .text/.rodata/
+# .data/.bss contiguous, with nothing else's sections in between)
+# before it can be objcopy'd into one flat blob and wrapped with the
+# g_test_prog_start/g_test_prog_end marker symbols everything downstream
+# expects (proc/ring3blob.s). Linking the compiled object straight into
+# kernel.elf the way every other .o is would NOT work: `ld` groups every
+# input object's .text together, then every .rodata, etc, so this
+# program's code and string literals would land far apart in the final
+# image, breaking the "one contiguous copyable blob" assumption the
+# whole loader depends on.
+proc/ring3prog.bin: proc/ring3prog.c proc/ring3.ld
+	$(CC) $(CFLAGS) -S -o proc/ring3prog.gen.s proc/ring3prog.c
+	{ echo ".code64"; cat proc/ring3prog.gen.s; } | $(AS) --32 -o proc/ring3prog_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/ring3prog_linked.elf proc/ring3prog_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		proc/ring3prog_linked.elf proc/ring3prog.bin
+
+# `.incbin` in ring3blob.s resolves relative to the assembler's own
+# working directory, not the .s file's location - `cd proc` first,
+# matching the MiniC-era build's own convention.
+proc/ring3blob.o: proc/ring3blob.s proc/ring3prog.bin
+	cd proc && $(AS) --32 ring3blob.s -o ../$@
+
+kernel.elf: $(ASM_OBJS) $(C_OBJS) proc/ring3blob.o
+	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) proc/ring3blob.o
 	@echo "built kernel.elf"
 
 disk.img:
@@ -85,3 +111,4 @@ clean:
 	find . -name '*.o' -delete
 	find . -name '*.gen.s' -delete
 	rm -f kernel.elf minic-os.iso disk.img
+	rm -f proc/ring3prog.bin proc/ring3prog_linked.elf proc/ring3prog_raw.o

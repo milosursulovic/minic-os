@@ -16,7 +16,14 @@
 #include "mm/paging.h"
 #include "sched/task.h"
 #include "proc/channel.h"
+#include "proc/process.h"
+#include "disk/vfs.h"
 #include "shell/shell.h"
+
+#pragma GCC visibility push(hidden)
+extern u8 g_test_prog_start;
+extern u8 g_test_prog_end;
+#pragma GCC visibility pop
 
 void _start(void) {
     volatile vga_char* vga = (volatile vga_char*) 0xB8000;
@@ -56,7 +63,26 @@ void _start(void) {
     // call, so creation ORDER is what fixes each channel's index, not
     // which global variable it's assigned to.
     g_channel_demo = create_channel();
+    // A second, dedicated channel for the ring3 program's own
+    // Channel.receive() call - index 1 by construction (the second
+    // create_channel() call overall), created before spawn_process() so
+    // it already exists the instant that task starts running.
+    // Deliberately a *different* channel than g_channel_demo's - the
+    // kernel-task IPC demo and this ring3 demo must never share one, or
+    // the shell's `send` command and the spawn-trigger commands would
+    // race on the same mailbox.
+    g_ring3_channel_demo = create_channel();
+    // Boot-time automatic spawn of the compiled-in ring3 test program -
+    // stack_vaddr is 0x80020000 (128KB of headroom past load_vaddr),
+    // not 0x80001000: the compiled program is now bigger than one page,
+    // and a smaller gap would let the image's own second page and the
+    // user stack collide on the same virtual address. Every spawn call
+    // site (here, shell.c's cmd_spawn, ring3prog.c's own process_spawn()
+    // call) must keep using this same stack_vaddr.
+    spawn_process(&g_test_prog_start, &g_test_prog_end, 0x80000000, 0x80020000);
     create_isolated_task(&proc_receiver_entry);
+    vfs_mount("/system", BACKEND_MINIFS);
+    vfs_mount("/devices", BACKEND_DEVICE);
 
     __asm__ volatile("sti");
 
