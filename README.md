@@ -217,7 +217,24 @@ net/              networking (milestone 30 onward)
   dns.c/.h           milestone 34: dns_query() - a hand-crafted,
                      minimal DNS query, the verification vehicle for
                      UDP the same way ICMP's ping was for IP. Not a
-                     real DNS client (see Known limitations)
+                     real DNS client (see Known limitations). Milestone
+                     35 added dns_resolve_a() - real answer-section
+                     parsing (a DNS-compression name pointer or a literal
+                     one, skipping past any non-A record like a CNAME) so
+                     tcp.c's own demo target is a freshly-resolved IP,
+                     not a hardcoded one
+  tcp.c/.h           milestone 35 (Phase X's seventh step): a real TCP
+                     client - tcp_fetch() does a genuine 3-way handshake,
+                     sends one data segment, ACKs each arriving reply
+                     segment until the peer's FIN or the buffer fills,
+                     then a best-effort graceful close. The first
+                     protocol layer here to talk to a host off the local
+                     SLIRP subnet - ARP-resolves the GATEWAY's MAC for
+                     the Ethernet destination while the real remote IP
+                     goes in the IP header, the routing-vs-resolution
+                     distinction no earlier protocol layer needed. Client
+                     only, one connection at a time, no retransmission
+                     (see Known limitations)
 mm/               memory management
   heap.c/.h          kalloc/kfree free-list allocator, grows on demand via
                      mm/paging.c; every grown page is PAGE_NX (milestone 28)
