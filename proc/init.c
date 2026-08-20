@@ -1,10 +1,12 @@
 // The kernel's first real init process - spawns hello_service.c via
 // spawn_builtin (syscall 11), then supervises it: polls its handle
-// until the exit-aware query (syscall 3) reports it gone, and restarts
-// it once. No yield/sleep syscall exists for ring3 - polling busy-spins.
-// Restarts only once, not in a loop: each restart also costs an
-// object-table slot for the query handle, and g_objects[8] is a small,
-// shared, unreclaimed resource other ring3 processes need too.
+// until the exit-aware query (syscall 3) reports it gone, closes that
+// handle (syscall 13), and restarts it. Loops 3 times - safe now that
+// handle_close frees the query handle's object each round instead of
+// leaking it (the exact aggressive-restart scenario that exhausted
+// g_objects[8] during milestone 40's own testing, before reclaim
+// existed at all). No yield/sleep syscall exists for ring3 - polling
+// busy-spins.
 
 #include "../types.h"
 
@@ -12,6 +14,7 @@
 #define SYS_QUERY 3
 #define SYS_SPAWN_BUILTIN 11
 #define SYS_OPEN_PROCESS 10
+#define SYS_HANDLE_CLOSE 13
 
 #define RIGHT_QUERY 1
 #define BUILTIN_HELLO_SERVICE 0
@@ -34,18 +37,23 @@ __attribute__((section(".text.start")))
 void _start(void) {
     do_syscall(SYS_PRINT, (u64) "init: starting 0x", 1, 0);
 
-    u64 child_task_index = do_syscall(SYS_SPAWN_BUILTIN, BUILTIN_HELLO_SERVICE, 0, 0);
-    do_syscall(SYS_PRINT, (u64) "init: spawned hello_service, task_index=0x", child_task_index, 0);
+    u64 task_index = do_syscall(SYS_SPAWN_BUILTIN, BUILTIN_HELLO_SERVICE, 0, 0);
+    do_syscall(SYS_PRINT, (u64) "init: spawned hello_service, task_index=0x", task_index, 0);
 
-    u64 handle = do_syscall(SYS_OPEN_PROCESS, child_task_index, RIGHT_QUERY, 0);
-    u64 status;
-    do {
-        status = do_syscall(SYS_QUERY, handle, 0, 0);
-    } while (status != (u64) -1);
-    do_syscall(SYS_PRINT, (u64) "init: hello_service exited, restarting 0x", 1, 0);
+    int round = 0;
+    while (round < 3) {
+        u64 handle = do_syscall(SYS_OPEN_PROCESS, task_index, RIGHT_QUERY, 0);
+        u64 status;
+        do {
+            status = do_syscall(SYS_QUERY, handle, 0, 0);
+        } while (status != (u64) -1);
+        do_syscall(SYS_HANDLE_CLOSE, handle, 0, 0);
+        do_syscall(SYS_PRINT, (u64) "init: hello_service exited, restarting 0x", 1, 0);
 
-    u64 restarted_task_index = do_syscall(SYS_SPAWN_BUILTIN, BUILTIN_HELLO_SERVICE, 0, 0);
-    do_syscall(SYS_PRINT, (u64) "init: restarted hello_service, task_index=0x", restarted_task_index, 0);
+        task_index = do_syscall(SYS_SPAWN_BUILTIN, BUILTIN_HELLO_SERVICE, 0, 0);
+        do_syscall(SYS_PRINT, (u64) "init: restarted hello_service, task_index=0x", task_index, 0);
+        round = round + 1;
+    }
 
     for (;;) {
     }

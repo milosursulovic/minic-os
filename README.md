@@ -136,27 +136,30 @@ every command.
 
 ## Current status
 
-41 milestones shipped, spanning boot → interrupts → heap/paging →
+42 milestones shipped, spanning boot → interrupts → heap/paging →
 scheduler → syscalls/ring3 → per-process isolation → a native File/
 Channel/Process API + POSIX shim → capability/permission hardening →
 PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process → real
 process exit → process supervision → frame reclamation on exit →
-process/task slot reuse → kernel object reclamation on exit. The first
-34 were built in MiniC; the kernel was then rewritten by hand into C
-(see the note at the top of this file). Milestone 41 closes the exact
-gap that broke during milestone 40's own testing: `process_exit` now
-walks the exiting process's own handle table and frees every object it
-referenced (`alloc_object()`/`alloc_handle()` already searched for a
-free slot before appending - they just never had anything freed to
-find). Verified with exact hand arithmetic: `objs` reports `0x4` after
-a full spawn/exit/restart/exit cycle, matching by-hand computation of
-what should still be allocated - and the earlier `install`+`spawn`
-scenario that used to cascade into a broken `Channel.open()` (from
-`g_objects[8]` exhaustion) now works cleanly. The existing kernel-mode
-debug shell (`help`/`frames`/`tasks`/`pci`/... - most of it touching
-raw kernel internals no real design should expose to arbitrary
-userspace code directly) deliberately stays exactly as it is; migrating
-it isn't the next step.
+process/task slot reuse → kernel object reclamation on exit → early
+handle release. The first 34 were built in MiniC; the kernel was then
+rewritten by hand into C (see the note at the top of this file).
+Milestone 42 adds syscall 13 (`handle_close`): a process can now free
+a handle - and the object behind it - before it exits, closing the
+narrower gap milestone 41 left open (a handle one process holds *to*
+another lives in the holder's own table, so only the holder closing it
+early, or exiting, ever frees it). `init.c` now closes its query handle
+to `hello_service` after each restart cycle and loops the restart 3
+times - the exact aggressive-restart scenario that exhausted
+`g_objects[8]` during milestone 40's own testing, before any reclaim
+existed at all. Verified in QEMU, twice: `objs` reports `0x3` after all
+3 restart rounds complete - bit-for-bit the same as the clean-boot
+baseline, proving 3 rounds of open/query/close/restart leave zero net
+growth, not just a smaller leak. The existing kernel-mode debug shell
+(`help`/`frames`/`tasks`/`pci`/... - most of it touching raw kernel
+internals no real design should expose to arbitrary userspace code
+directly) deliberately stays exactly as it is; migrating it isn't the
+next step.
 
 See [os-docs's Roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for the full
 milestone-by-milestone history with real captured verification output
@@ -173,16 +176,13 @@ for every one of them.
   solving it), and its own handle table's objects are freed too
   (milestone 41 - `alloc_object`/`alloc_handle` already searched for a
   free slot before appending, they just never had anything freed to
-  find until now). The gap milestone 41 closes was found the hard way,
-  during milestone 40's own testing: a too-eager restart loop exhausted
-  `g_objects[8]` and broke an unrelated process's own `Channel.open()`
-  call. What's still genuinely unreclaimed: a handle another process
-  holds *to* the exiting process (e.g. `init`'s own permanent handle
-  from `open_process`ing `hello_service`) lives in *that other
-  process's* table, not the exiting one's, so it isn't touched - and a
-  process that opens handles to others but never exits itself has no
-  way to release them early, since there's no `handle_close`-style
-  syscall yet. Any handle still pointing
+  find until now). A process can also now free one of its own handles
+  early, without exiting, via `handle_close` (milestone 42, syscall
+  13) - the fix for the narrower gap milestone 41 left open: a handle
+  one process holds *to* another (e.g. `init`'s own `open_process`
+  handle onto `hello_service`) lives in the *holder's* table, so only
+  the holder closing it early or exiting ever frees it, never the
+  target's own exit. Any handle still pointing
   at an exited-then-reused process slot also now points at a
   *different, live* process, not just a frozen dead one - a sharper,
   more real version of the same "no ownership on handles" gap below.

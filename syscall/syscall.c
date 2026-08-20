@@ -8,7 +8,9 @@
 // address as "a program"), 12 process_exit (also frees the process's
 // private page-table/data frames and its own handle table's objects -
 // not its kernel stack or table slot, both reclaimed on the next
-// spawn_process() reusing this slot instead).
+// spawn_process() reusing this slot instead), 13 handle_close (frees
+// one handle+its object early, without exiting - the only way to
+// release a handle held onto another process before this holder exits).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -221,6 +223,22 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         g_tasks[g_current_task].used = false;
         yield();
         return 0;  // never actually reached - yield() never switches back to an exited task
+    }
+    if (num == 13) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        free_object(g_handle_tables[caller_process][handle_idx].object_index);
+        free_handle(caller_process, handle_idx);
+        return 0;
     }
     return (u64) -1;  // unknown syscall
 }
