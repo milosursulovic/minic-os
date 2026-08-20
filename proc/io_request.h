@@ -16,14 +16,20 @@
 typedef struct {
     bool used;
     bool done;
+    bool is_write;
     char path[64];
     u8 buffer[IO_REQUEST_BUF_SIZE];
+    u32 payload_len;  // for a write request: how many bytes of buffer to write
     int result;  // byte count, or -1 on failure - only meaningful once done
 } io_request;
 
 extern io_request g_io_requests[IO_REQUEST_SLOTS];
 
 int alloc_io_request(const char* path);
+// Writer copies payload (up to IO_REQUEST_BUF_SIZE) into the slot at issue
+// time, same reasoning as the path: the caller's buffer pointer isn't
+// safely dereferenceable once the worker task's own CR3 is loaded.
+int alloc_io_write_request(const char* path, u8* payload, u32 payload_len);
 void free_io_request(int slot_index);
 void io_worker_entry(void);
 

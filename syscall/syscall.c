@@ -21,7 +21,9 @@
 // returns a handle immediately, without blocking), 17 file_read_wait
 // (blocks - via the same wake-condition mechanism channel_receive uses,
 // not a busy spin - until that handle's read completes, then copies
-// the result into the caller's own buffer).
+// the result into the caller's own buffer), 18 file_write_async (same
+// shape, payload copied in at issue time), 19 file_write_wait (blocks
+// until the write completes, returns the byte count written).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -343,6 +345,9 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
             return (u64) -1;
         }
         int slot = g_objects[obj_index].data_index;
+        if (g_io_requests[slot].is_write) {
+            return (u64) -1;  // wrong wait syscall for a write-issued handle
+        }
         io_request_wait(slot);
         u8* buf = (u8*) a2;
         u32 max_len = (u32) a3;
@@ -358,6 +363,58 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
                 i = i + 1;
             }
         }
+        free_io_request(slot);
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
+        return (u64) result;
+    }
+    if (num == 18) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        char* path = (char*) a1;
+        u8* payload = (u8*) a2;
+        u32 payload_len = (u32) a3;
+        int slot = alloc_io_write_request(path, payload, payload_len);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_IO_REQUEST, slot);
+        if (obj_index < 0) {
+            free_io_request(slot);
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, 0);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            free_io_request(slot);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 19) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_IO_REQUEST) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        if (!g_io_requests[slot].is_write) {
+            return (u64) -1;  // wrong wait syscall for a read-issued handle
+        }
+        io_request_wait(slot);
+        int result = g_io_requests[slot].result;
         free_io_request(slot);
         free_object(obj_index);
         free_handle(caller_process, handle_idx);

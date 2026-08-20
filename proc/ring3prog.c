@@ -292,6 +292,30 @@ void _start(void) {
         g_async_buf[async_result] = 0;
         do_syscall(1, (u64) "file_read_wait() got back 0x", async_result, 0);
         do_syscall(1, (u64) &g_async_buf[0], 0, 0);
+    } else if (trigger_value == 7) {
+        // trigger 7 (ring3asyncwrite): issue an async write, do real work
+        // before waiting for it, then read the file back synchronously to
+        // prove the write actually landed - a real round trip, not just a
+        // plausible-looking byte count.
+        char* write_payload = "async write via a real worker task, not a stub!";
+        u64 write_handle = do_syscall(18, (u64) "/system/ring3asyncmsg.txt", (u64) write_payload, 47);
+        do_syscall(1, (u64) "file_write_async() got handle 0x", write_handle, 0);
+
+        int j = 0;
+        while (j < 5) {
+            do_syscall(1, (u64) "doing other work, iteration 0x", (u64) j, 0);
+            j = j + 1;
+        }
+
+        u64 write_result = do_syscall(19, write_handle, 0, 0);
+        do_syscall(1, (u64) "file_write_wait() got back 0x", write_result, 0);
+
+        file async_written_file;
+        async_written_file.path = "/system/ring3asyncmsg.txt";
+        u64 verify_read = file_read(&async_written_file, (char*) &g_async_buf[0], 63);
+        g_async_buf[verify_read] = 0;
+        do_syscall(1, (u64) "verify File.read() got back 0x", verify_read, 0);
+        do_syscall(1, (u64) &g_async_buf[0], 0, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

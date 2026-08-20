@@ -34,8 +34,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async pci nic arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async pci nic arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite pci nic arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite pci nic arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -565,6 +565,19 @@ static void cmd_ring3_async(void) {
     serial_print("sent ring3 async-read trigger");
 }
 
+// Issues an async write, does real work before waiting for it, then
+// reads the file back synchronously to prove the write actually landed.
+static void cmd_ring3_async_write(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0x7);
+    if (!ok) {
+        vga_print("ring3asyncwrite failed - channel full");
+        serial_print("ring3asyncwrite failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 async-write trigger");
+    serial_print("sent ring3 async-write trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -845,6 +858,8 @@ void run_command(void) {
         cmd_ring3_unregister();
     } else if (streq(g_line_buffer, "ring3async")) {
         cmd_ring3_async();
+    } else if (streq(g_line_buffer, "ring3asyncwrite")) {
+        cmd_ring3_async_write();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {
