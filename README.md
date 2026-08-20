@@ -136,14 +136,27 @@ every command.
 
 ## Current status
 
-42 milestones shipped, spanning boot → interrupts → heap/paging →
+43 milestones shipped, spanning boot → interrupts → heap/paging →
 scheduler → syscalls/ring3 → per-process isolation → a native File/
 Channel/Process API + POSIX shim → capability/permission hardening →
 PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process → real
 process exit → process supervision → frame reclamation on exit →
 process/task slot reuse → kernel object reclamation on exit → early
-handle release. The first 34 were built in MiniC; the kernel was then
-rewritten by hand into C (see the note at the top of this file).
+handle release → runtime service registration. The first 34 were built
+in MiniC; the kernel was then rewritten by hand into C (see the note at
+the top of this file). Milestone 43 adds syscall 14
+(`register_service`): a ring3 process can load a VFS file into a
+runtime registry slot and get back an index `spawn_builtin` (syscall
+11) can launch, alongside the one fixed compile-time entry - the
+registry isn't only the compile-time table anymore. Verified in QEMU,
+twice: the boot-time demo process registers its own just-`install`ed
+binary (`/system/testprog.bin`) at runtime, gets back index `0x1` (the
+first dynamic slot; index `0` stays reserved for the built-in
+`hello_service`), and `spawn_builtin`s it - the resulting process's own
+self-query independently reports the exact same `task_index`
+`spawn_builtin` returned, and it runs its full self-test sequence
+(File/POSIX/Channel) exactly like any other loaded instance, proving
+the runtime-registered image is genuinely running, not a stub.
 Milestone 42 adds syscall 13 (`handle_close`): a process can now free
 a handle - and the object behind it - before it exits, closing the
 narrower gap milestone 41 left open (a handle one process holds *to*
@@ -192,6 +205,11 @@ for every one of them.
 - Every fixed-size table (tasks, processes, objects, handles, channels,
   mounts) has a small, arbitrary capacity, and most boot-time creation
   calls don't check their own return value.
+- `register_service` (milestone 43) has its own small, fixed capacity -
+  4 runtime registry slots, 16KB each - and, unlike every other
+  resource this kernel now reclaims, a registered slot is never freed:
+  there's no `unregister_service`, so 4 registrations is the lifetime
+  cap for a single boot, not a per-moment one.
 - A loaded ring3 program's own code+data image is fully executable (no
   W^X split within it - the loader has no tracked code/data boundary).
   No ASLR, no sandboxing beyond address-space isolation.

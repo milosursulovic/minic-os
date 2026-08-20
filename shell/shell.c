@@ -34,8 +34,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg pci nic arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg pci nic arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -526,6 +526,19 @@ static void cmd_ring3_nx(void) {
     serial_print("sent ring3 stack-execution trigger - expect a page fault");
 }
 
+// Registers /system/testprog.bin at runtime and spawns it via that
+// index instead of a VFS path - run `install` first.
+static void cmd_ring3_register(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0x4);
+    if (!ok) {
+        vga_print("ring3reg failed - channel full");
+        serial_print("ring3reg failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 register-service trigger");
+    serial_print("sent ring3 register-service trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -800,6 +813,8 @@ void run_command(void) {
         cmd_ring3_fault();
     } else if (streq(g_line_buffer, "ring3nx")) {
         cmd_ring3_nx();
+    } else if (streq(g_line_buffer, "ring3reg")) {
+        cmd_ring3_register();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {

@@ -245,6 +245,16 @@ void _start(void) {
         void (*fn)(void) = (void (*)(void)) stack_code;
         fn();
         do_syscall(1, (u64) "stack execution succeeded (BUG!) at 0x", 0x80020000, 0);
+    } else if (trigger_value == 4) {
+        // trigger 4 (ring3reg): register /system/testprog.bin (written by
+        // `install`) at runtime, then spawn it through spawn_builtin's
+        // registry index instead of a VFS path - proves the registry isn't
+        // only the fixed compile-time entry anymore.
+        u64 service_index = do_syscall(14, (u64) "/system/testprog.bin", 0, 0);
+        do_syscall(1, (u64) "register_service() got index 0x", service_index, 0);
+
+        u64 spawned_task_index = do_syscall(11, service_index, 0, 0);
+        do_syscall(1, (u64) "spawn_builtin(registered) launched task_index 0x", spawned_task_index, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

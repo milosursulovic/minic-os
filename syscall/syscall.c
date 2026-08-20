@@ -10,7 +10,10 @@
 // not its kernel stack or table slot, both reclaimed on the next
 // spawn_process() reusing this slot instead), 13 handle_close (frees
 // one handle+its object early, without exiting - the only way to
-// release a handle held onto another process before this holder exits).
+// release a handle held onto another process before this holder exits),
+// 14 register_service (loads a VFS file into a runtime registry slot,
+// returning an index spawn_builtin can address alongside the fixed
+// compile-time entries).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -28,12 +31,28 @@ extern u8 g_hello_service_prog_start;
 extern u8 g_hello_service_prog_end;
 #pragma GCC visibility pop
 
+// Index 0 is the one fixed compile-time entry; indices 1+ map to
+// runtime-registered slots (register_service, syscall 14) - the
+// registry isn't only the compile-time table anymore.
+#define REGISTERED_SERVICE_SLOTS 4
+#define REGISTERED_SERVICE_MAX_BYTES 16384
+
+static u8 g_registered_service_buf[REGISTERED_SERVICE_SLOTS][REGISTERED_SERVICE_MAX_BYTES];
+static u32 g_registered_service_len[REGISTERED_SERVICE_SLOTS];
+static bool g_registered_service_used[REGISTERED_SERVICE_SLOTS];
+
 // Not a static array of &symbol pointers - that needs an absolute 64-bit
 // relocation the ELF32 build container can't represent.
 static bool builtin_program_bounds(int index, u8** start_out, u8** end_out) {
     if (index == 0) {
         *start_out = &g_hello_service_prog_start;
         *end_out = &g_hello_service_prog_end;
+        return true;
+    }
+    int slot = index - 1;
+    if (slot >= 0 && slot < REGISTERED_SERVICE_SLOTS && g_registered_service_used[slot]) {
+        *start_out = &g_registered_service_buf[slot][0];
+        *end_out = &g_registered_service_buf[slot][g_registered_service_len[slot]];
         return true;
     }
     return false;
@@ -239,6 +258,28 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         free_object(g_handle_tables[caller_process][handle_idx].object_index);
         free_handle(caller_process, handle_idx);
         return 0;
+    }
+    if (num == 14) {
+        char* path = (char*) a1;
+        int slot = -1;
+        int i = 0;
+        while (i < REGISTERED_SERVICE_SLOTS) {
+            if (!g_registered_service_used[i]) {
+                slot = i;
+                break;
+            }
+            i = i + 1;
+        }
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int n = vfs_read(path, &g_registered_service_buf[slot][0], REGISTERED_SERVICE_MAX_BYTES);
+        if (n < 0) {
+            return (u64) -1;
+        }
+        g_registered_service_used[slot] = true;
+        g_registered_service_len[slot] = (u32) n;
+        return (u64) (slot + 1);  // index 0 stays reserved for the compile-time entry
     }
     return (u64) -1;  // unknown syscall
 }
