@@ -52,6 +52,18 @@
 // REQUESTS a rights bitmask (arg2), and the kernel grants the
 // intersection of what was requested and what's actually grantable for
 // an OBJ_PROCESS handle today (`requested & RIGHT_QUERY`).
+// num 11: spawn_builtin (milestone 36) - lets a ring3 process spawn
+// ANOTHER ring3 process from a small, fixed, kernel-embedded program
+// registry (g_builtin_programs below), addressed by INDEX rather than
+// a raw pointer - the real reason this is its own syscall instead of
+// just exposing spawn_process() directly to ring3: a raw-pointer
+// version would let ring3 code claim any address in memory is a valid
+// program image, exactly the kind of hole the capability/rights phase
+// (milestones 25-27) worked to close everywhere else. num 6
+// (spawn, via a VFS path) already covers "spawn a real file from disk";
+// this covers "spawn one of a few programs the kernel itself shipped
+// with," the mechanism proc/init.c uses to launch proc/hello_service.c
+// without needing the filesystem to have anything on it yet.
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -61,6 +73,39 @@
 #include "../proc/object.h"
 #include "../proc/channel.h"
 #include "../disk/vfs.h"
+
+#pragma GCC visibility push(hidden)
+extern u8 g_hello_service_prog_start;
+extern u8 g_hello_service_prog_end;
+#pragma GCC visibility pop
+
+// Deliberately NOT a static const array of {start, end} pointers
+// initialized with &symbol expressions - that needs an absolute 64-bit
+// relocation (R_X86_64_64) to bake the real addresses into static data,
+// which isn't representable in the ELF32 container `as --32` produces
+// (same class of restriction CLAUDE.md documents for hand-written asm:
+// no `.quad <label>` as static data). A plain if/else resolving each
+// address at the point of use - the same RIP-relative `lea` every other
+// `&marker_symbol` reference in this kernel already compiles to as an
+// ordinary runtime expression - sidesteps it entirely, and is honestly
+// simpler for the one entry this registry has today anyway.
+static bool builtin_program_bounds(int index, u8** start_out, u8** end_out) {
+    if (index == 0) {
+        *start_out = &g_hello_service_prog_start;
+        *end_out = &g_hello_service_prog_end;
+        return true;
+    }
+    return false;
+}
+
+// Same fixed load/stack addresses spawn_process() uses everywhere else
+// in this kernel - safe to reuse across every concurrently-running
+// process since each gets its own private, cloned address space
+// (clone_address_space()), already proven by the boot-time demo's own
+// Process.spawn() call landing a second instance at these identical
+// virtual addresses successfully.
+static const u64 BUILTIN_LOAD_VADDR = 0x80000000;
+static const u64 BUILTIN_STACK_VADDR = 0x80020000;
 
 u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     if (num == 1) {
@@ -209,6 +254,18 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
             return (u64) -1;
         }
         return (u64) handle_idx;
+    }
+    if (num == 11) {
+        u8* start;
+        u8* end;
+        if (!builtin_program_bounds((int) a1, &start, &end)) {
+            return (u64) -1;
+        }
+        int proc_index = spawn_process(start, end, BUILTIN_LOAD_VADDR, BUILTIN_STACK_VADDR);
+        if (proc_index < 0) {
+            return (u64) -1;
+        }
+        return (u64) g_processes[proc_index].task_index;
     }
     return (u64) -1;  // unknown syscall
 }

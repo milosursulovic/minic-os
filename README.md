@@ -60,8 +60,11 @@ syscall/          ring0/ring3 boundary
   syscall.c/.h       syscall dispatcher: print, handle-query, File/Channel/Process
 proc/             process loading + the kernel object model + IPC
   ring3prog.c        the loaded ring3 "program" - real C, compiled standalone
+  init.c             milestone 36: a real init process - spawns hello_service.c
+  hello_service.c    milestone 36: a trivial real service, spawned by init.c
   ring3.ld           standalone linker script (keeps sections contiguous)
-  ring3blob.s        wraps the objcopy'd flat blob for the loader
+  ring3blob.s / init_blob.s / hello_service_blob.s
+                     each wraps its own objcopy'd flat blob for the loader
   process.c/.h       spawn_process()/spawn_process_from_path() - the real loader
   object.c/.h        kernel object table + per-process handle tables (rights)
   channel.c/.h       IPC channels
@@ -133,14 +136,20 @@ every command.
 
 ## Current status
 
-35 milestones shipped, spanning boot → interrupts → heap/paging →
+36 milestones shipped, spanning boot → interrupts → heap/paging →
 scheduler → syscalls/ring3 → per-process isolation → a native File/
 Channel/Process API + POSIX shim → capability/permission hardening →
-PCI/NIC/ARP/IP/UDP/DNS/TCP networking. The first 34 were built in
-MiniC; the kernel was then rewritten by hand into C (see the note at
-the top of this file). Next up: service architecture + a real `init`
-(the current hardcoded shell loop becomes a real userspace program once
-processes/IPC/VFS support that).
+PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process. The first
+34 were built in MiniC; the kernel was then rewritten by hand into C
+(see the note at the top of this file). Milestone 36 is deliberately
+narrow: a dedicated ring3 `init` process (`proc/init.c`) spawns a real
+service (`proc/hello_service.c`) via a new syscall referencing a small,
+fixed, kernel-embedded program registry - proving a ring3 process can
+launch another one without touching the filesystem, which is still
+empty on a fresh boot. The existing kernel-mode debug shell (`help`/
+`frames`/`tasks`/`pci`/... - most of it touching raw kernel internals
+no real design should expose to arbitrary userspace code directly)
+deliberately stays exactly as it is; migrating it isn't the next step.
 
 See [os-docs's Roadmap](https://github.com/milosursulovic/minic-os-docs/blob/main/roadmap.html) for the full
 milestone-by-milestone history with real captured verification output
@@ -177,6 +186,15 @@ for every one of them.
 - The e1000 TX/RX rings are fixed-size (8 descriptors) and poll rather
   than using the device's own interrupt capability, same as the ATA
   driver.
+- `spawn_builtin` (syscall 11) can only launch one of a small, fixed,
+  compile-time-embedded set of programs (one, today: `hello_service.c`)
+  by index - there's no way for init or anything else to register a
+  new one at runtime, and nothing yet bridges "a real service lives on
+  disk" to this mechanism (that's still `spawn_process_from_path()`/
+  syscall 6, a separate path). `init.c` itself does nothing past
+  spawning its one service and idling - no supervision, no restart on
+  exit (there's no process-exit mechanism at all yet either), no
+  dependency ordering.
 - `File.write()`'s syscall return value has been observed to
   intermittently read back as `-1` even though the write itself
   demonstrably succeeds (a subsequent read/`ls` always shows the

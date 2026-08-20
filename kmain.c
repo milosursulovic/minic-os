@@ -23,6 +23,8 @@
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
 extern u8 g_test_prog_end;
+extern u8 g_init_prog_start;
+extern u8 g_init_prog_end;
 #pragma GCC visibility pop
 
 void _start(void) {
@@ -83,6 +85,16 @@ void _start(void) {
     create_isolated_task(&proc_receiver_entry);
     vfs_mount("/system", BACKEND_MINIFS);
     vfs_mount("/devices", BACKEND_DEVICE);
+
+    // Milestone 36: the kernel's first real init process - a separate,
+    // dedicated ring3 program (not the demo above) whose only job is to
+    // spawn a real service of its own (proc/hello_service.c, via the
+    // new spawn_builtin syscall) once it's running. Same fixed load/
+    // stack addresses as every other spawn_process() call site here -
+    // safe to reuse since this lands in its own private, cloned address
+    // space, same as the demo process spawning a second instance of
+    // itself already proved.
+    spawn_process(&g_init_prog_start, &g_init_prog_end, 0x80000000, 0x80020000);
 
     __asm__ volatile("sti");
 

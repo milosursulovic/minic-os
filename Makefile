@@ -38,7 +38,7 @@ CFLAGS := -ffreestanding -m64 -mgeneral-regs-only -mno-red-zone \
 ASM_SRCS := boot/boot.s boot/interrupts.s sched/switch.s syscall/usermode.s
 ASM_OBJS := $(ASM_SRCS:.s=.o)
 
-C_SRCS := $(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './.claude/*')
+C_SRCS := $(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './.claude/*')
 C_OBJS := $(C_SRCS:.c=.o)
 
 .PHONY: all run iso disk clean
@@ -77,14 +77,37 @@ proc/ring3prog.bin: proc/ring3prog.c proc/ring3.ld
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		proc/ring3prog_linked.elf proc/ring3prog.bin
 
-# `.incbin` in ring3blob.s resolves relative to the assembler's own
+# Milestone 36's two new standalone-linked ring3 programs (init, and
+# the trivial service it spawns) - same shape as ring3prog.bin above,
+# just two more of them.
+proc/init.bin: proc/init.c proc/ring3.ld
+	$(CC) $(CFLAGS) -S -o proc/init.gen.s proc/init.c
+	{ echo ".code64"; cat proc/init.gen.s; } | $(AS) --32 -o proc/init_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/init_linked.elf proc/init_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		proc/init_linked.elf proc/init.bin
+
+proc/hello_service.bin: proc/hello_service.c proc/ring3.ld
+	$(CC) $(CFLAGS) -S -o proc/hello_service.gen.s proc/hello_service.c
+	{ echo ".code64"; cat proc/hello_service.gen.s; } | $(AS) --32 -o proc/hello_service_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/hello_service_linked.elf proc/hello_service_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		proc/hello_service_linked.elf proc/hello_service.bin
+
+# `.incbin` in each *_blob.s resolves relative to the assembler's own
 # working directory, not the .s file's location - `cd proc` first,
 # matching the MiniC-era build's own convention.
 proc/ring3blob.o: proc/ring3blob.s proc/ring3prog.bin
 	cd proc && $(AS) --32 ring3blob.s -o ../$@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) proc/ring3blob.o
-	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) proc/ring3blob.o
+proc/init_blob.o: proc/init_blob.s proc/init.bin
+	cd proc && $(AS) --32 init_blob.s -o ../$@
+
+proc/hello_service_blob.o: proc/hello_service_blob.s proc/hello_service.bin
+	cd proc && $(AS) --32 hello_service_blob.s -o ../$@
+
+kernel.elf: $(ASM_OBJS) $(C_OBJS) proc/ring3blob.o proc/init_blob.o proc/hello_service_blob.o
+	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) proc/ring3blob.o proc/init_blob.o proc/hello_service_blob.o
 	@echo "built kernel.elf"
 
 disk.img:
@@ -112,3 +135,5 @@ clean:
 	find . -name '*.gen.s' -delete
 	rm -f kernel.elf minic-os.iso disk.img
 	rm -f proc/ring3prog.bin proc/ring3prog_linked.elf proc/ring3prog_raw.o
+	rm -f proc/init.bin proc/init_linked.elf proc/init_raw.o
+	rm -f proc/hello_service.bin proc/hello_service_linked.elf proc/hello_service_raw.o
