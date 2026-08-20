@@ -24,6 +24,7 @@ extern void isr13(void);
 extern void isr14(void);
 extern void irq0(void);
 extern void irq1(void);
+extern void irq12(void);
 extern void isr_syscall(void);
 #pragma GCC visibility pop
 
@@ -47,6 +48,7 @@ void idt_init(void) {
     set_idt_entry(14, (u64) &isr14, 0);
     set_idt_entry(32, (u64) &irq0, 0);
     set_idt_entry(33, (u64) &irq1, 0);
+    set_idt_entry(44, (u64) &irq12, 0);
     set_idt_entry(0x80, (u64) &isr_syscall, 3);
 
     g_idt_ptr.limit = (u16) (sizeof(idt_entry) * 256 - 1);

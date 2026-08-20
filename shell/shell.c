@@ -23,6 +23,7 @@
 #include "../net/dns.h"
 #include "../net/tcp.h"
 #include "../drivers/vbe.h"
+#include "../drivers/mouse.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -35,8 +36,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb mouse arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic fb mouse arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -756,6 +757,29 @@ static void cmd_fb(void) {
     print_hex((u64) fb_get_pixel(300, 250));
 }
 
+// Enables the PS/2 mouse and reports its currently tracked state. Safe to
+// re-run - init doesn't reset position/buttons/packet count, so running
+// this once, injecting real input, then running it again proves a genuine
+// hardware round trip rather than just "the driver didn't crash".
+static void cmd_mouse(void) {
+    mouse_init();
+    vga_print("mouse x=0x");
+    serial_print("mouse x=0x");
+    print_hex((u64) g_mouse_x);
+    vga_print(" y=0x");
+    serial_print(" y=0x");
+    print_hex((u64) g_mouse_y);
+    vga_print(" buttons=0x");
+    serial_print(" buttons=0x");
+    print_hex((u64) g_mouse_buttons);
+    vga_print(" packets=0x");
+    serial_print(" packets=0x");
+    print_hex((u64) g_mouse_packet_count);
+    vga_print(" rawbytes=0x");
+    serial_print(" rawbytes=0x");
+    print_hex((u64) g_mouse_raw_byte_count);
+}
+
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
 // proxy, and resolves an unreachable address (must fail cleanly).
 static void cmd_arp(void) {
@@ -989,6 +1013,8 @@ void run_command(void) {
         cmd_nic();
     } else if (streq(g_line_buffer, "fb")) {
         cmd_fb();
+    } else if (streq(g_line_buffer, "mouse")) {
+        cmd_mouse();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
     } else if (streq(g_line_buffer, "ping")) {

@@ -3,6 +3,7 @@
 #include "isr.h"
 #include "../drivers/io.h"
 #include "../drivers/keyboard.h"
+#include "../drivers/mouse.h"
 #include "../lib/strings.h"
 #include "../sched/task.h"
 
@@ -45,6 +46,13 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
             }
         }
         outb(0x20, 0x20);
+        return;
+    }
+
+    if (vector == 44) {
+        mouse_handle_byte(inb(0x60));
+        outb(0xA0, 0x20);  // EOI to the slave PIC first - it's the one that actually saw this IRQ
+        outb(0x20, 0x20);  // then the master, since IRQ12 reached it only via the cascade line
         return;
     }
 

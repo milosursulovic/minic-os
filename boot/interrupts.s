@@ -21,6 +21,7 @@
 .global isr14
 .global irq0
 .global irq1
+.global irq12
 .global isr_syscall
 
 .macro isr_noerr num
@@ -48,6 +49,11 @@ irq0:
 irq1:
     push 0
     push 33
+    jmp isr_common_stub
+
+irq12:
+    push 0
+    push 44
     jmp isr_common_stub
 
 # Stack on entry: [vector, error_code, RIP, CS, RFLAGS, RSP, SS] (CPU pushed
