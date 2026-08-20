@@ -1,5 +1,6 @@
-// TCP client only: one connection at a time, no connection table, no
-// listening side, no retransmission/congestion control.
+// TCP client only: no listening side, no retransmission/congestion
+// control. A real connection table (below) gives each concurrent fetch
+// its own local port, so two connections no longer collide.
 //
 // Off-subnet hosts are reached by sending the frame to the gateway's MAC
 // (ARP-resolved) while the IP header's destination is the real remote host -
@@ -82,11 +83,36 @@ static void tcp_build_header(u8* out, u16 src_port, u16 dst_port, u32 seq, u32 a
 
 static const u16 TCP_WINDOW = 8192;
 
-static const u16 LOCAL_PORT = 43981;
+static const u16 TCP_BASE_LOCAL_PORT = 43981;
+
+tcp_connection g_tcp_connections[TCP_CONNECTION_SLOTS];
+
+static int tcp_conn_open(u8* remote_ip, u16 remote_port) {
+    int i = 0;
+    while (i < TCP_CONNECTION_SLOTS) {
+        if (!g_tcp_connections[i].used) {
+            g_tcp_connections[i].used = true;
+            g_tcp_connections[i].local_port = (u16) (TCP_BASE_LOCAL_PORT + i);
+            int j = 0;
+            while (j < 4) {
+                g_tcp_connections[i].remote_ip[j] = remote_ip[j];
+                j = j + 1;
+            }
+            g_tcp_connections[i].remote_port = remote_port;
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+static void tcp_conn_close(int slot) {
+    g_tcp_connections[slot].used = false;
+}
 
 // Every send goes through this helper, so the gateway-vs-destination
 // distinction is handled in exactly one place.
-static bool tcp_send_segment(u8* gateway_mac, u8* target_ip, u16 target_port,
+static bool tcp_send_segment(u8* gateway_mac, u8* target_ip, u16 target_port, u16 local_port,
                               u32 seq, u32 ack, u8 flags, u8* payload, u16 payload_len) {
     u8 frame[1500];
     int i = 0;
@@ -111,7 +137,7 @@ static bool tcp_send_segment(u8* gateway_mac, u8* target_ip, u16 target_port,
         frame[34 + 20 + i] = payload[i];
         i = i + 1;
     }
-    tcp_build_header(&frame[34], LOCAL_PORT, target_port, seq, ack, flags, TCP_WINDOW,
+    tcp_build_header(&frame[34], local_port, target_port, seq, ack, flags, TCP_WINDOW,
                       &g_my_ip[0], target_ip, payload_len);
 
     u16 frame_len = (u16) (54 + payload_len);
@@ -126,8 +152,8 @@ typedef struct {
     u16 payload_offset;   // into the caller's own receive buffer
 } tcp_segment_info;
 
-// Tick-bounded poll for a segment genuinely from target_ip:target_port to LOCAL_PORT.
-static bool tcp_wait_segment(u8* target_ip, u16 target_port, u64 timeout_ticks,
+// Tick-bounded poll for a segment genuinely from target_ip:target_port to local_port.
+static bool tcp_wait_segment(u8* target_ip, u16 target_port, u16 local_port, u64 timeout_ticks,
                               u8* buf, u16 buf_len, tcp_segment_info* info_out) {
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < timeout_ticks) {
@@ -152,7 +178,7 @@ static bool tcp_wait_segment(u8* target_ip, u16 target_port, u64 timeout_ticks,
         u16 ip_total_len = (((u16) buf[16]) << 8) | ((u16) buf[17]);
         u16 src_port = (((u16) buf[34]) << 8) | ((u16) buf[35]);
         u16 dst_port = (((u16) buf[36]) << 8) | ((u16) buf[37]);
-        if (src_port != target_port || dst_port != LOCAL_PORT) {
+        if (src_port != target_port || dst_port != local_port) {
             continue;
         }
         u32 seq = (((u32) buf[38]) << 24) | (((u32) buf[39]) << 16) | (((u32) buf[40]) << 8) | ((u32) buf[41]);
@@ -171,10 +197,8 @@ static bool tcp_wait_segment(u8* target_ip, u16 target_port, u64 timeout_ticks,
     return false;
 }
 
-bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_len,
-               u8* response_out, u32 max_response_len, u32* response_len_out) {
-    *response_len_out = 0;
-
+static bool tcp_fetch_conn(u16 local_port, u8* target_ip, u16 target_port, const char* request, u16 request_len,
+                            u8* response_out, u32 max_response_len, u32* response_len_out) {
     u8 gateway_mac[6];
     if (!arp_resolve((u8*) &GATEWAY_IP[0], &gateway_mac[0])) {
         return false;
@@ -189,10 +213,10 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
     tcp_segment_info seg;
 
     // --- Three-way handshake ---
-    if (!tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq, 0, TCP_FLAG_SYN, NULL, 0)) {
+    if (!tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, 0, TCP_FLAG_SYN, NULL, 0)) {
         return false;
     }
-    if (!tcp_wait_segment(target_ip, target_port, 3000, &recv_buf[0], 1500, &seg)) {
+    if (!tcp_wait_segment(target_ip, target_port, local_port, 3000, &recv_buf[0], 1500, &seg)) {
         return false;
     }
     if ((seg.flags & TCP_FLAG_RST) != 0) {
@@ -203,13 +227,13 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
     }
     my_seq = my_seq + 1;
     peer_seq = seg.seq + 1;
-    if (!tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq, peer_seq, TCP_FLAG_ACK, NULL, 0)) {
+    if (!tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq, TCP_FLAG_ACK, NULL, 0)) {
         return false;
     }
     // Handshake complete - ESTABLISHED.
 
     // --- Send the real request as one data segment ---
-    if (!tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq, peer_seq,
+    if (!tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq,
                            TCP_FLAG_PSH | TCP_FLAG_ACK, (u8*) request, request_len)) {
         return false;
     }
@@ -221,7 +245,7 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
     u32 total_received = 0;
     u64 recv_deadline = g_tick_count + 3000;
     while (g_tick_count < recv_deadline && total_received < max_response_len) {
-        if (!tcp_wait_segment(target_ip, target_port, recv_deadline - g_tick_count,
+        if (!tcp_wait_segment(target_ip, target_port, local_port, recv_deadline - g_tick_count,
                                &recv_buf[0], 1500, &seg)) {
             break;   // timed out - stop with whatever arrived
         }
@@ -243,7 +267,7 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
             peer_finished = true;
         }
         // ACK whatever was just processed - keeps peer_seq/my_seq honest for the close below.
-        tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq, peer_seq, TCP_FLAG_ACK, NULL, 0);
+        tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq, TCP_FLAG_ACK, NULL, 0);
         if (peer_finished) {
             break;
         }
@@ -252,17 +276,30 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
 
     // Best-effort close; a timeout here doesn't flip the overall return value.
     if (!peer_finished) {
-        tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq, peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
-        if (tcp_wait_segment(target_ip, target_port, 500, &recv_buf[0], 1500, &seg)) {
+        tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
+        if (tcp_wait_segment(target_ip, target_port, local_port, 500, &recv_buf[0], 1500, &seg)) {
             if ((seg.flags & TCP_FLAG_FIN) != 0) {
                 peer_seq = seg.seq + 1;
-                tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq + 1, peer_seq, TCP_FLAG_ACK, NULL, 0);
+                tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq + 1, peer_seq, TCP_FLAG_ACK, NULL, 0);
             }
         }
     } else {
-        tcp_send_segment(&gateway_mac[0], target_ip, target_port, my_seq, peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
-        tcp_wait_segment(target_ip, target_port, 500, &recv_buf[0], 1500, &seg);   // best-effort final ACK, result unused
+        tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
+        tcp_wait_segment(target_ip, target_port, local_port, 500, &recv_buf[0], 1500, &seg);   // best-effort final ACK, result unused
     }
 
     return total_received > 0;
+}
+
+bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_len,
+               u8* response_out, u32 max_response_len, u32* response_len_out) {
+    *response_len_out = 0;
+    int slot = tcp_conn_open(target_ip, target_port);
+    if (slot < 0) {
+        return false;
+    }
+    bool ok = tcp_fetch_conn(g_tcp_connections[slot].local_port, target_ip, target_port,
+                              request, request_len, response_out, max_response_len, response_len_out);
+    tcp_conn_close(slot);
+    return ok;
 }

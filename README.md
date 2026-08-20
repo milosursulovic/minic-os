@@ -42,7 +42,8 @@ net/              networking
   icmp.c/.h          ICMP echo (ping)
   udp.c/.h           UDP send/receive + pseudo-header checksum
   dns.c/.h           a minimal hand-crafted DNS query/resolver
-  tcp.c/.h           a real TCP client - handshake, data, best-effort close
+  tcp.c/.h           a real TCP client - handshake, data, best-effort
+                     close, a real per-connection local-port table
 mm/               memory management
   heap.c/.h          kalloc/kfree free-list allocator, grows on demand
   frames.c/.h        multiboot memory map parser + physical frame allocator
@@ -255,12 +256,10 @@ output for everything above.
   2-slot pool with a 256-byte request cap and a 512-byte response cap.
   No async ARP or raw UDP for ring3, and neither has a ring3-facing
   syscall at all (they remain kernel-mode shell commands only, same as
-  before). TCP itself is still the same fixed-single-local-port,
-  one-connection-at-a-time client documented below - two fetches to
-  the exact same remote address close together (whether async, sync,
-  or a mix of both) can collide on that reused port and fail, same as
-  it always could; DNS round-robin usually avoids this in practice by
-  picking a different server each time.
+  before). TCP now has a real connection table (4 slots, each with its
+  own local port), so multiple fetches - including two to the exact
+  same remote address close together - no longer collide the way a
+  single fixed local port used to.
 - A loaded ring3 program's own code+data image is fully executable (no
   W^X split within it - the loader has no tracked code/data boundary).
   No ASLR, no sandboxing beyond address-space isolation.
@@ -275,10 +274,10 @@ output for everything above.
 - ICMP only implements echo request/reply. `dns_query()`/`dns_resolve_a()`
   are deliberately not a real DNS client (no caching, no retries, A
   records only).
-- TCP (`net/tcp.c`) is client-only, one connection at a time with no
-  connection table, no retransmission or congestion control (a lost
-  segment just times out), no options (no window scaling, no SACK), and
-  close is best-effort only.
+- TCP (`net/tcp.c`) is client-only - no listening/server side - with a
+  real but small connection table (4 slots), no retransmission or
+  congestion control (a lost segment just times out), no options (no
+  window scaling, no SACK), and close is best-effort only.
 - The e1000 TX/RX rings are fixed-size (8 descriptors) and poll rather
   than using the device's own interrupt capability, same as the ATA
   driver.

@@ -34,8 +34,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp pci nic arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -271,6 +271,38 @@ static void cmd_objs(void) {
         vga_print(" data_index=0x");
         serial_print(" data_index=0x");
         print_hex((u64) g_objects[0].data_index);
+    }
+}
+
+static void cmd_netconns(void) {
+    vga_print("tcp connections:");
+    serial_print("tcp connections:");
+    int i = 0;
+    while (i < TCP_CONNECTION_SLOTS) {
+        if (g_tcp_connections[i].used) {
+            vga_print(" conn");
+            serial_print(" conn");
+            print_hex((u64) i);
+            vga_print(" local_port=0x");
+            serial_print(" local_port=0x");
+            print_hex((u64) g_tcp_connections[i].local_port);
+            vga_print(" remote=0x");
+            serial_print(" remote=0x");
+            print_hex((u64) g_tcp_connections[i].remote_ip[0]);
+            vga_print(".0x");
+            serial_print(".0x");
+            print_hex((u64) g_tcp_connections[i].remote_ip[1]);
+            vga_print(".0x");
+            serial_print(".0x");
+            print_hex((u64) g_tcp_connections[i].remote_ip[2]);
+            vga_print(".0x");
+            serial_print(".0x");
+            print_hex((u64) g_tcp_connections[i].remote_ip[3]);
+            vga_print(":0x");
+            serial_print(":0x");
+            print_hex((u64) g_tcp_connections[i].remote_port);
+        }
+        i = i + 1;
     }
 }
 
@@ -858,6 +890,8 @@ void run_command(void) {
         cmd_ps();
     } else if (streq(g_line_buffer, "objs")) {
         cmd_objs();
+    } else if (streq(g_line_buffer, "netconns")) {
+        cmd_netconns();
     } else if (streq(g_line_buffer, "disk")) {
         cmd_disk();
     } else if (streq(g_line_buffer, "diskwrite")) {
