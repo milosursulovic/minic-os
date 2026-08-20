@@ -2025,8 +2025,11 @@ milestones 1-10 were each scoped just before starting them:
     (no window scaling, no SACK), close is best-effort only (a peer that
     never FINs after the milestone's own success criterion is already met
     just gets abandoned, not tracked as a real leak anywhere). These are
-    real, substantial follow-on work, not oversights.~~ Next up: Phase IX
-    (capability/permission work + security hardening).
+    real, substantial follow-on work, not oversights.~~ Next up: Phase XI
+    (service architecture + a real `init`, item 11 below) - Phase IX
+    (capability/permission work + security hardening, milestones 25-28)
+    and Phase X (driver framework + networking through TCP, milestones
+    29-35) are both complete.
 11. **Service architecture + a real `init`** - the current hardcoded
     `shell/shell.c` loop migrates to an actual userspace program once
     processes/IPC/VFS exist to support that; async I/O as a cross-cutting
