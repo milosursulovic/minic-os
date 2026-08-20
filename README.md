@@ -19,7 +19,7 @@ entry). This kernel was originally built in a custom language called
 MiniC through milestone 34, then rewritten by hand into C afterward for
 faster development — the "no external libraries, everything hand-written"
 rule didn't change, only the implementation language did. See
-[os-docs's roadmap](https://github.com/milosursulovic/minic-os-docs/blob/main/roadmap.html#rewrite) for that story in
+[os-docs's roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap#rewrite) for that story in
 full, and the git history for one commit per rewrite stage.
 
 ## Project layout
@@ -77,7 +77,7 @@ shell/            the interactive shell
   shell.c/.h         cmd_* functions + run_command dispatch
 ```
 
-See [os-docs's Architecture reference](https://github.com/milosursulovic/minic-os-docs/blob/main/reference.html) for
+See [os-docs's Architecture reference](https://minic-os-docs.milosursulovic2696.workers.dev/reference) for
 the deep dive on every subsystem above - boot process, memory map,
 scheduler, process model, IPC, the syscall ABI, capabilities, the
 native API, the POSIX shim, and every driver/protocol layer, each with
@@ -130,8 +130,8 @@ To check output without a display, redirect the serial port to a file:
 qemu-system-x86_64 -kernel kernel.elf -display none -serial file:serial.log -no-reboot
 ```
 
-See [os-docs's Getting Started guide](https://github.com/milosursulovic/minic-os-docs/blob/main/install.html) for the
-full walkthrough, and [the Shell Guide](https://github.com/milosursulovic/minic-os-docs/blob/main/guide.html) for
+See [os-docs's Getting Started guide](https://minic-os-docs.milosursulovic2696.workers.dev/install) for the
+full walkthrough, and [the Shell Guide](https://minic-os-docs.milosursulovic2696.workers.dev/guide) for
 every command.
 
 ## Current status
@@ -151,7 +151,7 @@ empty on a fresh boot. The existing kernel-mode debug shell (`help`/
 no real design should expose to arbitrary userspace code directly)
 deliberately stays exactly as it is; migrating it isn't the next step.
 
-See [os-docs's Roadmap](https://github.com/milosursulovic/minic-os-docs/blob/main/roadmap.html) for the full
+See [os-docs's Roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for the full
 milestone-by-milestone history with real captured verification output
 for every one of them.
 
@@ -201,19 +201,19 @@ for every one of them.
   correct file) - not reproducible on demand, data integrity is never
   affected, needs real diagnostics in a future session.
 
-See [os-docs's Known Limitations](https://github.com/milosursulovic/minic-os-docs/blob/main/reference.html#limitations)
+See [os-docs's Known Limitations](https://minic-os-docs.milosursulovic2696.workers.dev/reference#limitations)
 for the fuller list with links to exactly which milestone closed each
 now-fixed gap.
 
 ## Docs
 
 This file is deliberately a short overview. The
-[os-docs site](https://github.com/milosursulovic/minic-os-docs/blob/main/index.html) (repo `minic-os-docs`) carries
-the real depth: [Getting Started](https://github.com/milosursulovic/minic-os-docs/blob/main/install.html),
-[Shell Guide](https://github.com/milosursulovic/minic-os-docs/blob/main/guide.html),
-[Architecture reference](https://github.com/milosursulovic/minic-os-docs/blob/main/reference.html),
-[an annotated real session walkthrough](https://github.com/milosursulovic/minic-os-docs/blob/main/examples.html), and
-the [full milestone roadmap](https://github.com/milosursulovic/minic-os-docs/blob/main/roadmap.html). `CLAUDE.md` in
+[os-docs site](https://minic-os-docs.milosursulovic2696.workers.dev/) (repo `minic-os-docs`) carries
+the real depth: [Getting Started](https://minic-os-docs.milosursulovic2696.workers.dev/install),
+[Shell Guide](https://minic-os-docs.milosursulovic2696.workers.dev/guide),
+[Architecture reference](https://minic-os-docs.milosursulovic2696.workers.dev/reference),
+[an annotated real session walkthrough](https://minic-os-docs.milosursulovic2696.workers.dev/examples), and
+the [full milestone roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap). `CLAUDE.md` in
 this repo carries the load-bearing architecture notes worth knowing
 before touching `boot.s`/`interrupts.s`/paging/scheduling code, and the
 exact toolchain mechanics behind this kernel's build.
