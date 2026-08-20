@@ -3,26 +3,25 @@
 // no record types beyond A). This exists purely as a real, external
 // verification vehicle for UDP, the same "one hardcoded real-protocol
 // message as a test vehicle, not a general implementation" discipline
-// milestone 31's ARP request and milestone 33's ICMP ping both already
-// used. QEMU SLIRP's own built-in DNS proxy (10.0.2.3, the same address
-// milestone 32's `arp` command already resolved) forwards a real query
-// to a real resolver and sends back a real answer - genuinely external
-// verification, not self-validation.
+// the ARP request and ICMP ping both already used. QEMU SLIRP's own
+// built-in DNS proxy (10.0.2.3, the same address the `arp` command
+// already resolves) forwards a real query to a real resolver and sends
+// back a real answer - genuinely external verification, not
+// self-validation.
 
-import "udp.mc";
-import "ip.mc";
-import "../isr/isr.mc";
+#include "dns.h"
+#include "udp.h"
+#include "ip.h"
+#include "../isr/isr.h"
 
-const u16 dns_port = 53;
-const u16 dns_src_port = 12345;
+static const u16 DNS_PORT = 53;
+static const u16 DNS_SRC_PORT = 12345;
 
 // Encodes a dotted hostname ("example.com") into DNS label format:
 // each segment prefixed by its own length byte, terminated by a zero
-// length byte ("\7example\3com\0"). Bounded at 256 iterations (not
-// `while (true)`, which this compiler's return-reachability checker
-// doesn't recognize as provably terminating) - real headroom past any
-// hostname this milestone actually uses.
-u16 dns_encode_name(u8* out, char* hostname) {
+// length byte ("\7example\3com\0"). Bounded at 256 iterations - real
+// headroom past any hostname this milestone actually uses.
+static u16 dns_encode_name(u8* out, char* hostname) {
     u16 pos = 1;
     u16 len_pos = 0;
     u8 label_len = 0;
@@ -54,7 +53,7 @@ u16 dns_encode_name(u8* out, char* hostname) {
 // question, recursion desired, no answers/authority/additional records
 // - a real, standard query shape) followed by the encoded QNAME, QTYPE
 // (1 = A record), and QCLASS (1 = IN).
-u16 dns_build_query(u8* out, u16 transaction_id, char* hostname) {
+static u16 dns_build_query(u8* out, u16 transaction_id, char* hostname) {
     out[0] = (u8) (transaction_id >> 8);
     out[1] = (u8) (transaction_id & 0xFF);
     out[2] = 0x01;   // flags: standard query, recursion desired
@@ -91,12 +90,12 @@ bool dns_query(char* hostname) {
     u8 query[96];
     u16 query_len = dns_build_query(&query[0], 0xABCD, hostname);
 
-    if (!udp_send(&dns_proxy_ip[0], dns_port, dns_src_port, &query[0], query_len)) {
+    if (!udp_send(&dns_proxy_ip[0], DNS_PORT, DNS_SRC_PORT, &query[0], query_len)) {
         return false;
     }
 
     u8 reply[160];
-    u16 reply_len = udp_receive(&dns_proxy_ip[0], dns_port, dns_src_port, &reply[0], 160);
+    u16 reply_len = udp_receive(&dns_proxy_ip[0], DNS_PORT, DNS_SRC_PORT, &reply[0], 160);
     if (reply_len < 12) {
         return false;
     }

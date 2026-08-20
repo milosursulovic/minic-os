@@ -7,38 +7,38 @@
 // not one fixed address.
 //
 // Deliberately scoped as a CLIENT (resolver) only, not a responder: this
-// kernel's own IP address (`net/ip.mc`'s `g_my_ip`, milestone 33) is
-// still a fixed, static assumption, not real DHCP-negotiated
-// configuration - answering "who has <our address>" for an address
-// nothing actually configured doesn't mean much yet. Also no cache
-// eviction/TTL (real ARP caches expire
+// kernel's own IP address (net/ip.c's g_my_ip) is still a fixed, static
+// assumption, not real DHCP-negotiated configuration - answering "who
+// has <our address>" for an address nothing actually configured doesn't
+// mean much yet. Also no cache eviction/TTL (real ARP caches expire
 // entries after a few minutes) - a fixed-size cache that just fills up
 // is fine for a first version, the same "narrowest safe first version"
 // discipline every driver-layer milestone in this phase has used.
 
-import "e1000.mc";
-import "ip.mc";
-import "../isr/isr.mc";
+#include "arp.h"
+#include "e1000.h"
+#include "ip.h"
+#include "../isr/isr.h"
 
-struct arp_entry {
+typedef struct {
     bool used;
     u8 ip[4];
     u8 mac[6];
-}
+} arp_entry;
 
 // Fixed cap, matching every other table in this kernel - real headroom
-// for a handful of resolved addresses, not exactly enough. MiniC array
-// sizes need a literal, not a named const (hit already in milestone 31).
-arp_entry g_arp_cache[8];
-u32 g_arp_cache_count;
+// for a handful of resolved addresses, not exactly enough.
+#define ARP_CACHE_SIZE 8
+static arp_entry g_arp_cache[ARP_CACHE_SIZE];
+static u32 g_arp_cache_count;
 
-bool g_arp_nic_ready;
+static bool g_arp_nic_ready;
 
 // Lazily brings the NIC up exactly once - callers just call arp_resolve()
-// without needing to know or care whether milestone 30/31's own
-// init/ring-setup has already run, the same "idempotent, self-
-// contained" shape mm/heap.mc's heap_init() already established.
-bool arp_init() {
+// without needing to know or care whether e1000_init()/e1000_init_rings()
+// has already run, the same "idempotent, self-contained" shape
+// mm/heap.c's heap_init() already established.
+static bool arp_init(void) {
     if (g_arp_nic_ready) {
         return true;
     }
@@ -56,7 +56,7 @@ bool ip_equals(u8* a, u8* b) {
     return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
 }
 
-bool arp_cache_lookup(u8* ip, u8* mac_out) {
+static bool arp_cache_lookup(u8* ip, u8* mac_out) {
     u32 i = 0;
     while (i < g_arp_cache_count) {
         if (g_arp_cache[i].used && ip_equals(&g_arp_cache[i].ip[0], ip)) {
@@ -72,8 +72,8 @@ bool arp_cache_lookup(u8* ip, u8* mac_out) {
     return false;
 }
 
-void arp_cache_insert(u8* ip, u8* mac) {
-    if (g_arp_cache_count >= 8) {
+static void arp_cache_insert(u8* ip, u8* mac) {
+    if (g_arp_cache_count >= ARP_CACHE_SIZE) {
         return;
     }
     u32 slot = g_arp_cache_count;
@@ -92,16 +92,16 @@ void arp_cache_insert(u8* ip, u8* mac) {
 }
 
 // Builds and sends one real Ethernet+ARP request frame for `target_ip` -
-// the same layout milestone 31's own hardcoded version used, just
-// parameterized instead of fixed to one address. Sender IP is
-// `net/ip.mc`'s own `g_my_ip` (milestone 33) - still a fixed, static
-// assumption (10.0.2.15, QEMU SLIRP's default guest address), since this
-// kernel has no real IP configuration mechanism (DHCP or otherwise) yet
-// - a real gap, not hidden: see Known limitations. `ip_init()` is cheap
-// and idempotent (just (re)assigns four constant bytes), so calling it
-// here guarantees `g_my_ip` is valid regardless of whether some other path
-// (like milestone 33's own `ping`) already initialized it first.
-void arp_send_request(u8* target_ip) {
+// the same layout the original hardcoded test used, just parameterized
+// instead of fixed to one address. Sender IP is net/ip.c's own g_my_ip -
+// still a fixed, static assumption (10.0.2.15, QEMU SLIRP's default
+// guest address), since this kernel has no real IP configuration
+// mechanism (DHCP or otherwise) yet - a real gap, not hidden: see Known
+// limitations. ip_init() is cheap and idempotent (just (re)assigns four
+// constant bytes), so calling it here guarantees g_my_ip is valid
+// regardless of whether some other path (like `ping`) already
+// initialized it first.
+static void arp_send_request(u8* target_ip) {
     u8 mac[6];
     e1000_get_mac(&mac[0]);
 
@@ -156,14 +156,14 @@ void arp_send_request(u8* target_ip) {
 // just "returned the same value twice"). A miss sends one real request
 // and polls for a genuinely matching reply (right EtherType, right
 // opcode, right sender IP - ignoring anything else that might arrive)
-// against a real wall-clock-bounded timeout using isr/isr.mc's own
-// g_tick_count, not a raw instruction-count spin - milestone 31 already
-// found that a spin count doesn't reliably correspond to real time for
-// a genuine external round trip. Returns false (a real, honest "could
-// not resolve," not a hang or garbage) if nothing matching arrives
-// within the budget - exercised directly by the shell's own negative
-// test against an address nothing answers for.
-const u64 arp_timeout_ticks = 2000;
+// against a real wall-clock-bounded timeout using isr/isr.c's own
+// g_tick_count, not a raw instruction-count spin - a raw spin count
+// doesn't reliably correspond to real time for a genuine external round
+// trip. Returns false (a real, honest "could not resolve," not a hang
+// or garbage) if nothing matching arrives within the budget -
+// exercised directly by the shell's own negative test against an
+// address nothing answers for.
+static const u64 ARP_TIMEOUT_TICKS = 2000;
 
 bool arp_resolve(u8* target_ip, u8* mac_out) {
     if (arp_cache_lookup(target_ip, mac_out)) {
@@ -177,7 +177,7 @@ bool arp_resolve(u8* target_ip, u8* mac_out) {
 
     u8 reply[64];
     u64 start_tick = g_tick_count;
-    while (g_tick_count - start_tick < arp_timeout_ticks) {
+    while (g_tick_count - start_tick < ARP_TIMEOUT_TICKS) {
         u16 len = e1000_receive(&reply[0], 64);
         if (len > 0) {
             bool is_arp = reply[12] == 0x08 && reply[13] == 0x06;

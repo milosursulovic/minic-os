@@ -3,16 +3,18 @@
 // and this kernel's own long-overdue concept of "my IP address."
 //
 // `g_my_ip` used to be a hardcoded literal duplicated wherever a sender IP
-// was needed (net/arp.mc's own arp_send_request()) - now one real, named,
+// was needed (net/arp.c's own arp_send_request()) - now one real, named,
 // shared value. Still deliberately static/hardcoded, not DHCP-obtained:
 // this kernel has no real IP configuration mechanism at all yet (see
 // Known limitations) - matches QEMU SLIRP's own conventional default
-// guest address, the same value arp.mc's sender-IP field already
+// guest address, the same value arp.c's sender-IP field already
 // assumed before this milestone gave it a real name.
+
+#include "ip.h"
 
 u8 g_my_ip[4];
 
-void ip_init() {
+void ip_init(void) {
     g_my_ip[0] = 10;
     g_my_ip[1] = 0;
     g_my_ip[2] = 2;

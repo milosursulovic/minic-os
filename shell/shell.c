@@ -20,6 +20,13 @@
 #include "../disk/minifs.h"
 #include "../disk/vfs.h"
 #include "../proc/process.h"
+#include "../proc/object.h"
+#include "../drivers/pci.h"
+#include "../net/e1000.h"
+#include "../net/arp.h"
+#include "../net/ip.h"
+#include "../net/icmp.h"
+#include "../net/dns.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -32,8 +39,14 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>");
-    serial_print("commands: help clear alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx echo <text>\n");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx pci nic arp ping dns echo <text>\n");
+}
+
+static void cmd_ticks(void) {
+    vga_print("ticks: 0x");
+    serial_print("ticks: 0x");
+    print_hex(g_tick_count);
 }
 
 static void cmd_alloc(void) {
@@ -249,6 +262,20 @@ static void cmd_ps(void) {
         serial_print(" cr3=0x");
         print_hex(g_processes[i].cr3);
         i = i + 1;
+    }
+}
+
+static void cmd_objs(void) {
+    vga_print("objects: 0x");
+    serial_print("objects: 0x");
+    print_hex((u64) g_object_count);
+    if (g_object_count > 0) {
+        vga_print(" obj0 type=0x");
+        serial_print(" obj0 type=0x");
+        print_hex((u64) g_objects[0].type);
+        vga_print(" data_index=0x");
+        serial_print(" data_index=0x");
+        print_hex((u64) g_objects[0].data_index);
     }
 }
 
@@ -543,6 +570,199 @@ static void cmd_ring3_nx(void) {
     serial_print("sent ring3 stack-execution trigger - expect a page fault\n");
 }
 
+static void print_mac(u8* mac) {
+    int i = 0;
+    while (i < 6) {
+        print_hex((u64) mac[i]);
+        if (i < 5) {
+            vga_print(":");
+            serial_print(":");
+        }
+        i = i + 1;
+    }
+}
+
+// Milestone 29: enumerates every PCI device on bus 0 and prints its
+// address (bus:device.function) plus vendor/device/class/subclass -
+// the first time this kernel discovers its own hardware instead of
+// everything being a fixed, hardcoded I/O port.
+static void cmd_pci(void) {
+    pci_enumerate();
+    vga_print("pci devices: 0x");
+    serial_print("pci devices: 0x");
+    print_hex((u64) g_pci_device_count);
+    int i = 0;
+    while (i < g_pci_device_count) {
+        pci_device* d = &g_pci_devices[i];
+        vga_print(" ");
+        serial_print(" ");
+        print_hex((u64) d->bus);
+        vga_print(":");
+        serial_print(":");
+        print_hex((u64) d->device);
+        vga_print(".");
+        serial_print(".");
+        print_hex((u64) d->function);
+        vga_print(" vendor=0x");
+        serial_print(" vendor=0x");
+        print_hex((u64) d->vendor_id);
+        vga_print(" device=0x");
+        serial_print(" device=0x");
+        print_hex((u64) d->device_id);
+        vga_print(" class=0x");
+        serial_print(" class=0x");
+        print_hex((u64) d->class_code);
+        vga_print(" subclass=0x");
+        serial_print(" subclass=0x");
+        print_hex((u64) d->subclass);
+        i = i + 1;
+    }
+}
+
+// Milestone 30: initializes the e1000 NIC the `pci` command already
+// found (enables it over PCI, maps its MMIO register file) and reads
+// back real hardware state - its actual MAC address (from RAL0/RAH0,
+// pre-loaded by QEMU's emulated EEPROM the same way real hardware
+// auto-loads its burned-in address) and its link-up status.
+static void cmd_nic(void) {
+    bool ok = e1000_init();
+    if (!ok) {
+        vga_print("e1000 init failed - device not found at 0:3.0");
+        serial_print("e1000 init failed - device not found at 0:3.0\n");
+        return;
+    }
+    u8 mac[6];
+    e1000_get_mac(&mac[0]);
+    vga_print("e1000 mac=");
+    serial_print("e1000 mac=");
+    print_mac(&mac[0]);
+    bool link_up = e1000_link_up();
+    vga_print(" link_up=0x");
+    serial_print(" link_up=0x");
+    print_hex((u64) link_up);
+}
+
+// Milestone 32: exercises the real resolver (net/arp.c). Four real,
+// independently checkable claims in one command:
+//   1. resolve the gateway (10.0.2.2).
+//   2. resolve it AGAIN - a real cache hit, checkable by real elapsed
+//      ticks: the first call sends a packet and waits for an external
+//      reply (nonzero elapsed ticks), the second returns from the cache
+//      alone (zero packets sent, zero elapsed ticks) - a genuine
+//      behavioral difference, not just "returned the same value twice."
+//   3. resolve a SECOND, different real address (10.0.2.3, QEMU
+//      SLIRP's own well-known built-in DNS proxy) - proves the resolver
+//      genuinely generalizes past one fixed address.
+//   4. resolve an address nothing answers for (10.0.2.99) - a real
+//      negative-space proof: arp_resolve() must return false after its
+//      own bounded timeout, not hang forever or return garbage.
+static void cmd_arp(void) {
+    u8 gateway_ip[4];
+    gateway_ip[0] = 10;
+    gateway_ip[1] = 0;
+    gateway_ip[2] = 2;
+    gateway_ip[3] = 2;
+
+    u8 mac[6];
+    u64 t0 = g_tick_count;
+    bool ok1 = arp_resolve(&gateway_ip[0], &mac[0]);
+    u64 elapsed1 = g_tick_count - t0;
+    vga_print("resolve gateway ok=0x");
+    serial_print("resolve gateway ok=0x");
+    print_hex((u64) ok1);
+    if (ok1) {
+        vga_print(" mac=");
+        serial_print(" mac=");
+        print_mac(&mac[0]);
+    }
+    vga_print(" elapsed_ticks=0x");
+    serial_print(" elapsed_ticks=0x");
+    print_hex(elapsed1);
+
+    u8 mac2[6];
+    u64 t1 = g_tick_count;
+    bool ok2 = arp_resolve(&gateway_ip[0], &mac2[0]);
+    u64 elapsed2 = g_tick_count - t1;
+    vga_print(" cached_ok=0x");
+    serial_print(" cached_ok=0x");
+    print_hex((u64) ok2);
+    vga_print(" cached_elapsed_ticks=0x");
+    serial_print(" cached_elapsed_ticks=0x");
+    print_hex(elapsed2);
+
+    u8 dns_ip[4];
+    dns_ip[0] = 10;
+    dns_ip[1] = 0;
+    dns_ip[2] = 2;
+    dns_ip[3] = 3;
+    u8 mac3[6];
+    bool ok3 = arp_resolve(&dns_ip[0], &mac3[0]);
+    vga_print(" resolve_dns_proxy_ok=0x");
+    serial_print(" resolve_dns_proxy_ok=0x");
+    print_hex((u64) ok3);
+    if (ok3) {
+        vga_print(" dns_mac=");
+        serial_print(" dns_mac=");
+        print_mac(&mac3[0]);
+    }
+
+    u8 unreachable_ip[4];
+    unreachable_ip[0] = 10;
+    unreachable_ip[1] = 0;
+    unreachable_ip[2] = 2;
+    unreachable_ip[3] = 99;
+    u8 mac4[6];
+    bool ok4 = arp_resolve(&unreachable_ip[0], &mac4[0]);
+    vga_print(" resolve_unreachable_ok=0x");
+    serial_print(" resolve_unreachable_ok=0x");
+    print_hex((u64) ok4);
+}
+
+// Milestone 33: a real IPv4 layer, verified with a genuine ICMP echo
+// (ping) round trip to the gateway - the minimal, natural "does IP
+// actually work end to end" test. Resolves the gateway's MAC first
+// (reusing arp.c's real resolver - a cache hit costs nothing here),
+// builds and sends a real Ethernet+IPv4+ICMP echo request, and polls
+// for a genuinely matching reply: right EtherType, right IP protocol,
+// right source IP, right ICMP type, AND the exact identifier/sequence
+// this request sent.
+static void cmd_ping(void) {
+    u8 gateway_ip[4];
+    gateway_ip[0] = 10;
+    gateway_ip[1] = 0;
+    gateway_ip[2] = 2;
+    gateway_ip[3] = 2;
+
+    u64 start_tick = g_tick_count;
+    bool ok = icmp_ping(&gateway_ip[0], 0x1234, 0x1);
+    u64 elapsed = g_tick_count - start_tick;
+
+    vga_print("ping gateway ok=0x");
+    serial_print("ping gateway ok=0x");
+    print_hex((u64) ok);
+    vga_print(" elapsed_ticks=0x");
+    serial_print(" elapsed_ticks=0x");
+    print_hex(elapsed);
+}
+
+// Milestone 34: a real UDP layer, verified with a genuine DNS query to
+// QEMU SLIRP's built-in DNS proxy (10.0.2.3) - the minimal, natural
+// verification vehicle for "does UDP actually work end to end." Not a
+// general DNS client (no compression, no caching) - one hardcoded
+// query, purely as a real external stimulus.
+static void cmd_dns(void) {
+    u64 start_tick = g_tick_count;
+    bool ok = dns_query("example.com");
+    u64 elapsed = g_tick_count - start_tick;
+
+    vga_print("dns query ok=0x");
+    serial_print("dns query ok=0x");
+    print_hex((u64) ok);
+    vga_print(" elapsed_ticks=0x");
+    serial_print(" elapsed_ticks=0x");
+    print_hex(elapsed);
+}
+
 static void cmd_echo(void) {
     char* text = &g_line_buffer[5];  // past "echo "
     vga_print(text);
@@ -554,6 +774,8 @@ void run_command(void) {
         cmd_help();
     } else if (streq(g_line_buffer, "clear")) {
         cmd_clear();
+    } else if (streq(g_line_buffer, "ticks")) {
+        cmd_ticks();
     } else if (streq(g_line_buffer, "alloc")) {
         cmd_alloc();
     } else if (streq(g_line_buffer, "bigalloc")) {
@@ -584,6 +806,8 @@ void run_command(void) {
         cmd_send();
     } else if (streq(g_line_buffer, "ps")) {
         cmd_ps();
+    } else if (streq(g_line_buffer, "objs")) {
+        cmd_objs();
     } else if (streq(g_line_buffer, "disk")) {
         cmd_disk();
     } else if (streq(g_line_buffer, "diskwrite")) {
@@ -610,6 +834,16 @@ void run_command(void) {
         cmd_ring3_fault();
     } else if (streq(g_line_buffer, "ring3nx")) {
         cmd_ring3_nx();
+    } else if (streq(g_line_buffer, "pci")) {
+        cmd_pci();
+    } else if (streq(g_line_buffer, "nic")) {
+        cmd_nic();
+    } else if (streq(g_line_buffer, "arp")) {
+        cmd_arp();
+    } else if (streq(g_line_buffer, "ping")) {
+        cmd_ping();
+    } else if (streq(g_line_buffer, "dns")) {
+        cmd_dns();
     } else if (starts_with(g_line_buffer, "echo ")) {
         cmd_echo();
     } else if (g_line_len > 0) {

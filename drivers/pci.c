@@ -11,9 +11,8 @@
 // CONFIG_DATA, ports 0xCF8/0xCFC) - the original PCI config access
 // method, universally supported by every real and emulated x86
 // chipset including QEMU's, and the natural starting point since it's
-// plain port I/O (outl/inl, this milestone's own addition to
-// drivers/io.mc) with no memory-mapped I/O or ACPI table parsing
-// needed first.
+// plain port I/O (outl/inl) with no memory-mapped I/O or ACPI table
+// parsing needed first.
 //
 // Deliberately scoped to bus 0 only, not a full recursive walk through
 // every PCI-to-PCI bridge's secondary bus - the same "narrowest safe
@@ -23,10 +22,11 @@
 // secondary-bus-number register and recursing, a real but separate
 // extension for whenever a device beyond bus 0 actually needs finding.
 
-import "io.mc";
+#include "pci.h"
+#include "io.h"
 
-const u16 pci_config_address = 0xCF8;
-const u16 pci_config_data = 0xCFC;
+static const u16 PCI_CONFIG_ADDRESS = 0xCF8;
+static const u16 PCI_CONFIG_DATA = 0xCFC;
 
 // Every PCI config register access goes through this: write the
 // (bus, device, function, register) address as one 32-bit dword to
@@ -40,8 +40,8 @@ u32 pci_config_read_dword(u8 bus, u8 device, u8 function, u8 offset) {
         | (((u32) device) << 11)
         | (((u32) function) << 8)
         | ((u32) (offset & 0xFC));
-    outl(pci_config_address, address);
-    return inl(pci_config_data);
+    outl(PCI_CONFIG_ADDRESS, address);
+    return inl(PCI_CONFIG_DATA);
 }
 
 // Real config fields are often 8 or 16 bits (vendor ID, class code) -
@@ -70,8 +70,8 @@ void pci_config_write_dword(u8 bus, u8 device, u8 function, u8 offset, u32 value
         | (((u32) device) << 11)
         | (((u32) function) << 8)
         | ((u32) (offset & 0xFC));
-    outl(pci_config_address, address);
-    outl(pci_config_data, value);
+    outl(PCI_CONFIG_ADDRESS, address);
+    outl(PCI_CONFIG_DATA, value);
 }
 
 // Reads BAR0 (offset 0x10) and masks off the low 4 bits (bit 0 = space
@@ -91,18 +91,6 @@ u32 pci_read_bar0(u8 bus, u8 device, u8 function) {
     return bar0 & ~((u32) 0xF);
 }
 
-struct pci_device {
-    u8 bus;
-    u8 device;
-    u8 function;
-    u16 vendor_id;
-    u16 device_id;
-    u8 class_code;
-    u8 subclass;
-    u8 prog_if;
-    u8 header_type;
-}
-
 // A fixed, small cap - same class of "generous enough for today, not
 // infinite" choice every fixed-size table in this kernel already makes
 // (g_objects[8], g_channels[4], etc). QEMU's default machine populates a
@@ -112,7 +100,7 @@ struct pci_device {
 pci_device g_pci_devices[16];
 int g_pci_device_count;
 
-void pci_record_device(u8 bus, u8 device, u8 function) {
+static void pci_record_device(u8 bus, u8 device, u8 function) {
     if (g_pci_device_count >= 16) {
         return;
     }
@@ -140,7 +128,7 @@ void pci_record_device(u8 bus, u8 device, u8 function) {
 // there's no separate "present" bit, this sentinel IS the presence
 // check, the same convention every real PCI enumerator (and this
 // kernel's own -1-sentinel style elsewhere) relies on.
-void pci_check_device(u8 bus, u8 device) {
+static void pci_check_device(u8 bus, u8 device) {
     u16 vendor_id = pci_config_read_word(bus, device, 0, 0x00);
     if (vendor_id == 0xFFFF) {
         return;
@@ -165,7 +153,7 @@ void pci_check_device(u8 bus, u8 device) {
     }
 }
 
-void pci_enumerate() {
+void pci_enumerate(void) {
     g_pci_device_count = 0;
     u16 device = 0;
     while (device < 32) {

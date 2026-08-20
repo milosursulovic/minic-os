@@ -1,6 +1,6 @@
 // Milestone 33 (Phase X's fifth step): ICMP echo (ping) - the minimal,
 // natural verification vehicle for "does the IP layer genuinely work,"
-// the same relationship milestone 31's hardcoded ARP request had to
+// the same relationship the original hardcoded ARP request had to
 // proving TX/RX worked. A bare IP packet with no upper-layer protocol
 // has nothing that could reply to it; ICMP echo is the smallest real
 // protocol that gets an external, independently-meaningful response.
@@ -10,24 +10,24 @@
 // safe first version" every driver/protocol-layer milestone in this
 // phase has used.
 
-import "ip.mc";
-import "arp.mc";
-import "e1000.mc";
-import "../isr/isr.mc";
+#include "icmp.h"
+#include "ip.h"
+#include "arp.h"
+#include "e1000.h"
+#include "../isr/isr.h"
 
-const u8 icmp_echo_request = 8;
-const u8 icmp_echo_reply = 0;
-const u8 ip_protocol_icmp = 1;
+static const u8 ICMP_ECHO_REQUEST = 8;
+static const u8 ICMP_ECHO_REPLY = 0;
+static const u8 IP_PROTOCOL_ICMP = 1;
 
-// Resolves target_ip's MAC (reusing milestone 32's real resolver - a
-// cache hit here costs nothing), builds a real Ethernet+IPv4+ICMP echo
-// request, sends it, and polls (real g_tick_count-bounded, not a raw spin
-// - milestone 31/32's already-learned lesson) for a reply that
-// genuinely matches: right EtherType, right IP protocol, right source
-// IP, right ICMP type, AND the exact identifier/sequence this request
-// sent - not just "something ICMP arrived." Returns false (a real,
-// honest failure) if ARP resolution fails or nothing matching arrives
-// within the timeout.
+// Resolves target_ip's MAC (reusing arp.c's real resolver - a cache hit
+// here costs nothing), builds a real Ethernet+IPv4+ICMP echo request,
+// sends it, and polls (real g_tick_count-bounded, not a raw spin) for a
+// reply that genuinely matches: right EtherType, right IP protocol,
+// right source IP, right ICMP type, AND the exact identifier/sequence
+// this request sent - not just "something ICMP arrived." Returns false
+// (a real, honest failure) if ARP resolution fails or nothing matching
+// arrives within the timeout.
 bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
     u8 dest_mac[6];
     if (!arp_resolve(target_ip, &dest_mac[0])) {
@@ -39,7 +39,7 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
 
     // 8-byte ICMP header + a small, fixed 4-byte payload.
     u8 icmp_msg[12];
-    icmp_msg[0] = icmp_echo_request;
+    icmp_msg[0] = ICMP_ECHO_REQUEST;
     icmp_msg[1] = 0;
     icmp_msg[2] = 0;   // checksum placeholder
     icmp_msg[3] = 0;
@@ -75,7 +75,7 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
     frame[12] = 0x08;   // EtherType = 0x0800 (IPv4)
     frame[13] = 0x00;
 
-    ip_build_header(&frame[14], &g_my_ip[0], target_ip, ip_protocol_icmp, 12);
+    ip_build_header(&frame[14], &g_my_ip[0], target_ip, IP_PROTOCOL_ICMP, 12);
 
     i = 0;
     while (i < 12) {
@@ -99,13 +99,13 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
                 // ever sends includes options, so nothing it's talking
                 // to has a reason to reply with any either.
                 u8 proto = reply[14 + 9];
-                bool is_icmp = proto == ip_protocol_icmp;
+                bool is_icmp = proto == IP_PROTOCOL_ICMP;
                 bool src_matches = reply[14 + 12] == target_ip[0]
                     && reply[14 + 13] == target_ip[1]
                     && reply[14 + 14] == target_ip[2]
                     && reply[14 + 15] == target_ip[3];
                 u8 icmp_type = reply[34];
-                bool is_echo_reply = icmp_type == icmp_echo_reply;
+                bool is_echo_reply = icmp_type == ICMP_ECHO_REPLY;
                 u16 reply_id = (((u16) reply[38]) << 8) | ((u16) reply[39]);
                 u16 reply_seq = (((u16) reply[40]) << 8) | ((u16) reply[41]);
                 if (is_icmp && src_matches && is_echo_reply
