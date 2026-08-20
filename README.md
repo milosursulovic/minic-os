@@ -136,21 +136,24 @@ every command.
 
 ## Current status
 
-38 milestones shipped, spanning boot → interrupts → heap/paging →
+39 milestones shipped, spanning boot → interrupts → heap/paging →
 scheduler → syscalls/ring3 → per-process isolation → a native File/
 Channel/Process API + POSIX shim → capability/permission hardening →
 PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process → real
-process exit → process supervision. The first 34 were built in MiniC;
-the kernel was then rewritten by hand into C (see the note at the top
-of this file). Milestone 36 added a dedicated ring3 `init` process
-spawning a real service via a kernel-embedded program registry, without
-touching the filesystem. Milestone 37 gave a process a real way to exit
-(`process_exit`, syscall 12) - `ps` shows `exited=0x1` once it does, but
-its resources (frames, table slot) still aren't reclaimed. Milestone 38
-closes the loop: `init` now polls its child's handle (syscall 3, fixed
-to correctly fail once the target has exited, instead of returning a
-stale task_index) and restarts it once it detects the exit - real
-supervision, not just spawn-and-forget. The existing kernel-mode debug
+process exit → process supervision → frame reclamation on exit. The
+first 34 were built in MiniC; the kernel was then rewritten by hand
+into C (see the note at the top of this file). Milestones 36-38 gave
+this kernel a real init process, a real way for a process to exit
+(`process_exit`, syscall 12), and real supervision (`init` restarts a
+service once it detects the exit). Milestone 39 closes the resource
+side of that: `process_exit` now walks the exiting process's own page
+tables and frees every private-region frame (image, stack, and the
+page-table frames themselves) plus its PML4/PDPT, verified against
+exact frame-count arithmetic - two full spawn/exit cycles both return
+`g_free_frame_count` to the identical baseline, and the second spawn
+even legitimately reuses the exact physical frame the first one freed.
+The process/task table *slot* itself still isn't reclaimed (that's a
+separate step - see Known limitations). The existing kernel-mode debug
 shell (`help`/`frames`/`tasks`/`pci`/... - most of it touching raw
 kernel internals no real design should expose to arbitrary userspace
 code directly) deliberately stays exactly as it is; migrating it isn't
@@ -163,12 +166,16 @@ for every one of them.
 ## Known limitations (on purpose, for now)
 
 - A process can exit (`process_exit`, milestone 37 - its task slot is
-  permanently skipped by the scheduler afterward) but nothing is
-  reclaimed when it does: its frames stay mapped, its process/task table
-  slot stays occupied forever (so a long-running system that spawns and
-  exits many processes will eventually hit the fixed table caps below),
-  and any handle still pointing at it stays valid but now points at
-  something that will never run again.
+  permanently skipped by the scheduler afterward), and its private-region
+  frames (image, stack, page tables) and PML4/PDPT are freed on exit
+  (milestone 39). Still not reclaimed: its process/task *table slot*
+  itself stays occupied forever (so a long-running system that spawns
+  and exits many processes will eventually hit the fixed table caps
+  below, even though the memory itself doesn't leak), its kalloc'd
+  kernel stack (freeing your own currently-executing stack from within
+  itself is a separate, riskier problem, deliberately not attempted
+  here), and any handle still pointing at it stays valid but now points
+  at something that will never run again.
 - Pointer arguments (paths, buffers) are checked for validity/bounds
   but not ownership - nothing stops a ring3 process from passing a
   pointer that doesn't actually belong to it.

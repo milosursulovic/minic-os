@@ -5,7 +5,8 @@
 // path), 7/8/9 channel send/receive/open, 10 open_process,
 // 11 spawn_builtin (spawn from the kernel-embedded program registry,
 // by index - not a raw pointer, so ring3 can't name an arbitrary
-// address as "a program"), 12 process_exit.
+// address as "a program"), 12 process_exit (also frees the process's
+// private page-table/data frames - not its kernel stack or table slot).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -15,6 +16,8 @@
 #include "../proc/object.h"
 #include "../proc/channel.h"
 #include "../disk/vfs.h"
+#include "../mm/paging.h"
+#include "../mm/frames.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -203,6 +206,7 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         int caller_process = g_tasks[g_current_task].process_index;
         if (caller_process >= 0) {
             g_processes[caller_process].used = false;
+            free_address_space(g_processes[caller_process].cr3);
         }
         g_tasks[g_current_task].used = false;
         yield();

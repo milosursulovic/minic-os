@@ -14,6 +14,7 @@ bool map_page_in(u64 pml4_phys, u64 vaddr, u64 paddr, u64 flags);
 bool map_page(u64 vaddr, u64 paddr, u64 flags);
 u64 translate_in(u64 pml4_phys, u64 vaddr);
 u64 clone_address_space(void);
+void free_address_space(u64 pml4_phys);
 void load_cr3(u64 phys);
 void set_tss_rsp0(u64 rsp0);
 

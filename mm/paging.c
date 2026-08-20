@@ -136,6 +136,41 @@ u64 clone_address_space(void) {
     return (u64) new_pml4_frame;
 }
 
+// Frees every private-region frame (PDPT[2]+: PT/PD/leaf data pages)
+// plus the process's own PML4/PDPT frames. Never touches PDPT[0]/[1] -
+// those are the shared kernel/heap sub-tables. Caller must not still be
+// running on this address space (or its own kernel stack, which this
+// doesn't touch).
+void free_address_space(u64 pml4_phys) {
+    u64* pml4 = (u64*) pml4_phys;
+    u64* pdpt = (u64*) (pml4[0] & ~((u64) 0xFFF));
+    u32 i3 = 2;
+    while (i3 < 512) {
+        if ((pdpt[i3] & 1) != 0) {
+            u64* pd = (u64*) (pdpt[i3] & ~((u64) 0xFFF));
+            u32 i2 = 0;
+            while (i2 < 512) {
+                if ((pd[i2] & 1) != 0) {
+                    u64* pt = (u64*) (pd[i2] & ~((u64) 0xFFF));
+                    u32 i1 = 0;
+                    while (i1 < 512) {
+                        if ((pt[i1] & 1) != 0) {
+                            free_frame((void*) (pt[i1] & ~((u64) 0xFFF)));
+                        }
+                        i1 = i1 + 1;
+                    }
+                    free_frame((void*) (pd[i2] & ~((u64) 0xFFF)));
+                }
+                i2 = i2 + 1;
+            }
+            free_frame((void*) (pdpt[i3] & ~((u64) 0xFFF)));
+        }
+        i3 = i3 + 1;
+    }
+    free_frame((void*) (pml4[0] & ~((u64) 0xFFF)));
+    free_frame((void*) pml4_phys);
+}
+
 void load_cr3(u64 phys) {
     __asm__ volatile("mov %0, %%cr3" : : "r"(phys) : "memory");
 }
