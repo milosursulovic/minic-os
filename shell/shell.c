@@ -262,6 +262,9 @@ static void cmd_ps(void) {
         vga_print(" cr3=0x");
         serial_print(" cr3=0x");
         print_hex(g_processes[i].cr3);
+        vga_print(" exited=0x");
+        serial_print(" exited=0x");
+        print_hex((u64) !g_processes[i].used);
         i = i + 1;
     }
 }

@@ -52,6 +52,16 @@
 // REQUESTS a rights bitmask (arg2), and the kernel grants the
 // intersection of what was requested and what's actually grantable for
 // an OBJ_PROCESS handle today (`requested & RIGHT_QUERY`).
+// num 12: process_exit (milestone 37) - the calling process's own task
+// slot and process slot both get marked no-longer-alive, then yield()
+// switches away for the last time; the scheduler's scan (sched/task.c)
+// permanently skips a slot marked this way, the same way it already
+// skips a blocked one, just with no wake condition that will ever fire.
+// Deliberately does NOT reclaim the exited process's resources yet
+// (its frames stay mapped, its process/task table slot stays occupied,
+// any handles pointing at it stay valid but now point at a process that
+// will never run again) - real, separate follow-on work, not an
+// oversight; see README's Known Limitations.
 // num 11: spawn_builtin (milestone 36) - lets a ring3 process spawn
 // ANOTHER ring3 process from a small, fixed, kernel-embedded program
 // registry (g_builtin_programs below), addressed by INDEX rather than
@@ -266,6 +276,15 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
             return (u64) -1;
         }
         return (u64) g_processes[proc_index].task_index;
+    }
+    if (num == 12) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process >= 0) {
+            g_processes[caller_process].used = false;
+        }
+        g_tasks[g_current_task].used = false;
+        yield();
+        return 0;  // never actually reached - yield() never switches back to an exited task
     }
     return (u64) -1;  // unknown syscall
 }

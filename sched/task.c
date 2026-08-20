@@ -16,6 +16,15 @@
 // (clearing `blocked`) the moment its wake tick arrives.
 // (Named sleep_ticks, not sleep, to avoid any name collision with a
 // POSIX libc function of that name, even though nothing here links libc.)
+//
+// Milestone 37: `used` (previously write-only - set true at creation,
+// never read) now has real meaning too: syscall.c's process_exit()
+// clears it on the calling task's own slot before yielding away for the
+// last time, and yield()'s scan skips a cleared slot permanently, the
+// same way it already skips a blocked one - just with no wake condition
+// that will ever fire. Resources (frames, the process/task table slot
+// itself) are deliberately NOT reclaimed yet - see README's Known
+// Limitations.
 
 #include "task.h"
 #include "../mm/heap.h"
@@ -113,6 +122,9 @@ void yield(void) {
         next = (next + 1) % g_task_count;
         scanned = scanned + 1;
         task* candidate = &g_tasks[next];
+        if (!candidate->used) {
+            continue;  // exited (milestone 37's process_exit()) - never runnable again
+        }
         if (candidate->blocked) {
             bool wake = false;
             if (candidate->waiting_channel >= 0) {
@@ -129,7 +141,7 @@ void yield(void) {
             break;
         }
     }
-    if (next == prev || g_tasks[next].blocked) {
+    if (next == prev || g_tasks[next].blocked || !g_tasks[next].used) {
         return;  // nothing else runnable right now - keep running prev
     }
     g_current_task = next;

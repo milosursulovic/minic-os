@@ -136,20 +136,27 @@ every command.
 
 ## Current status
 
-36 milestones shipped, spanning boot → interrupts → heap/paging →
+37 milestones shipped, spanning boot → interrupts → heap/paging →
 scheduler → syscalls/ring3 → per-process isolation → a native File/
 Channel/Process API + POSIX shim → capability/permission hardening →
-PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process. The first
-34 were built in MiniC; the kernel was then rewritten by hand into C
-(see the note at the top of this file). Milestone 36 is deliberately
-narrow: a dedicated ring3 `init` process (`proc/init.c`) spawns a real
-service (`proc/hello_service.c`) via a new syscall referencing a small,
-fixed, kernel-embedded program registry - proving a ring3 process can
-launch another one without touching the filesystem, which is still
-empty on a fresh boot. The existing kernel-mode debug shell (`help`/
-`frames`/`tasks`/`pci`/... - most of it touching raw kernel internals
-no real design should expose to arbitrary userspace code directly)
-deliberately stays exactly as it is; migrating it isn't the next step.
+PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process → real
+process exit. The first 34 were built in MiniC; the kernel was then
+rewritten by hand into C (see the note at the top of this file).
+Milestone 36 is deliberately narrow: a dedicated ring3 `init` process
+(`proc/init.c`) spawns a real service (`proc/hello_service.c`) via a
+new syscall referencing a small, fixed, kernel-embedded program
+registry - proving a ring3 process can launch another one without
+touching the filesystem, which is still empty on a fresh boot.
+Milestone 37 closes a gap flagged since the earliest process-model
+work: `hello_service.c` now genuinely exits right after starting (a new
+`process_exit` syscall), and the scheduler permanently skips its task
+slot forever after - `ps` shows it as `exited=0x1` while every other
+process stays `exited=0x0`. Resource reclamation (frames, the process
+table slot itself) is deliberately not part of this yet. The existing
+kernel-mode debug shell (`help`/`frames`/`tasks`/`pci`/... - most of it
+touching raw kernel internals no real design should expose to arbitrary
+userspace code directly) deliberately stays exactly as it is; migrating
+it isn't the next step.
 
 See [os-docs's Roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for the full
 milestone-by-milestone history with real captured verification output
@@ -157,8 +164,13 @@ for every one of them.
 
 ## Known limitations (on purpose, for now)
 
-- No process teardown/exit - a ring3 process runs (or blocks) forever
-  once launched; its frames are never freed.
+- A process can exit (`process_exit`, milestone 37 - its task slot is
+  permanently skipped by the scheduler afterward) but nothing is
+  reclaimed when it does: its frames stay mapped, its process/task table
+  slot stays occupied forever (so a long-running system that spawns and
+  exits many processes will eventually hit the fixed table caps below),
+  and any handle still pointing at it stays valid but now points at
+  something that will never run again.
 - Pointer arguments (paths, buffers) are checked for validity/bounds
   but not ownership - nothing stops a ring3 process from passing a
   pointer that doesn't actually belong to it.
@@ -192,9 +204,9 @@ for every one of them.
   new one at runtime, and nothing yet bridges "a real service lives on
   disk" to this mechanism (that's still `spawn_process_from_path()`/
   syscall 6, a separate path). `init.c` itself does nothing past
-  spawning its one service and idling - no supervision, no restart on
-  exit (there's no process-exit mechanism at all yet either), no
-  dependency ordering.
+  spawning its one service - no supervision, no restart when a service
+  exits (real exit does now exist, milestone 37 - init just never
+  watches for it), no dependency ordering.
 - `File.write()`'s syscall return value has been observed to
   intermittently read back as `-1` even though the write itself
   demonstrably succeeds (a subsequent read/`ls` always shows the
