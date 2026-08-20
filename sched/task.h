@@ -38,7 +38,7 @@ extern u64 g_receiver_value;
 extern int g_ring3_channel_demo;
 
 void scheduler_init(void);
-bool create_task_with_cr3(void (*entry)(void), u64 cr3);
+int create_task_with_cr3(void (*entry)(void), u64 cr3);
 bool create_task(void (*entry)(void));
 bool create_isolated_task(void (*entry)(void));
 void yield(void);

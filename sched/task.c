@@ -25,15 +25,34 @@ void scheduler_init(void) {
     g_current_task = 0;
 }
 
-bool create_task_with_cr3(void (*entry)(void), u64 cr3) {
-    if (g_task_count >= 16) {
-        return false;
+// Reuses an exited slot (and its already-allocated stack - no kalloc,
+// no leak) if one exists, else appends a fresh one.
+int create_task_with_cr3(void (*entry)(void), u64 cr3) {
+    int index = -1;
+    int i = 0;
+    while (i < g_task_count) {
+        if (!g_tasks[i].used) {
+            index = i;
+            break;
+        }
+        i = i + 1;
     }
-    u8* stack_mem = (u8*) kalloc(16384);
-    if (stack_mem == NULL) {
-        return false;
+
+    u64 stack_top;
+    if (index >= 0) {
+        stack_top = g_tasks[index].kernel_stack_top;
+    } else {
+        if (g_task_count >= 16) {
+            return -1;
+        }
+        u8* stack_mem = (u8*) kalloc(16384);
+        if (stack_mem == NULL) {
+            return -1;
+        }
+        stack_top = ((u64) stack_mem + 16384) & ~((u64) 15);
+        index = g_task_count;
+        g_task_count = g_task_count + 1;
     }
-    u64 stack_top = ((u64) stack_mem + 16384) & ~((u64) 15);
 
     u64* sp = (u64*) stack_top;
     sp = sp - 1; *sp = (u64) entry;  // fake return address for switch_context's ret
@@ -44,19 +63,22 @@ bool create_task_with_cr3(void (*entry)(void), u64 cr3) {
     sp = sp - 1; *sp = 0;  // r14
     sp = sp - 1; *sp = 0;  // r15
 
-    task* t = &g_tasks[g_task_count];
+    task* t = &g_tasks[index];
     t->saved_rsp = (u64) sp;
     t->used = true;
+    t->blocked = false;
+    t->wake_tick = 0;
     t->cr3 = cr3;
+    t->ring3_entry_vaddr = 0;
+    t->ring3_user_stack_top = 0;
     t->process_index = -1;    // -1, not 0, so it can't look like g_processes[0]
     t->waiting_channel = -1;  // -1, not 0, so it can't look like g_channels[0]
     t->kernel_stack_top = stack_top;  // reused as this task's TSS.RSP0 target
-    g_task_count = g_task_count + 1;
-    return true;
+    return index;
 }
 
 bool create_task(void (*entry)(void)) {
-    return create_task_with_cr3(entry, g_pml4_phys);
+    return create_task_with_cr3(entry, g_pml4_phys) >= 0;
 }
 
 bool create_isolated_task(void (*entry)(void)) {
@@ -64,7 +86,7 @@ bool create_isolated_task(void (*entry)(void)) {
     if (cr3 == 0) {
         return false;
     }
-    return create_task_with_cr3(entry, cr3);
+    return create_task_with_cr3(entry, cr3) >= 0;
 }
 
 void yield(void) {

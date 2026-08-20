@@ -2,6 +2,9 @@
 // spawn_builtin (syscall 11), then supervises it: polls its handle
 // until the exit-aware query (syscall 3) reports it gone, and restarts
 // it once. No yield/sleep syscall exists for ring3 - polling busy-spins.
+// Restarts only once, not in a loop: each restart also costs an
+// object-table slot for the query handle, and g_objects[8] is a small,
+// shared, unreclaimed resource other ring3 processes need too.
 
 #include "../types.h"
 

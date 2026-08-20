@@ -25,9 +25,19 @@ void process_entry_trampoline(void) {
 
 // Loads [image_start, image_end) into a fresh address space, maps a
 // user stack, schedules a task entering ring3 at load_vaddr. Returns
-// the process index, or -1 on failure.
+// the process index, or -1 on failure. Reuses an exited process slot
+// if one exists, else appends (bounded by 4).
 int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vaddr) {
-    if (g_process_count >= 4) {
+    int proc_index = -1;
+    int p = 0;
+    while (p < g_process_count) {
+        if (!g_processes[p].used) {
+            proc_index = p;
+            break;
+        }
+        p = p + 1;
+    }
+    if (proc_index < 0 && g_process_count >= 4) {
         return -1;
     }
 
@@ -70,19 +80,28 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
         return -1;
     }
 
-    int task_index = g_task_count;
-    if (!create_task_with_cr3(&process_entry_trampoline, cr3)) {
+    int task_index = create_task_with_cr3(&process_entry_trampoline, cr3);
+    if (task_index < 0) {
         return -1;
     }
     g_tasks[task_index].ring3_entry_vaddr = load_vaddr;
     g_tasks[task_index].ring3_user_stack_top = stack_vaddr + 4096;
 
-    int proc_index = g_process_count;
+    if (proc_index < 0) {
+        proc_index = g_process_count;
+        g_process_count = g_process_count + 1;
+    }
     g_processes[proc_index].used = true;
     g_processes[proc_index].cr3 = cr3;
     g_processes[proc_index].task_index = task_index;
-    g_process_count = g_process_count + 1;
     g_tasks[task_index].process_index = proc_index;
+
+    // Clear stale handles from a reused slot's previous occupant.
+    int h = 0;
+    while (h < HANDLES_PER_PROCESS) {
+        g_handle_tables[proc_index][h].used = false;
+        h = h + 1;
+    }
 
     // handle 0 = myself, free for every process.
     int self_object = alloc_object(OBJ_PROCESS, proc_index);
