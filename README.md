@@ -16,11 +16,10 @@ Written in hand-written, freestanding C (plus a handful of hand-written
 `.s` files for exactly what's below what C's inline asm can express:
 boot/long-mode transition, interrupt entry, context switching, ring3
 entry). This kernel was originally built in a custom language called
-MiniC through milestone 34, then rewritten by hand into C afterward for
-faster development — the "no external libraries, everything hand-written"
-rule didn't change, only the implementation language did. See
-[os-docs's roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap#rewrite) for that story in
-full, and the git history for one commit per rewrite stage.
+MiniC, then rewritten by hand into C partway through development for
+faster iteration — the "no external libraries, everything hand-written"
+rule didn't change, only the implementation language did. See the git
+history for the rewrite, one commit per stage.
 
 ## Project layout
 
@@ -60,8 +59,8 @@ syscall/          ring0/ring3 boundary
   syscall.c/.h       syscall dispatcher: print, handle-query, File/Channel/Process
 proc/             process loading + the kernel object model + IPC
   ring3prog.c        the loaded ring3 "program" - real C, compiled standalone
-  init.c             milestone 36: a real init process - spawns hello_service.c
-  hello_service.c    milestone 36: a trivial real service, spawned by init.c
+  init.c             a real init process - spawns hello_service.c, supervises it
+  hello_service.c    a trivial real service, spawned by init.c
   ring3.ld           standalone linker script (keeps sections contiguous)
   ring3blob.s / init_blob.s / hello_service_blob.s
                      each wraps its own objcopy'd flat blob for the loader
@@ -136,82 +135,68 @@ every command.
 
 ## Current status
 
-44 milestones shipped, spanning boot → interrupts → heap/paging →
-scheduler → syscalls/ring3 → per-process isolation → a native File/
-Channel/Process API + POSIX shim → capability/permission hardening →
-PCI/NIC/ARP/IP/UDP/DNS/TCP networking → a real init process → real
-process exit → process supervision → frame reclamation on exit →
-process/task slot reuse → kernel object reclamation on exit → early
-handle release → runtime service registration → service
-unregistration. The first 34 were built in MiniC; the kernel was then
-rewritten by hand into C (see the note at the top of this file).
-Milestone 44 adds syscall 15 (`unregister_service`): the fixed 4-slot
-runtime registry milestone 43 added can now be freed and reused,
-closing that milestone's own deliberately-deferred gap - the one
-resource this kernel still couldn't reclaim. Verified in QEMU, twice:
-`register_service()` returns index `0x1`; `unregister_service(0x1)`
-succeeds; a `spawn_builtin(0x1)` attempt right afterward correctly
-fails (`-1`), confirming the slot is genuinely freed, not just marked;
-registering again returns the *same* index `0x1` - real reuse, not
-just a second slot - and `spawn_builtin`ing that reused index launches
-a real process whose own self-query matches. `objs` still lands on the
-same `0x5` milestone 43 already established, confirming the
-register/unregister/re-register cycle itself doesn't touch the
-(unrelated) kernel object table. Milestone 43 adds syscall 14
-(`register_service`): a ring3 process can load a VFS file into a
-runtime registry slot and get back an index `spawn_builtin` (syscall
-11) can launch, alongside the one fixed compile-time entry - the
-registry isn't only the compile-time table anymore. Verified in QEMU,
-twice: the boot-time demo process registers its own just-`install`ed
-binary (`/system/testprog.bin`) at runtime, gets back index `0x1` (the
-first dynamic slot; index `0` stays reserved for the built-in
-`hello_service`), and `spawn_builtin`s it - the resulting process's own
-self-query independently reports the exact same `task_index`
-`spawn_builtin` returned, and it runs its full self-test sequence
-(File/POSIX/Channel) exactly like any other loaded instance, proving
-the runtime-registered image is genuinely running, not a stub. The
-existing kernel-mode debug shell (`help`/`frames`/`tasks`/`pci`/... -
-most of it touching raw kernel internals no real design should expose
-to arbitrary userspace code directly) deliberately stays exactly as it
-is; migrating it isn't the next step.
+The kernel supports a full process lifecycle. A process can be spawned
+from a VFS file path, from one of a small set of fixed compile-time-
+embedded programs, or from a program registered at runtime
+(`register_service`, backed by 4 runtime registry slots) - all three
+routes go through the same loader, the same syscall boundary, and the
+same per-process address-space isolation. On exit, a process's private
+memory (its loaded image, stack, and page-table frames, plus its own
+PML4/PDPT), its own kernel-object handle table, and its process/task
+table slot are all freed and become available for reuse by the next
+spawn - none of these fixed-size kernel tables grow without bound
+across repeated spawn/exit cycles. A process can also release one of
+its own handles early, without exiting (`handle_close`), and a
+runtime-registered service can be unregistered and its slot reused
+(`unregister_service`) independently of any process's own lifecycle.
 
-See [os-docs's Roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for the full
-milestone-by-milestone history with real captured verification output
-for every one of them.
+`init.c` is a real init process: it spawns a service, polls it until
+it exits, and restarts it - genuine supervision, not spawn-and-forget.
+
+All of this is verified in QEMU with exact, checkable arithmetic
+throughout, not just "it didn't crash" - the kernel object table's
+live count matches hand computation after a spawn/exit/restart cycle,
+and a service registered at runtime, unregistered, and re-registered
+reproducibly gets back the exact same registry slot rather than a
+fresh one, confirming genuine reuse. The existing kernel-mode debug
+shell (`help`/`frames`/`tasks`/`pci`/... - most of it touching raw
+kernel internals no real design should expose to arbitrary userspace
+code directly) deliberately stays exactly as it is.
+
+See [os-docs's Capabilities overview](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap) for
+a subsystem-by-subsystem breakdown with real captured verification
+output for everything above.
 
 ## Known limitations (on purpose, for now)
 
-- A process can exit (`process_exit`, milestone 37), its private-region
-  frames and PML4/PDPT are freed on exit (milestone 39), its
-  process/task table slot is reused by the next spawn instead of
-  growing the table forever (milestone 40 - the reused slot's kernel
-  stack is reinitialized in place too, sidestepping "freeing your own
+- A process can exit (`process_exit`), and everything tied to it is
+  genuinely reclaimed: its private-region frames and PML4/PDPT are
+  freed, its process/task table slot is reused by the next spawn
+  instead of growing the table forever (the reused slot's kernel stack
+  is reinitialized in place too, sidestepping "freeing your own
   currently-executing stack from within itself" entirely rather than
-  solving it), and its own handle table's objects are freed too
-  (milestone 41 - `alloc_object`/`alloc_handle` already searched for a
-  free slot before appending, they just never had anything freed to
-  find until now). A process can also now free one of its own handles
-  early, without exiting, via `handle_close` (milestone 42, syscall
-  13) - the fix for the narrower gap milestone 41 left open: a handle
-  one process holds *to* another (e.g. `init`'s own `open_process`
-  handle onto `hello_service`) lives in the *holder's* table, so only
-  the holder closing it early or exiting ever frees it, never the
-  target's own exit. Any handle still pointing
-  at an exited-then-reused process slot also now points at a
-  *different, live* process, not just a frozen dead one - a sharper,
-  more real version of the same "no ownership on handles" gap below.
+  solving it), and its own handle table's objects are freed with it. A
+  process can also free one of its own handles early, without exiting,
+  via `handle_close` - needed because a handle one process holds *to*
+  another (e.g. `init`'s own `open_process` handle onto
+  `hello_service`) lives in the *holder's* table, so only the holder
+  closing it early or exiting ever frees it, never the target's own
+  exit. One sharper edge remains: any handle still pointing at an
+  exited-then-reused process slot now points at a *different, live*
+  process, not just a frozen dead one - a sharper version of the same
+  "no ownership on handles" gap below.
 - Pointer arguments (paths, buffers) are checked for validity/bounds
   but not ownership - nothing stops a ring3 process from passing a
   pointer that doesn't actually belong to it.
 - Every fixed-size table (tasks, processes, objects, handles, channels,
   mounts) has a small, arbitrary capacity, and most boot-time creation
   calls don't check their own return value.
-- `register_service` (milestone 43) has its own small, fixed capacity -
-  4 runtime registry slots, 16KB each. `unregister_service` (milestone
-  44) can free one for reuse, but doesn't check that the caller is the
-  one who registered it - any process can unregister any slot,
-  matching the existing pointer-ownership gap above rather than closing
-  it. Unregistering doesn't affect processes already spawned from that
+- `register_service` has its own small, fixed capacity - 4 runtime
+  registry slots, 16KB each - though `unregister_service` can free one
+  for reuse. `unregister_service` doesn't check that the caller is the
+  one who registered the slot - any process can unregister any slot,
+  matching the pointer-ownership gap above rather than closing it.
+  Unregistering doesn't affect processes already spawned from that
   slot, since a process's image is copied into its own address space
   at spawn time, not referenced from the registry afterward.
 - A loaded ring3 program's own code+data image is fully executable (no
@@ -235,16 +220,13 @@ for every one of them.
 - The e1000 TX/RX rings are fixed-size (8 descriptors) and poll rather
   than using the device's own interrupt capability, same as the ATA
   driver.
-- `spawn_builtin` (syscall 11) can only launch one of a small, fixed,
-  compile-time-embedded set of programs (one, today: `hello_service.c`)
-  by index - there's no way for init or anything else to register a new
-  one at runtime, and nothing yet bridges "a real service lives on disk"
-  to this mechanism (that's still `spawn_process_from_path()`/syscall 6,
-  a separate path). `init.c` restarts its one service exactly once
-  (milestone 38) - a real restart-on-exit proof, but not a real
-  supervisor: no restart limit/backoff, no dependency ordering, and a
-  second restart would fail outright anyway once the fixed 4-slot
-  process table fills up (see the next bullet).
+- `spawn_builtin` (syscall 11) launches a program by registry index -
+  either the one fixed compile-time entry (`hello_service.c`) or a
+  runtime-registered slot (see `register_service` above) - never a raw
+  pointer. `init.c` restarts its one service exactly once - a real
+  restart-on-exit proof, but not a real supervisor: no restart
+  limit/backoff, no dependency ordering, and a second restart would
+  fail outright once the fixed 4-slot process table fills up.
 - `File.write()`'s syscall return value has been observed to
   intermittently read back as `-1` even though the write itself
   demonstrably succeeds (a subsequent read/`ls` always shows the
@@ -252,8 +234,7 @@ for every one of them.
   affected, needs real diagnostics in a future session.
 
 See [os-docs's Known Limitations](https://minic-os-docs.milosursulovic2696.workers.dev/reference#limitations)
-for the fuller list with links to exactly which milestone closed each
-now-fixed gap.
+for the fuller list, including gaps already closed and how.
 
 ## Docs
 
@@ -263,7 +244,7 @@ the real depth: [Getting Started](https://minic-os-docs.milosursulovic2696.worke
 [Shell Guide](https://minic-os-docs.milosursulovic2696.workers.dev/guide),
 [Architecture reference](https://minic-os-docs.milosursulovic2696.workers.dev/reference),
 [an annotated real session walkthrough](https://minic-os-docs.milosursulovic2696.workers.dev/examples), and
-the [full milestone roadmap](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap). `CLAUDE.md` in
+a [capabilities overview](https://minic-os-docs.milosursulovic2696.workers.dev/roadmap). `CLAUDE.md` in
 this repo carries the load-bearing architecture notes worth knowing
 before touching `boot.s`/`interrupts.s`/paging/scheduling code, and the
 exact toolchain mechanics behind this kernel's build.
