@@ -69,8 +69,9 @@ proc/             process loading + the kernel object model + IPC
   channel.c/.h       IPC channels
   io_request.c/.h    async file reads/writes - a dedicated worker task
                      + a fixed pool of pending-request slots
-  net_request.c/.h   async ICMP ping - its own worker task + slot pool,
-                     separate from io_request's so one never stalls the other
+  net_request.c/.h   async ICMP ping + DNS resolve - their own worker
+                     task + slot pool, separate from io_request's so
+                     one domain never stalls the other
 disk/             storage
   ata.c/.h           legacy ATA PIO driver - real sector read/write
   minifs.c/.h        MiniFS - a minimal custom filesystem
@@ -170,13 +171,14 @@ mechanism blocking IPC receive already uses, not a busy spin - once it
 asks to wait for a result that isn't ready yet.
 
 Ring3 code can also do real networking now, for the first time -
-asynchronously from the start: a process can issue a real ICMP ping
-and get back a handle immediately, the same shape as the file
-operations, backed by its own separate worker task so a slow ping
-can't stall a pending file operation or vice versa. Every network wait
-loop this kernel already had (ARP resolution, ICMP's own reply poll)
-now yields cooperatively while waiting too, not just relying on the
-timer to force a switch eventually.
+asynchronously from the start: a process can issue a real ICMP ping or
+a real DNS resolve and get back a handle immediately, the same shape
+as the file operations, backed by their own separate worker task so a
+slow network operation can't stall a pending file operation or vice
+versa. Every network wait loop this kernel already had (ARP
+resolution, ICMP's own reply poll, UDP's own reply poll that DNS sits
+on top of) now yields cooperatively while waiting too, not just
+relying on the timer to force a switch eventually.
 
 All of this is verified in QEMU with exact, checkable arithmetic
 throughout, not just "it didn't crash" - the kernel object table's
@@ -187,10 +189,13 @@ fresh one, an async file read's own result - byte count and content
 both - exactly matches what a synchronous read of the same file already
 returned moments earlier in the same boot, an async write's own result
 is independently confirmed by reading the file straight back afterward,
-and an async ping genuinely reaches QEMU's real gateway and gets back
-a matching reply - a real external round trip, not a stub. Several
-real prints from the calling process's own continued execution land in
-between issuing each operation and waiting for it, proving it
+an async ping genuinely reaches QEMU's real gateway and gets back a
+matching reply, and an async DNS resolve gets back a real IP for a
+real hostname - cross-checked against the existing kernel-mode TCP
+demo's own independent DNS resolution of the same hostname in the same
+boot, both landing on the identical address. Several real prints from
+the calling process's own continued execution land in between issuing
+each operation and waiting for it, proving it
 genuinely wasn't blocked. The existing kernel-mode debug shell
 (`help`/`frames`/`tasks`/`pci`/... - most of it touching raw kernel
 internals no real design
@@ -236,10 +241,11 @@ output for everything above.
 - Async file I/O is backed by a fixed pool of 4 pending-request slots
   with a 512-byte buffer each - a read or write payload larger than
   that gets silently truncated to the buffer's capacity, same as any
-  other fixed-size table in this kernel. Async networking is ICMP ping
-  only, from a separate 2-slot pool - no async ARP/UDP/DNS/TCP for
-  ring3 yet, and every one of those still has no ring3-facing syscall
-  at all (they remain kernel-mode shell commands only, same as before).
+  other fixed-size table in this kernel. Async networking covers ICMP
+  ping and DNS A-record resolution only, from a separate 2-slot pool -
+  no async ARP/UDP/TCP for ring3 yet, and every one of those still has
+  no ring3-facing syscall at all (they remain kernel-mode shell
+  commands only, same as before).
 - A loaded ring3 program's own code+data image is fully executable (no
   W^X split within it - the loader has no tracked code/data boundary).
   No ASLR, no sandboxing beyond address-space isolation.

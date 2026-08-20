@@ -28,7 +28,9 @@
 // real ICMP echo on a dedicated net worker task, separate from the file
 // worker so a slow ping can't starve a pending file request), 21
 // net_ping_wait (blocks until the ping resolves or times out, returns
-// ok/fail).
+// ok/fail), 22 net_dns_async (same worker/pool as net_ping_async, a
+// second request kind), 23 net_dns_wait (blocks until the resolve
+// completes, copies the resolved IP into the caller's own buffer).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -471,8 +473,69 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
             return (u64) -1;
         }
         int slot = g_objects[obj_index].data_index;
+        if (g_net_ping_requests[slot].is_dns) {
+            return (u64) -1;  // wrong wait syscall for a DNS-issued handle
+        }
         net_ping_request_wait(slot);
         bool ok = g_net_ping_requests[slot].ok;
+        free_net_ping_request(slot);
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
+        return (u64) ok;
+    }
+    if (num == 22) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        char* hostname = (char*) a1;
+        int slot = alloc_net_dns_request(hostname);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_NET_PING_REQUEST, slot);
+        if (obj_index < 0) {
+            free_net_ping_request(slot);
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, 0);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            free_net_ping_request(slot);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 23) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_NET_PING_REQUEST) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        if (!g_net_ping_requests[slot].is_dns) {
+            return (u64) -1;  // wrong wait syscall for a ping-issued handle
+        }
+        net_ping_request_wait(slot);
+        bool ok = g_net_ping_requests[slot].ok;
+        if (ok) {
+            u8* ip_out = (u8*) a2;
+            int i = 0;
+            while (i < 4) {
+                ip_out[i] = g_net_ping_requests[slot].resolved_ip[i];
+                i = i + 1;
+            }
+        }
         free_net_ping_request(slot);
         free_object(obj_index);
         free_handle(caller_process, handle_idx);

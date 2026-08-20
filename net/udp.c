@@ -6,6 +6,7 @@
 #include "arp.h"
 #include "e1000.h"
 #include "../isr/isr.h"
+#include "../sched/task.h"
 
 static const u8 IP_PROTOCOL_UDP = 17;
 
@@ -127,6 +128,7 @@ u16 udp_receive(u8* expected_src_ip, u16 expected_src_port, u16 expected_dst_por
                 }
             }
         }
+        yield();  // cooperative, not just timer-forced - matters when this runs on a background worker task
     }
     return 0;
 }

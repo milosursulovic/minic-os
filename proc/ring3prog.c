@@ -332,6 +332,27 @@ void _start(void) {
 
         u64 ping_result = do_syscall(21, ping_handle, 0, 0);
         do_syscall(1, (u64) "net_ping_wait() got ok=0x", ping_result, 0);
+    } else if (trigger_value == 9) {
+        // trigger 9 (ring3asyncdns): async DNS resolution, the second
+        // ring3-facing network capability - resolves the same hostname
+        // the kernel-mode TCP demo already targets, asynchronously.
+        u64 dns_handle = do_syscall(22, (u64) "example.com", 0, 0);
+        do_syscall(1, (u64) "net_dns_async() got handle 0x", dns_handle, 0);
+
+        int m = 0;
+        while (m < 5) {
+            do_syscall(1, (u64) "doing other work, iteration 0x", (u64) m, 0);
+            m = m + 1;
+        }
+
+        u8 resolved_ip[4];
+        u64 dns_result = do_syscall(23, dns_handle, (u64) &resolved_ip[0], 0);
+        do_syscall(1, (u64) "net_dns_wait() got ok=0x", dns_result, 0);
+        if (dns_result != 0) {
+            u64 packed_ip = ((u64) resolved_ip[0] << 24) | ((u64) resolved_ip[1] << 16)
+                | ((u64) resolved_ip[2] << 8) | (u64) resolved_ip[3];
+            do_syscall(1, (u64) "resolved IP (packed) 0x", packed_ip, 0);
+        }
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";
