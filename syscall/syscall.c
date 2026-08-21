@@ -8,7 +8,8 @@
 // 18/19 file_write async/wait, 20/21 net_ping async/wait, 22/23
 // net_dns async/wait, 24/25 net_tcp_fetch async/wait, 26 window_create
 // (pointer to a packed args struct - too many fields for 3 registers),
-// 27/28/29 window_move/raise/close.
+// 27/28/29 window_move/raise/close, 30 window_fill_rect (same
+// pointer-to-struct reasoning as 26).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -34,6 +35,15 @@ typedef struct __attribute__((packed)) {
     u32 body_color;
     u32 title_color;
 } window_create_args;
+
+typedef struct __attribute__((packed)) {
+    int id;
+    u32 x;
+    u32 y;
+    u32 width;
+    u32 height;
+    u32 color;
+} window_fill_rect_args;
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -635,6 +645,16 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     }
     if (num == 29) {
         bool ok = window_close((int) a1);
+        if (!ok) {
+            return (u64) -1;
+        }
+        compositor_redraw();
+        return 0;
+    }
+    if (num == 30) {
+        window_fill_rect_args* args = (window_fill_rect_args*) a1;
+        bool ok = window_fill_content_rect(args->id, args->x, args->y, args->width,
+                                            args->height, args->color);
         if (!ok) {
             return (u64) -1;
         }

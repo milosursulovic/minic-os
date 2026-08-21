@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win pci nic fb mouse win winlist arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win pci nic fb mouse win winlist arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win pci nic fb mouse win winlist wincontent arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win pci nic fb mouse win winlist wincontent arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -851,6 +851,16 @@ static void cmd_win(void) {
     serial_print(" c_new_after_move=0x");
     print_hex((u64) fb_get_pixel(670, 470));
 
+    window_fill_content_rect(c, 0, 0, 150, 80, 0x00333333);
+    window_fill_content_rect(c, 20, 20, 50, 50, 0x00FFFF00);
+    compositor_redraw();
+    vga_print(" c_content_base=0x");
+    serial_print(" c_content_base=0x");
+    print_hex((u64) fb_get_pixel(650, 450));
+    vga_print(" c_content_accent=0x");
+    serial_print(" c_content_accent=0x");
+    print_hex((u64) fb_get_pixel(590, 480));
+
     window_close(b);
     compositor_redraw();
     vga_print(" b_gone=0x");
@@ -888,8 +898,22 @@ static void cmd_winlist(void) {
         vga_print(" h=0x");
         serial_print(" h=0x");
         print_hex((u64) w->height);
+        vga_print(" content=0x");
+        serial_print(" content=0x");
+        print_hex((u64) w->has_content);
         i = i + 1;
     }
+}
+
+// Reads back the two pixels ring3win's window d (see ring3prog.c trigger 11)
+// should have drawn via window_fill_rect - run this after ring3win.
+static void cmd_wincontent(void) {
+    vga_print("wincontent base=0x");
+    serial_print("wincontent base=0x");
+    print_hex((u64) fb_get_pixel(150, 420));
+    vga_print(" accent=0x");
+    serial_print(" accent=0x");
+    print_hex((u64) fb_get_pixel(90, 360));
 }
 
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
@@ -1133,6 +1157,8 @@ void run_command(void) {
         cmd_win();
     } else if (streq(g_line_buffer, "winlist")) {
         cmd_winlist();
+    } else if (streq(g_line_buffer, "wincontent")) {
+        cmd_wincontent();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
     } else if (streq(g_line_buffer, "ping")) {

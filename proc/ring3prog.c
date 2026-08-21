@@ -39,6 +39,15 @@ typedef struct __attribute__((packed)) {
     u32 title_color;
 } window_create_args;
 
+typedef struct __attribute__((packed)) {
+    int id;
+    u32 x;
+    u32 y;
+    u32 width;
+    u32 height;
+    u32 color;
+} window_fill_rect_args;
+
 typedef struct {
     bool used;
     bool for_writing;
@@ -137,6 +146,18 @@ static bool window_raise(window* self) {
 
 static bool window_close(window* self) {
     u64 result = do_syscall(29, (u64) self->id, 0, 0);
+    return result != (u64) -1;
+}
+
+static bool window_fill_rect(window* self, u32 x, u32 y, u32 width, u32 height, u32 color) {
+    window_fill_rect_args args;
+    args.id = self->id;
+    args.x = x;
+    args.y = y;
+    args.width = width;
+    args.height = height;
+    args.color = color;
+    u64 result = do_syscall(30, (u64) &args, 0, 0);
     return result != (u64) -1;
 }
 
@@ -438,6 +459,18 @@ void _start(void) {
 
         bool closed = window_close(&c);
         do_syscall(1, (u64) "window_close(c) ok=0x", (u64) closed, 0);
+
+        // Real app-drawn content, not a flat placeholder - a base fill plus
+        // an accent rect, left open (unlike c) so its result is checkable.
+        window d;
+        bool created_d = window_create(&d, 50, 300, 150, 150, 0x00444444, 0x00222222);
+        do_syscall(1, (u64) "window_create(d) ok=0x", (u64) created_d, 0);
+        do_syscall(1, (u64) "window d.id=0x", (u64) d.id, 0);
+
+        bool filled_base = window_fill_rect(&d, 0, 0, 150, 130, 0x00333333);
+        do_syscall(1, (u64) "window_fill_rect(d, base) ok=0x", (u64) filled_base, 0);
+        bool filled_accent = window_fill_rect(&d, 20, 20, 50, 50, 0x00FFFF00);
+        do_syscall(1, (u64) "window_fill_rect(d, accent) ok=0x", (u64) filled_accent, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

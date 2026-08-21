@@ -27,4 +27,10 @@ SECTIONS
         *(COMMON)
         *(.bss)
     }
+
+    /* mm/frames.c reserves physical memory up to here as "kernel, not free
+     * RAM" - real end, not a guessed constant, so growing .bss (a big
+     * static array, say) can never again make the frame allocator hand out
+     * a frame that's still actually part of the kernel image. */
+    _kernel_end = ALIGN(4K);
 }

@@ -30,6 +30,10 @@ typedef struct __attribute__((packed)) {
 
 u32 g_multiboot_info_ptr;
 
+#pragma GCC visibility push(hidden)
+extern u8 _kernel_end;  // boot/linker.ld - real end of .bss, 4K-aligned
+#pragma GCC visibility pop
+
 static u8 g_frame_bitmap[32768];
 u32 g_total_frames;
 u32 g_free_frame_count;
@@ -54,7 +58,6 @@ static void frame_clear(u32 frame) {
 }
 
 // Everything starts "used"; the memory map clears what's actually free.
-// First 4MB is reserved unconditionally rather than computed precisely.
 void frames_init(void) {
     u32 i = 0;
     while (i < 32768) {
@@ -63,6 +66,8 @@ void frames_init(void) {
     }
     g_total_frames = 262144;  // 1GB / 4KB
     g_free_frame_count = 0;
+
+    u64 kernel_end = (u64) &_kernel_end;
 
     multiboot_info* info = (multiboot_info*) ((u64) g_multiboot_info_ptr);
     u64 mmap_addr = (u64) info->mmap_addr;
@@ -73,8 +78,8 @@ void frames_init(void) {
         if (entry->type == 1) {
             u64 start = entry->addr;
             u64 end = entry->addr + entry->len;
-            if (start < 4194304) {
-                start = 4194304;
+            if (start < kernel_end) {
+                start = kernel_end;
             }
             if (end > 1073741824) {
                 end = 1073741824;
