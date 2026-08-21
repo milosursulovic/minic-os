@@ -2,7 +2,7 @@
 
 A multiboot1 kernel written in hand-written, freestanding C (plus a handful of hand-written `.s` files for exactly the things below what C can express: boot/long-mode transition, interrupt entry stubs, context switching, ring3 entry). Boots via QEMU's `-kernel` shortcut for fast iteration, or a real GRUB-bootable ISO (`./build.sh iso`) for VirtualBox/VMware/real hardware.
 
-This repo is one of two siblings under `d:\Projects\minic` — see `../CLAUDE.md` for the workspace layout and the git-discipline rule. The kernel used to be written in a hand-rolled MiniC dialect and built against a separate `minicc` compiler repo (`compiler/`); both were retired in favor of writing the kernel directly in C for faster iteration (the language, not the design philosophy, changed — see below). `os/README.md`'s roadmap documents the migration as a real, dated event, not rewritten history.
+This repo's sibling docs repo is `../minic-os-docs` (the deployed docs site) — every milestone gets a matching "Document X" commit there; see the `kernel-milestone` skill for the sync checklist. (`net-desk` and `vnc`, if present alongside this repo, are unrelated projects that just happen to share the same parent folder — not part of this workspace.) The kernel used to be written in a hand-rolled MiniC dialect and built against a separate `minicc` compiler repo (`compiler/`); both were retired in favor of writing the kernel directly in C for faster iteration (the language, not the design philosophy, changed — see below). `README.md`'s roadmap documents the migration as a real, dated event, not rewritten history.
 
 ## No external libraries — everything is hand-written
 
@@ -11,10 +11,12 @@ Every subsystem in this kernel is implemented from scratch in C (or hand-written
 ## Building
 
 ```bash
-wsl.exe -e bash -c "cd /mnt/d/Projects/minic/os && ./build.sh"        # kernel.elf
-wsl.exe -e bash -c "cd /mnt/d/Projects/minic/os && ./build.sh iso"    # + minic-os.iso
-wsl.exe -e bash -c "cd /mnt/d/Projects/minic/os && ./build.sh disk"   # + disk.img (regenerated from scratch)
+./build.sh          # kernel.elf
+./build.sh iso       # + minic-os.iso
+./build.sh disk      # + disk.img (regenerated from scratch)
 ```
+
+(Native Linux — no WSL/`/mnt` wrapping needed; run these directly from the repo root.)
 
 `build.sh` is a thin wrapper over a real `Makefile` (`make`, `make run`, `make iso`, `make disk`) — every `.c` file compiles to its own object with real incremental rebuilds. Needs `gcc`/`as`/`ld`/`objcopy` (any recent GCC toolchain; developed against gcc 15). `./build.sh iso` additionally needs `grub-mkrescue`/`xorriso`/`mtools` (`sudo apt install grub-pc-bin grub-common xorriso mtools`).
 

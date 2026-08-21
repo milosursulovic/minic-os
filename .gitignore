@@ -6,4 +6,4 @@
 *.bin
 *.gen.s
 *.d
-.claude/
+.claude/settings.local.json
