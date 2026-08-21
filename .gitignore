@@ -7,3 +7,7 @@
 *.gen.s
 *.d
 .claude/settings.local.json
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json
+graphify-out/.graphify_*
