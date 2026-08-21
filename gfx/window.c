@@ -5,6 +5,8 @@
 
 #include "window.h"
 #include "../drivers/vbe.h"
+#include "font.h"
+#include "../lib/strings.h"
 
 window g_windows[WINDOW_SLOTS];
 int g_window_zorder[WINDOW_SLOTS];
@@ -117,6 +119,41 @@ bool window_fill_content_rect(int id, u32 x, u32 y, u32 w, u32 h, u32 color) {
             col = col + 1;
         }
         row = row + 1;
+    }
+    g_windows[id].has_content = true;
+    return true;
+}
+
+// Same clipping shape as window_fill_content_rect - body-local coordinates,
+// clamped to the body size. Single line only, no wrapping (same limitation
+// fb_draw_string has). Unsupported characters (see gfx/font.h) render blank.
+bool window_draw_text(int id, u32 x, u32 y, const char* text, u32 fg, u32 bg) {
+    if (id < 0 || id >= WINDOW_SLOTS || !g_windows[id].used) {
+        return false;
+    }
+    u32 body_height = g_windows[id].height - TITLEBAR_HEIGHT;
+    u32 cursor = x;
+    int i = 0;
+    int len = strlen_(text);
+    while (i < len) {
+        u8 rows[FONT_GLYPH_HEIGHT];
+        // Unsupported characters (font_get_glyph returns false) leave the
+        // content buffer untouched at this cell - same as fb_draw_char.
+        if (font_get_glyph(text[i], rows)) {
+            u32 row = 0;
+            while (row < FONT_GLYPH_HEIGHT && y + row < body_height) {
+                u32 col = 0;
+                while (col < FONT_GLYPH_WIDTH && cursor + col < g_windows[id].width) {
+                    bool on = (rows[row] >> (FONT_GLYPH_WIDTH - 1 - col)) & 1;
+                    g_window_content[id][(y + row) * WINDOW_CONTENT_MAX_WIDTH + (cursor + col)] =
+                        on ? fg : bg;
+                    col = col + 1;
+                }
+                row = row + 1;
+            }
+        }
+        cursor = cursor + FONT_GLYPH_WIDTH + 1;
+        i = i + 1;
     }
     g_windows[id].has_content = true;
     return true;

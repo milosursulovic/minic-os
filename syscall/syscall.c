@@ -10,7 +10,10 @@
 // (pointer to a packed args struct - too many fields for 3 registers),
 // 27/28/29 window_move/raise/close, 30 window_fill_rect (same
 // pointer-to-struct reasoning as 26), 31 mouse_query (x/y/buttons packed
-// into the return value - all three fit easily, no pointer needed).
+// into the return value - all three fit easily, no pointer needed), 32
+// window_draw_text (same pointer-to-struct reasoning as 26/30, plus an
+// embedded raw ring3 string pointer - trusted as-is, same precedent as
+// syscalls 4/5/6's path pointers).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -46,6 +49,15 @@ typedef struct __attribute__((packed)) {
     u32 height;
     u32 color;
 } window_fill_rect_args;
+
+typedef struct __attribute__((packed)) {
+    int id;
+    u32 x;
+    u32 y;
+    u32 fg_color;
+    u32 bg_color;
+    char* text;
+} window_draw_text_args;
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -669,6 +681,16 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
             | (((u64) (u32) g_mouse_y & 0xFFFF) << 16)
             | ((u64) g_mouse_buttons << 32);
         return packed;
+    }
+    if (num == 32) {
+        window_draw_text_args* args = (window_draw_text_args*) a1;
+        bool ok = window_draw_text(args->id, args->x, args->y, args->text,
+                                    args->fg_color, args->bg_color);
+        if (!ok) {
+            return (u64) -1;
+        }
+        compositor_redraw();
+        return 0;
     }
     return (u64) -1;  // unknown syscall
 }

@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse pci nic fb mouse win winlist wincontent arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse pci nic fb mouse win winlist wincontent arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text pci nic fb text mouse win winlist wincontent textcontent arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text pci nic fb text mouse win winlist wincontent textcontent arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -669,6 +669,18 @@ static void cmd_ring3_mouse(void) {
     serial_print("sent ring3 mouse trigger");
 }
 
+// Draws real text into a window via the window_draw_text syscall.
+static void cmd_ring3_text(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0xD);
+    if (!ok) {
+        vga_print("ring3text failed - channel full");
+        serial_print("ring3text failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 text trigger");
+    serial_print("sent ring3 text trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -780,6 +792,44 @@ static void cmd_fb(void) {
     vga_print(" past_rect=0x");
     serial_print(" past_rect=0x");
     print_hex((u64) fb_get_pixel(300, 250));
+}
+
+// Draws "HI" straight onto the raw framebuffer with fb_draw_string, then
+// reads back specific hand-computed pixels: a foreground stroke in each of
+// the two glyphs, an "off" pixel inside a glyph's own cell, the untouched
+// inter-character gap column, and a pixel well past both characters - same
+// discipline as cmd_fb's rect read-backs.
+static void cmd_text(void) {
+    bool ok = vbe_init(800, 600);
+    if (!ok) {
+        vga_print("framebuffer init failed - no Bochs VBE VGA device found");
+        serial_print("framebuffer init failed - no Bochs VBE VGA device found");
+        return;
+    }
+
+    fb_fill_rect(0, 0, 800, 600, 0x00001133);
+    fb_draw_string(100, 100, "HI", 0x00FFFFFF, 0x00001133);
+
+    // 'H' bitmap row0=10001 (col0 on), row1=10001 (col1 off), row3=11111
+    // (col2 on, the crossbar). 'I' starts at x+6, row0=11111 (col2 on).
+    vga_print("text h_stroke=0x");
+    serial_print("text h_stroke=0x");
+    print_hex((u64) fb_get_pixel(100, 100));
+    vga_print(" h_gap=0x");
+    serial_print(" h_gap=0x");
+    print_hex((u64) fb_get_pixel(101, 101));
+    vga_print(" h_crossbar=0x");
+    serial_print(" h_crossbar=0x");
+    print_hex((u64) fb_get_pixel(102, 103));
+    vga_print(" between_chars=0x");
+    serial_print(" between_chars=0x");
+    print_hex((u64) fb_get_pixel(105, 100));
+    vga_print(" i_stroke=0x");
+    serial_print(" i_stroke=0x");
+    print_hex((u64) fb_get_pixel(108, 100));
+    vga_print(" past_text=0x");
+    serial_print(" past_text=0x");
+    print_hex((u64) fb_get_pixel(200, 100));
 }
 
 // Enables the PS/2 mouse and reports its currently tracked state. Safe to
@@ -926,6 +976,27 @@ static void cmd_wincontent(void) {
     vga_print(" accent=0x");
     serial_print(" accent=0x");
     print_hex((u64) fb_get_pixel(90, 360));
+}
+
+// Reads back pixels ring3text's window e (see ring3prog.c trigger 13) should
+// have drawn via window_draw_text - run this after ring3text. Window e is at
+// screen (300,300), titlebar 20px, so its body starts at (300,320); text was
+// drawn at body-local (10,10) -> screen (310,330). Only checking pixels the
+// glyphs explicitly set 'on' (not gap/background pixels, whose value would
+// depend on whatever this window slot's content buffer held before - same
+// restraint cmd_wincontent already applies to window d).
+static void cmd_textcontent(void) {
+    // 'O' row0=01110 (offset1 on), row1=10001 (offset0 on, left stroke).
+    vga_print("textcontent o_top=0x");
+    serial_print("textcontent o_top=0x");
+    print_hex((u64) fb_get_pixel(311, 330));
+    vga_print(" o_left_stroke=0x");
+    serial_print(" o_left_stroke=0x");
+    print_hex((u64) fb_get_pixel(310, 331));
+    // 'S' starts at body-local x=16 (screen x=300+16=316), row0=01111 (offset1 on).
+    vga_print(" s_top=0x");
+    serial_print(" s_top=0x");
+    print_hex((u64) fb_get_pixel(317, 330));
 }
 
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
@@ -1159,12 +1230,16 @@ void run_command(void) {
         cmd_ring3_window();
     } else if (streq(g_line_buffer, "ring3mouse")) {
         cmd_ring3_mouse();
+    } else if (streq(g_line_buffer, "ring3text")) {
+        cmd_ring3_text();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {
         cmd_nic();
     } else if (streq(g_line_buffer, "fb")) {
         cmd_fb();
+    } else if (streq(g_line_buffer, "text")) {
+        cmd_text();
     } else if (streq(g_line_buffer, "mouse")) {
         cmd_mouse();
     } else if (streq(g_line_buffer, "win")) {
@@ -1173,6 +1248,8 @@ void run_command(void) {
         cmd_winlist();
     } else if (streq(g_line_buffer, "wincontent")) {
         cmd_wincontent();
+    } else if (streq(g_line_buffer, "textcontent")) {
+        cmd_textcontent();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
     } else if (streq(g_line_buffer, "ping")) {

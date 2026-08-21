@@ -48,6 +48,15 @@ typedef struct __attribute__((packed)) {
     u32 color;
 } window_fill_rect_args;
 
+typedef struct __attribute__((packed)) {
+    int id;
+    u32 x;
+    u32 y;
+    u32 fg_color;
+    u32 bg_color;
+    char* text;
+} window_draw_text_args;
+
 typedef struct {
     i32 x;
     i32 y;
@@ -164,6 +173,18 @@ static bool window_fill_rect(window* self, u32 x, u32 y, u32 width, u32 height, 
     args.height = height;
     args.color = color;
     u64 result = do_syscall(30, (u64) &args, 0, 0);
+    return result != (u64) -1;
+}
+
+static bool window_draw_text(window* self, u32 x, u32 y, char* text, u32 fg_color, u32 bg_color) {
+    window_draw_text_args args;
+    args.id = self->id;
+    args.x = x;
+    args.y = y;
+    args.fg_color = fg_color;
+    args.bg_color = bg_color;
+    args.text = text;
+    u64 result = do_syscall(32, (u64) &args, 0, 0);
     return result != (u64) -1;
 }
 
@@ -502,6 +523,17 @@ void _start(void) {
             }
             p = p + 1;
         }
+    } else if (trigger_value == 13) {
+        // trigger 13 (ring3text): draws real text into a window via the new
+        // window_draw_text syscall - end-to-end through the same clipping/
+        // content-buffer/compositor path window_fill_rect already proved.
+        window e;
+        bool created_e = window_create(&e, 300, 300, 150, 100, 0x00444444, 0x00222222);
+        do_syscall(1, (u64) "window_create(e) ok=0x", (u64) created_e, 0);
+        do_syscall(1, (u64) "window e.id=0x", (u64) e.id, 0);
+
+        bool drew_text = window_draw_text(&e, 10, 10, "OS", 0x00FFFFFF, 0x00444444);
+        do_syscall(1, (u64) "window_draw_text(e) ok=0x", (u64) drew_text, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

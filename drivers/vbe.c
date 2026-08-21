@@ -9,6 +9,7 @@
 #include "io.h"
 #include "pci.h"
 #include "../mm/paging.h"
+#include "../gfx/font.h"
 
 static const u16 VBE_DISPI_IOPORT_INDEX = 0x01CE;
 static const u16 VBE_DISPI_IOPORT_DATA = 0x01CF;
@@ -133,5 +134,34 @@ void fb_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 color) {
             col = col + 1;
         }
         row = row + 1;
+    }
+}
+
+void fb_draw_char(u32 x, u32 y, char c, u32 fg, u32 bg) {
+    u8 rows[FONT_GLYPH_HEIGHT];
+    if (!font_get_glyph(c, rows)) {
+        return;  // unsupported character - leave the cell untouched
+    }
+    u32 row = 0;
+    while (row < FONT_GLYPH_HEIGHT) {
+        u32 col = 0;
+        while (col < FONT_GLYPH_WIDTH) {
+            bool on = (rows[row] >> (FONT_GLYPH_WIDTH - 1 - col)) & 1;
+            fb_put_pixel(x + col, y + row, on ? fg : bg);
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+}
+
+// Single line only, no wrapping - a known limitation, closed in a later
+// milestone alongside the font's own limited character set.
+void fb_draw_string(u32 x, u32 y, const char* s, u32 fg, u32 bg) {
+    u32 cursor = x;
+    int i = 0;
+    while (s[i] != '\0') {
+        fb_draw_char(cursor, y, s[i], fg, bg);
+        cursor = cursor + FONT_GLYPH_WIDTH + 1;
+        i = i + 1;
     }
 }

@@ -43,6 +43,10 @@ bool window_raise(int id);
 // body size. Once called, the compositor draws this buffer instead of
 // body_color - a window is either a flat placeholder or fully app-drawn.
 bool window_fill_content_rect(int id, u32 x, u32 y, u32 w, u32 h, u32 color);
+// Draws text into id's content buffer, same body-local clipping as
+// window_fill_content_rect. Single line only; unsupported characters (see
+// gfx/font.h) leave their cell untouched.
+bool window_draw_text(int id, u32 x, u32 y, const char* text, u32 fg, u32 bg);
 // Fills the background, then draws every window bottom-to-top.
 void compositor_redraw(void);
 
