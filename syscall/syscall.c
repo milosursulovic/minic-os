@@ -9,7 +9,8 @@
 // net_dns async/wait, 24/25 net_tcp_fetch async/wait, 26 window_create
 // (pointer to a packed args struct - too many fields for 3 registers),
 // 27/28/29 window_move/raise/close, 30 window_fill_rect (same
-// pointer-to-struct reasoning as 26).
+// pointer-to-struct reasoning as 26), 31 mouse_query (x/y/buttons packed
+// into the return value - all three fit easily, no pointer needed).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -26,6 +27,7 @@
 #include "../mm/frames.h"
 #include "../drivers/vbe.h"
 #include "../gfx/window.h"
+#include "../drivers/mouse.h"
 
 typedef struct __attribute__((packed)) {
     i32 x;
@@ -660,6 +662,13 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         }
         compositor_redraw();
         return 0;
+    }
+    if (num == 31) {
+        mouse_init();  // idempotent - real init happens once, safe to call every time
+        u64 packed = ((u64) (u32) g_mouse_x & 0xFFFF)
+            | (((u64) (u32) g_mouse_y & 0xFFFF) << 16)
+            | ((u64) g_mouse_buttons << 32);
+        return packed;
     }
     return (u64) -1;  // unknown syscall
 }

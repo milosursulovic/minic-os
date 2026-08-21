@@ -49,6 +49,12 @@ typedef struct __attribute__((packed)) {
 } window_fill_rect_args;
 
 typedef struct {
+    i32 x;
+    i32 y;
+    u8 buttons;
+} mouse_state;
+
+typedef struct {
     bool used;
     bool for_writing;
     char* path;
@@ -159,6 +165,13 @@ static bool window_fill_rect(window* self, u32 x, u32 y, u32 width, u32 height, 
     args.color = color;
     u64 result = do_syscall(30, (u64) &args, 0, 0);
     return result != (u64) -1;
+}
+
+static void mouse_query(mouse_state* self) {
+    u64 packed = do_syscall(31, 0, 0, 0);
+    self->x = (i32) (packed & 0xFFFF);
+    self->y = (i32) ((packed >> 16) & 0xFFFF);
+    self->buttons = (u8) ((packed >> 32) & 0xFF);
 }
 
 // mode 0 = read, mode 1 = write (flushed as a new file on close).
@@ -471,6 +484,24 @@ void _start(void) {
         do_syscall(1, (u64) "window_fill_rect(d, base) ok=0x", (u64) filled_base, 0);
         bool filled_accent = window_fill_rect(&d, 20, 20, 50, 50, 0x00FFFF00);
         do_syscall(1, (u64) "window_fill_rect(d, accent) ok=0x", (u64) filled_accent, 0);
+    } else if (trigger_value == 12) {
+        // trigger 12 (ring3mouse): polls real mouse state 3 times, real work
+        // in between - proves it tracks live state, not one frozen snapshot.
+        int p = 0;
+        while (p < 3) {
+            mouse_state m;
+            mouse_query(&m);
+            do_syscall(1, (u64) "mouse_query() x=0x", (u64) m.x, 0);
+            do_syscall(1, (u64) "mouse_query() y=0x", (u64) m.y, 0);
+            do_syscall(1, (u64) "mouse_query() buttons=0x", (u64) m.buttons, 0);
+
+            int q = 0;
+            while (q < 3) {
+                do_syscall(1, (u64) "doing other work, iteration 0x", (u64) q, 0);
+                q = q + 1;
+            }
+            p = p + 1;
+        }
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

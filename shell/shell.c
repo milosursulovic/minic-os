@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win pci nic fb mouse win winlist wincontent arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win pci nic fb mouse win winlist wincontent arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse pci nic fb mouse win winlist wincontent arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse pci nic fb mouse win winlist wincontent arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -657,6 +657,18 @@ static void cmd_ring3_window(void) {
     serial_print("sent ring3 window trigger");
 }
 
+// Polls real mouse state 3 times with real work in between.
+static void cmd_ring3_mouse(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0xC);
+    if (!ok) {
+        vga_print("ring3mouse failed - channel full");
+        serial_print("ring3mouse failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 mouse trigger");
+    serial_print("sent ring3 mouse trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -1145,6 +1157,8 @@ void run_command(void) {
         cmd_ring3_async_tcp();
     } else if (streq(g_line_buffer, "ring3win")) {
         cmd_ring3_window();
+    } else if (streq(g_line_buffer, "ring3mouse")) {
+        cmd_ring3_mouse();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {
