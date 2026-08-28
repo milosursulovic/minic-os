@@ -13,6 +13,43 @@ int g_window_zorder[WINDOW_SLOTS];
 int g_window_zorder_count;
 u32 g_window_content[WINDOW_SLOTS][WINDOW_CONTENT_MAX_WIDTH * WINDOW_CONTENT_MAX_HEIGHT];
 
+// Off-screen composite buffer, sized to the one mode this kernel ever
+// uses (vbe_init(800,600) - see drivers/vbe.c). compositor_redraw() draws
+// every window into this plain array first, then blits it to the real
+// framebuffer in one tight pass at the end - drivers/vbe.c's fb_put_pixel
+// touches live MMIO-backed video memory directly, so without a back
+// buffer, a mid-redraw timer preemption (or, just as much, an external
+// observer - a real display, or QEMU's own screendump - sampling
+// asynchronously, which no amount of guest-side cli/sti can prevent)
+// shows a torn frame: background color on rows the multi-stage,
+// branchy draw hadn't reached yet, sitting above already-drawn ones.
+// This is the "double buffering" piece of Faza II point 16 (Graphics
+// subsystem, "kasnije") - pulled in now because without it, point 22's
+// desktop shell doesn't render correctly on a live display, only when
+// sampled between redraws by luck.
+#define COMPOSITOR_BACKBUFFER_WIDTH 800
+#define COMPOSITOR_BACKBUFFER_HEIGHT 600
+static u32 g_backbuffer[COMPOSITOR_BACKBUFFER_WIDTH * COMPOSITOR_BACKBUFFER_HEIGHT];
+
+static void bb_put_pixel(u32 x, u32 y, u32 color) {
+    if (x >= COMPOSITOR_BACKBUFFER_WIDTH || y >= COMPOSITOR_BACKBUFFER_HEIGHT) {
+        return;
+    }
+    g_backbuffer[y * COMPOSITOR_BACKBUFFER_WIDTH + x] = color;
+}
+
+static void bb_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 color) {
+    u32 row = 0;
+    while (row < h) {
+        u32 col = 0;
+        while (col < w) {
+            bb_put_pixel(x + col, y + row, color);
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+}
+
 static bool fits_on_screen(i32 x, i32 y, u32 width, u32 height) {
     if (x < 0 || y < 0) {
         return false;
@@ -223,7 +260,7 @@ static void draw_window_content(window* w, int id) {
         u32 col = 0;
         while (col < w->width) {
             u32 color = g_window_content[id][row * WINDOW_CONTENT_MAX_WIDTH + col];
-            fb_put_pixel((u32) w->x + col, body_y + row, color);
+            bb_put_pixel((u32) w->x + col, body_y + row, color);
             col = col + 1;
         }
         row = row + 1;
@@ -231,20 +268,41 @@ static void draw_window_content(window* w, int id) {
 }
 
 void compositor_redraw(void) {
-    fb_fill_rect(0, 0, g_fb_width, g_fb_height, WINDOW_BACKGROUND_COLOR);
+    bb_fill_rect(0, 0, g_fb_width, g_fb_height, WINDOW_BACKGROUND_COLOR);
     int i = 0;
     while (i < g_window_zorder_count) {
         int id = g_window_zorder[i];
         window* w = &g_windows[id];
         if (!w->borderless) {
-            fb_fill_rect((u32) w->x, (u32) w->y, w->width, TITLEBAR_HEIGHT, w->title_color);
+            bb_fill_rect((u32) w->x, (u32) w->y, w->width, TITLEBAR_HEIGHT, w->title_color);
         }
         if (w->has_content) {
             draw_window_content(w, id);
         } else {
-            fb_fill_rect((u32) w->x, window_body_screen_y(w), w->width, window_body_height(w),
+            bb_fill_rect((u32) w->x, window_body_screen_y(w), w->width, window_body_height(w),
                          w->body_color);
         }
         i = i + 1;
     }
+
+    // Publish: one tight, branch-light pass from the back buffer to the
+    // real MMIO framebuffer - the only part of a redraw an external
+    // observer can actually catch mid-flight, and now the smallest
+    // possible window for that. cli/sti (save/restore IF, not a bare
+    // pair, so this is correct regardless of the caller's own state)
+    // additionally blocks a guest-side timer preemption from landing
+    // here too - belt and suspenders, not a substitute for the back
+    // buffer itself.
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    u32 y = 0;
+    while (y < g_fb_height) {
+        u32 x = 0;
+        while (x < g_fb_width) {
+            fb_put_pixel(x, y, g_backbuffer[y * COMPOSITOR_BACKBUFFER_WIDTH + x]);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
 }

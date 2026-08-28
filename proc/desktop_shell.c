@@ -42,7 +42,7 @@ void _start(void) {
     gt_syscall(30, (u64) &bg_args, 0, 0);
 
     button launcher;
-    button_init(&launcher, taskbar_id, 4, 2, 60, 16, "Menu",
+    button_init(&launcher, taskbar_id, 4, 2, 60, 16, "MENU",  // font is uppercase-only
                 LAUNCHER_NORMAL_COLOR, LAUNCHER_PRESSED_COLOR, LABEL_COLOR);
 
     for (;;) {

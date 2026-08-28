@@ -1074,6 +1074,12 @@ static void cmd_desktop(void) {
     vga_print(" taskbar_bottom=0x");
     serial_print(" taskbar_bottom=0x");
     print_hex((u64) fb_get_pixel(400, 599));
+    vga_print(" label_m_left=0x");
+    serial_print(" label_m_left=0x");
+    print_hex((u64) fb_get_pixel(8, 586));
+    vga_print(" label_m_row1=0x");
+    serial_print(" label_m_row1=0x");
+    print_hex((u64) fb_get_pixel(8, 587));
 }
 
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS

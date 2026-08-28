@@ -156,6 +156,8 @@ typedef struct {
     char* label;
     u32 normal_color, pressed_color, label_color;
     bool was_down;  // last-poll left-button state, for click edge detection
+    bool last_rendered_pressed;  // what button_draw() last actually drew -
+                                  // button_poll() only redraws on a change
 } button;
 
 static void button_draw(button* self, bool pressed) {
@@ -196,15 +198,23 @@ static void button_init(button* self, int window_id, u32 x, u32 y, u32 width, u3
     self->label_color = label_color;
     self->was_down = false;
     button_draw(self, false);
+    self->last_rendered_pressed = false;
 }
 
 // Polls real mouse + window state (both live, not cached) and redraws the
-// button pressed/normal. Returns true exactly once per press-and-hold - on
-// the down-transition while the cursor is inside the button - not on every
-// poll while held, and not on release. No multi-window click arbitration
-// yet (whichever window is on top doesn't matter here) - a real Window
-// Server would gate this on focus/z-order too; that's still point 18's
-// open "focus" item, not this widget's job.
+// button pressed/normal - but ONLY when that visual state actually
+// changes since the last poll. button_draw() erases-then-redraws the
+// label as two separate syscalls/compositor_redraw() passes; calling it
+// on every poll of an unthrottled forever-loop (desktop_shell.c has no
+// yield/sleep syscall to pace itself with) made the label visibly blink
+// continuously on a real display, even once compositor_redraw() itself
+// stopped producing torn frames - a real bug, not the same one. Returns
+// true exactly once per press-and-hold - on the down-transition while the
+// cursor is inside the button - not on every poll while held, and not on
+// release. No multi-window click arbitration yet (whichever window is on
+// top doesn't matter here) - a real Window Server would gate this on
+// focus/z-order too; that's still point 18's open "focus" item, not this
+// widget's job.
 static bool button_poll(button* self) {
     i32 win_x, win_y;
     u32 win_width, win_height;
@@ -223,6 +233,10 @@ static bool button_poll(button* self) {
     bool clicked = inside && left_down && !self->was_down;
     self->was_down = left_down;
 
-    button_draw(self, inside && left_down);
+    bool pressed = inside && left_down;
+    if (pressed != self->last_rendered_pressed) {
+        button_draw(self, pressed);
+        self->last_rendered_pressed = pressed;
+    }
     return clicked;
 }
