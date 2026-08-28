@@ -13,7 +13,8 @@
 // into the return value - all three fit easily, no pointer needed), 32
 // window_draw_text (same pointer-to-struct reasoning as 26/30, plus an
 // embedded raw ring3 string pointer - trusted as-is, same precedent as
-// syscalls 4/5/6's path pointers).
+// syscalls 4/5/6's path pointers), 33 window_query (body-local origin +
+// dims packed into the return value, same style as 31 mouse_query).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -691,6 +692,19 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         }
         compositor_redraw();
         return 0;
+    }
+    if (num == 33) {
+        i32 body_x, body_y;
+        u32 body_width, body_height;
+        bool ok = window_query((int) a1, &body_x, &body_y, &body_width, &body_height);
+        if (!ok) {
+            return (u64) -1;
+        }
+        u64 packed = ((u64) (u32) body_x & 0xFFFF)
+            | (((u64) (u32) body_y & 0xFFFF) << 16)
+            | ((u64) body_width & 0xFFFF) << 32
+            | (((u64) body_height & 0xFFFF) << 48);
+        return packed;
     }
     return (u64) -1;  // unknown syscall
 }

@@ -159,6 +159,17 @@ bool window_draw_text(int id, u32 x, u32 y, const char* text, u32 fg, u32 bg) {
     return true;
 }
 
+bool window_query(int id, i32* body_x, i32* body_y, u32* body_width, u32* body_height) {
+    if (id < 0 || id >= WINDOW_SLOTS || !g_windows[id].used) {
+        return false;
+    }
+    *body_x = g_windows[id].x;
+    *body_y = g_windows[id].y + TITLEBAR_HEIGHT;
+    *body_width = g_windows[id].width;
+    *body_height = g_windows[id].height - TITLEBAR_HEIGHT;
+    return true;
+}
+
 static void draw_window_content(window* w, int id) {
     u32 body_height = w->height - TITLEBAR_HEIGHT;
     u32 row = 0;

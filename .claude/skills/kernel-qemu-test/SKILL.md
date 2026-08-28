@@ -83,6 +83,21 @@ treat a mismatch as a real bug, not a rounding/formatting difference.
   commands (each with its own process-spawn latency) does not correspond to
   real elapsed guest time - don't use it to validate a `sleep_ticks()`-style
   duration.
+- **QEMU monitor `mouse_button` (pressing a virtual PS/2 mouse button)
+  permanently breaks `sendkey` keyboard delivery for the rest of that QEMU
+  session** - confirmed by reproducing it twice: after `mouse_button 1`,
+  every subsequent `sendkey` (even a single unrelated key) produces zero
+  effect and zero echo in `serial.log`, while the timer/idle heartbeat
+  keeps running (not a full VM hang - the CPU and other IRQs stay alive,
+  just keyboard IRQ1 delivery specifically). `mouse_move` alone does NOT
+  cause this. Root cause not found (candidate: mouse.c's IRQ handler not
+  correctly EOI'ing the slave PIC, wedging IRQ1 behind it on the shared
+  cascade) - real enough to be worth investigating as its own bug, but out
+  of scope for whatever feature you're testing when you hit it. Workaround
+  for testing a click: type the triggering command first, THEN fire
+  `mouse_button` - do not plan to type anything else in that QEMU session
+  afterward. There's no known way yet to both simulate a real click AND
+  keep driving the shell via keyboard afterward in the same boot.
 - **Command batching (many `sendkey`/monitor round trips issued too fast)
   can occasionally hang** - keep the `sleep 0.1` between keystrokes and a
   `sleep 1`+ pause after the final `ret` before reading `serial.log`.

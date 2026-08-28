@@ -7,6 +7,7 @@
 // function ordering.
 
 #include "../types.h"
+#include "gui_toolkit.h"
 
 #define RIGHT_QUERY 1
 
@@ -534,6 +535,29 @@ void _start(void) {
 
         bool drew_text = window_draw_text(&e, 10, 10, "OS", 0x00FFFFFF, 0x00444444);
         do_syscall(1, (u64) "window_draw_text(e) ok=0x", (u64) drew_text, 0);
+    } else if (trigger_value == 14) {
+        // trigger 14 (ring3button): a real interactive Button widget
+        // (gui_toolkit.h) - polls real mouse+window state via syscalls
+        // 31/33, hit-tests, and renders a pressed/normal visual state.
+        window f;
+        bool created_f = window_create(&f, 400, 200, 200, 120, 0x00444444, 0x00222222);
+        do_syscall(1, (u64) "window_create(f) ok=0x", (u64) created_f, 0);
+        do_syscall(1, (u64) "window f.id=0x", (u64) f.id, 0);
+
+        button btn;
+        button_init(&btn, f.id, 20, 30, 100, 30, "OK", 0x00888888, 0x0000FF00, 0x00FFFFFF);
+
+        int p = 0;
+        while (p < 6) {
+            bool clicked = button_poll(&btn);
+            do_syscall(1, (u64) "button_poll() clicked=0x", (u64) clicked, 0);
+            int q = 0;
+            while (q < 3) {
+                do_syscall(1, (u64) "doing other work, iteration 0x", (u64) q, 0);
+                q = q + 1;
+            }
+            p = p + 1;
+        }
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

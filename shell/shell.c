@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text pci nic fb text mouse win winlist wincontent textcontent arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text pci nic fb text mouse win winlist wincontent textcontent arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -681,6 +681,19 @@ static void cmd_ring3_text(void) {
     serial_print("sent ring3 text trigger");
 }
 
+// Polls a real Button widget (gui_toolkit.h) 6 times against live mouse+
+// window state, redrawing pressed/normal each time.
+static void cmd_ring3_button(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0xE);
+    if (!ok) {
+        vga_print("ring3button failed - channel full");
+        serial_print("ring3button failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 button trigger");
+    serial_print("sent ring3 button trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -999,6 +1012,19 @@ static void cmd_textcontent(void) {
     print_hex((u64) fb_get_pixel(317, 330));
 }
 
+// Reads back a pixel inside ring3button's button fill (see ring3prog.c
+// trigger 14) - run this after/while ring3button is polling. Window f is
+// at screen (400,200), body starts at (400,220); button drawn at
+// body-local (20,30) size 100x30 -> screen (420,250)..(519,279). Pixel
+// picked well past the 2-char "OK" label so it reads the flat fill color:
+// 0x00888888 (normal) or 0x0000FF00 (pressed, cursor over it + left down),
+// live and controllable via QEMU monitor mouse_move/mouse_button.
+static void cmd_buttoncontent(void) {
+    vga_print("buttoncontent fill=0x");
+    serial_print("buttoncontent fill=0x");
+    print_hex((u64) fb_get_pixel(470, 260));
+}
+
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
 // proxy, and resolves an unreachable address (must fail cleanly).
 static void cmd_arp(void) {
@@ -1232,6 +1258,8 @@ void run_command(void) {
         cmd_ring3_mouse();
     } else if (streq(g_line_buffer, "ring3text")) {
         cmd_ring3_text();
+    } else if (streq(g_line_buffer, "ring3button")) {
+        cmd_ring3_button();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
     } else if (streq(g_line_buffer, "nic")) {
@@ -1250,6 +1278,8 @@ void run_command(void) {
         cmd_wincontent();
     } else if (streq(g_line_buffer, "textcontent")) {
         cmd_textcontent();
+    } else if (streq(g_line_buffer, "buttoncontent")) {
+        cmd_buttoncontent();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
     } else if (streq(g_line_buffer, "ping")) {

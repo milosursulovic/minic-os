@@ -47,6 +47,10 @@ bool window_fill_content_rect(int id, u32 x, u32 y, u32 w, u32 h, u32 color);
 // window_fill_content_rect. Single line only; unsupported characters (see
 // gfx/font.h) leave their cell untouched.
 bool window_draw_text(int id, u32 x, u32 y, const char* text, u32 fg, u32 bg);
+// Body-local origin (screen coords of body's top-left, past titlebar) +
+// body dims - matches window_fill_content_rect/window_draw_text's own
+// coordinate origin, so ring3 hit-testing needs no TITLEBAR_HEIGHT const.
+bool window_query(int id, i32* body_x, i32* body_y, u32* body_width, u32* body_height);
 // Fills the background, then draws every window bottom-to-top.
 void compositor_redraw(void);
 
