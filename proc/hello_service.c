@@ -3,7 +3,6 @@
 
 #include "../types.h"
 
-#define SYS_PRINT 1
 #define SYS_PROCESS_EXIT 12
 
 static u64 do_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
@@ -22,7 +21,6 @@ static u64 do_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
 
 __attribute__((section(".text.start")))
 void _start(void) {
-    do_syscall(SYS_PRINT, (u64) "hello_service: running, spawned by init 0x", 1, 0);
     do_syscall(SYS_PROCESS_EXIT, 0, 0, 0);
 
     for (;;) {  // unreachable - process_exit() never returns

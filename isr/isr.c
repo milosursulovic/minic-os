@@ -33,16 +33,28 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
     if (vector == 33) {
         u8 scancode = inb(0x60);
         if (scancode < 0x80) {  // top bit set = key release, ignore those
-            char c = g_scancode_table[scancode];
-            if (c == '\n') {
-                g_line_buffer[g_line_len] = '\0';
-                new_line();
-                g_line_ready = true;
-            } else if (c != '\0' && g_line_len < 127) {
-                g_line_buffer[g_line_len] = c;
-                g_line_len = g_line_len + 1;
-                vga_putc(c);
-                serial_putc((u8) c);
+            if (scancode == 0x0E) {  // Backspace
+                if (g_line_len > 0) {
+                    g_line_len = g_line_len - 1;
+                    g_vga_cursor = g_vga_cursor - 1;
+                    g_vga[g_vga_cursor].character = ' ';
+                    g_vga[g_vga_cursor].color = 0x0F;
+                    serial_putc('\b');
+                    serial_putc(' ');
+                    serial_putc('\b');
+                }
+            } else {
+                char c = g_scancode_table[scancode];
+                if (c == '\n') {
+                    g_line_buffer[g_line_len] = '\0';
+                    new_line();
+                    g_line_ready = true;
+                } else if (c != '\0' && g_line_len < 127) {
+                    g_line_buffer[g_line_len] = c;
+                    g_line_len = g_line_len + 1;
+                    vga_putc(c);
+                    serial_putc((u8) c);
+                }
             }
         }
         outb(0x20, 0x20);

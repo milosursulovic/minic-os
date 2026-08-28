@@ -279,28 +279,22 @@ static int posix_close(int fd) {
     return result;
 }
 
+// Runs the same File/POSIX/Channel self-checks every boot always has -
+// kept as real, working plumbing (the channel_open here is what every
+// ring3* trigger command depends on), just silenced by default so booting
+// doesn't dump ~15 lines nobody asked to see. The trigger-specific prints
+// below (once a trigger actually arrives) are unaffected - those only
+// fire when a shell command explicitly asks for them.
 __attribute__((section(".text.start")))
 void _start(void) {
-    do_syscall(1, (u64) "hello from a LOADED process! 0x", 0xC0FFEE, 0);
-    do_syscall(1, (u64) "hello from a LOADED process! 0x", 0xC0FFEE, 0);
-
-    // handle 0 = myself.
-    u64 self_task_index = do_syscall(3, 0, 0, 0);
-    do_syscall(1, (u64) "handle 0 (self) -> task_index 0x", self_task_index, 0);
-
-    // handle 99 was never allocated - expect the -1 sentinel.
-    u64 bad_result = do_syscall(3, 99, 0, 0);
-    do_syscall(1, (u64) "handle 99 (invalid) -> 0x", bad_result, 0);
+    do_syscall(3, 0, 0, 0);      // handle 0 = myself
+    do_syscall(3, 99, 0, 0);     // handle 99 was never allocated - expect -1
 
     file msg_file;
     msg_file.path = "/system/ring3msg.txt";
-    u64 written = file_write(&msg_file, "hello from ring3, via a real File.write() method call!", 54);
-    do_syscall(1, (u64) "File.write() wrote 0x", written, 0);
-
+    file_write(&msg_file, "hello from ring3, via a real File.write() method call!", 54);
     u64 read_back = file_read(&msg_file, (char*) &g_read_buf[0], 63);
     g_read_buf[read_back] = 0;
-    do_syscall(1, (u64) "File.read() got back 0x", read_back, 0);
-    do_syscall(1, (u64) &g_read_buf[0], 0, 0);
 
     int wfd = posix_open("/system/posix.txt", 1);
     posix_write(wfd, "POSIX ", 6);
@@ -316,19 +310,11 @@ void _start(void) {
     posix_buf2[n2] = 0;
     posix_close(rfd);
 
-    do_syscall(1, (u64) "POSIX read() 1: ", 0, 0);
-    do_syscall(1, (u64) &posix_buf1[0], 0, 0);
-    do_syscall(1, (u64) "POSIX read() 2: ", 0, 0);
-    do_syscall(1, (u64) &posix_buf2[0], 0, 0);
-
     // channel index 1 - matches kmain.c's create_channel() order.
     // Unauthorized send() below is expected to fail (RIGHT_RECEIVE only).
     channel spawn_trigger;
-    bool opened = channel_open(&spawn_trigger, 1);
-    do_syscall(1, (u64) "Channel.open() ok=0x", (u64) opened, 0);
-
-    bool unauthorized_send_ok = channel_send(&spawn_trigger, 0xDEADBEEF);
-    do_syscall(1, (u64) "unauthorized Channel.send() succeeded=0x", (u64) unauthorized_send_ok, 0);
+    channel_open(&spawn_trigger, 1);
+    channel_send(&spawn_trigger, 0xDEADBEEF);
 
     u64 trigger_value = channel_receive(&spawn_trigger);
     do_syscall(1, (u64) "Channel.receive() got trigger 0x", trigger_value, 0);

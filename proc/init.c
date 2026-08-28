@@ -10,7 +10,6 @@
 
 #include "../types.h"
 
-#define SYS_PRINT 1
 #define SYS_QUERY 3
 #define SYS_SPAWN_BUILTIN 11
 #define SYS_OPEN_PROCESS 10
@@ -33,12 +32,12 @@ static u64 do_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     return result;
 }
 
+// Same supervision loop every boot always ran - real, working (proves
+// exit-aware query + handle reclaim across 3 restart rounds), just
+// silenced by default. See ring3prog.c's _start() for the same reasoning.
 __attribute__((section(".text.start")))
 void _start(void) {
-    do_syscall(SYS_PRINT, (u64) "init: starting 0x", 1, 0);
-
     u64 task_index = do_syscall(SYS_SPAWN_BUILTIN, BUILTIN_HELLO_SERVICE, 0, 0);
-    do_syscall(SYS_PRINT, (u64) "init: spawned hello_service, task_index=0x", task_index, 0);
 
     int round = 0;
     while (round < 3) {
@@ -48,10 +47,8 @@ void _start(void) {
             status = do_syscall(SYS_QUERY, handle, 0, 0);
         } while (status != (u64) -1);
         do_syscall(SYS_HANDLE_CLOSE, handle, 0, 0);
-        do_syscall(SYS_PRINT, (u64) "init: hello_service exited, restarting 0x", 1, 0);
 
         task_index = do_syscall(SYS_SPAWN_BUILTIN, BUILTIN_HELLO_SERVICE, 0, 0);
-        do_syscall(SYS_PRINT, (u64) "init: restarted hello_service, task_index=0x", task_index, 0);
         round = round + 1;
     }
 
