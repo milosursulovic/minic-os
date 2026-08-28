@@ -31,6 +31,15 @@ AS := as
 LD := ld
 OBJCOPY := objcopy
 
+# Every generated .o/.gen.s/.d lands here, mirroring the source tree
+# (build/drivers/io.o for drivers/io.c, etc), so `ls` in a source
+# directory only ever shows the .c/.h that actually live there. The real
+# deliverables (kernel.elf, minic-os.iso, disk.img) and the three ring3
+# program .bin blobs stay where they are - the .bin files are read by
+# `.incbin` in the hand-written *_blob.s files via a relative path (see
+# the rule below), so moving them means also editing those .s files.
+BUILD_DIR := build
+
 CFLAGS := -ffreestanding -m64 -mgeneral-regs-only -mno-red-zone \
           -fno-stack-protector -fno-builtin -fPIC -fvisibility=hidden \
           -fcf-protection=none -Wall -Wextra -I.
@@ -51,28 +60,32 @@ CFLAGS := -ffreestanding -m64 -mgeneral-regs-only -mno-red-zone \
 DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 
 ASM_SRCS := boot/boot.s boot/interrupts.s sched/switch.s syscall/usermode.s
-ASM_OBJS := $(ASM_SRCS:.s=.o)
+ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './.claude/*')
-C_OBJS := $(C_SRCS:.c=.o)
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './.claude/*'))
+C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
 .PHONY: all run iso disk clean
 
 all: kernel.elf
 
-# Hand-written assembly -> object, straight through.
-$(ASM_OBJS): %.o: %.s
+# Hand-written assembly -> object, straight through. The static-pattern
+# rule's target already carries the build/ prefix; Make recovers the
+# matching %.s prerequisite from the bare stem.
+$(ASM_OBJS): $(BUILD_DIR)/%.o: %.s
+	@mkdir -p $(dir $@)
 	$(AS) --32 $< -o $@
 
 # C -> a *generated* .gen.s (distinct suffix so it never collides with a
 # real hand-written .s file's own name, which would otherwise make a
 # stale generated file win over recompiling from source on a later
 # `make`) -> object, via the .code64-prepend trick (see header comment).
-$(C_OBJS): %.o: %.c
-	$(CC) $(CFLAGS) $(DEPFLAGS) -S -o $(<:.c=.gen.s) $<
-	{ echo ".code64"; cat $(<:.c=.gen.s); } | $(AS) --32 -o $@
+$(C_OBJS): $(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -S -o $(BUILD_DIR)/$(<:.c=.gen.s) $<
+	{ echo ".code64"; cat $(BUILD_DIR)/$(<:.c=.gen.s); } | $(AS) --32 -o $@
 
--include $(C_SRCS:.c=.d)
+-include $(C_OBJS:.o=.d)
 
 # The loaded ring3 "program" is real compiled C, not hand-assembled -
 # but spawn_process() (proc/process.c) still just copies one contiguous
@@ -86,50 +99,59 @@ $(C_OBJS): %.o: %.c
 # input object's .text together, then every .rodata, etc, so this
 # program's code and string literals would land far apart in the final
 # image, breaking the "one contiguous copyable blob" assumption the
-# whole loader depends on.
+# whole loader depends on. Every intermediate here (.gen.s, _raw.o,
+# _linked.elf, .d) goes into build/proc/ - only the final .bin, read by
+# .incbin below, stays in proc/ itself.
 proc/ring3prog.bin: proc/ring3prog.c proc/ring3.ld
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/ring3prog.bin -MF proc/ring3prog.d -S -o proc/ring3prog.gen.s proc/ring3prog.c
-	{ echo ".code64"; cat proc/ring3prog.gen.s; } | $(AS) --32 -o proc/ring3prog_raw.o
-	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/ring3prog_linked.elf proc/ring3prog_raw.o
+	@mkdir -p $(BUILD_DIR)/proc
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/ring3prog.bin -MF $(BUILD_DIR)/proc/ring3prog.d -S -o $(BUILD_DIR)/proc/ring3prog.gen.s proc/ring3prog.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/ring3prog.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/ring3prog_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/ring3prog_linked.elf $(BUILD_DIR)/proc/ring3prog_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		proc/ring3prog_linked.elf proc/ring3prog.bin
+		$(BUILD_DIR)/proc/ring3prog_linked.elf proc/ring3prog.bin
 
--include proc/ring3prog.d
+-include $(BUILD_DIR)/proc/ring3prog.d
 
 # Two more standalone-linked ring3 programs (init, and the trivial
 # service it spawns) - same shape as ring3prog.bin above, just two more.
 proc/init.bin: proc/init.c proc/ring3.ld
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/init.bin -MF proc/init.d -S -o proc/init.gen.s proc/init.c
-	{ echo ".code64"; cat proc/init.gen.s; } | $(AS) --32 -o proc/init_raw.o
-	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/init_linked.elf proc/init_raw.o
+	@mkdir -p $(BUILD_DIR)/proc
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/init.bin -MF $(BUILD_DIR)/proc/init.d -S -o $(BUILD_DIR)/proc/init.gen.s proc/init.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/init.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/init_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/init_linked.elf $(BUILD_DIR)/proc/init_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		proc/init_linked.elf proc/init.bin
+		$(BUILD_DIR)/proc/init_linked.elf proc/init.bin
 
--include proc/init.d
+-include $(BUILD_DIR)/proc/init.d
 
 proc/hello_service.bin: proc/hello_service.c proc/ring3.ld
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/hello_service.bin -MF proc/hello_service.d -S -o proc/hello_service.gen.s proc/hello_service.c
-	{ echo ".code64"; cat proc/hello_service.gen.s; } | $(AS) --32 -o proc/hello_service_raw.o
-	$(LD) -m elf_i386 -T proc/ring3.ld -o proc/hello_service_linked.elf proc/hello_service_raw.o
+	@mkdir -p $(BUILD_DIR)/proc
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/hello_service.bin -MF $(BUILD_DIR)/proc/hello_service.d -S -o $(BUILD_DIR)/proc/hello_service.gen.s proc/hello_service.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/hello_service.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/hello_service_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/hello_service_linked.elf $(BUILD_DIR)/proc/hello_service_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		proc/hello_service_linked.elf proc/hello_service.bin
+		$(BUILD_DIR)/proc/hello_service_linked.elf proc/hello_service.bin
 
--include proc/hello_service.d
+-include $(BUILD_DIR)/proc/hello_service.d
 
 # `.incbin` in each *_blob.s resolves relative to the assembler's own
 # working directory, not the .s file's location - `cd proc` first,
-# matching the MiniC-era build's own convention.
-proc/ring3blob.o: proc/ring3blob.s proc/ring3prog.bin
+# matching the MiniC-era build's own convention. `../$@` still lands the
+# output back in build/proc/ since $@ already carries that full prefix.
+$(BUILD_DIR)/proc/ring3blob.o: proc/ring3blob.s proc/ring3prog.bin
+	@mkdir -p $(BUILD_DIR)/proc
 	cd proc && $(AS) --32 ring3blob.s -o ../$@
 
-proc/init_blob.o: proc/init_blob.s proc/init.bin
+$(BUILD_DIR)/proc/init_blob.o: proc/init_blob.s proc/init.bin
+	@mkdir -p $(BUILD_DIR)/proc
 	cd proc && $(AS) --32 init_blob.s -o ../$@
 
-proc/hello_service_blob.o: proc/hello_service_blob.s proc/hello_service.bin
+$(BUILD_DIR)/proc/hello_service_blob.o: proc/hello_service_blob.s proc/hello_service.bin
+	@mkdir -p $(BUILD_DIR)/proc
 	cd proc && $(AS) --32 hello_service_blob.s -o ../$@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) proc/ring3blob.o proc/init_blob.o proc/hello_service_blob.o
-	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) proc/ring3blob.o proc/init_blob.o proc/hello_service_blob.o
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o
+	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o
 	@echo "built kernel.elf"
 
 disk.img:
@@ -153,10 +175,8 @@ iso: kernel.elf
 	@echo "built minic-os.iso"
 
 clean:
-	find . -name '*.o' -delete
-	find . -name '*.gen.s' -delete
-	find . -name '*.d' -delete
+	rm -rf $(BUILD_DIR)
 	rm -f kernel.elf minic-os.iso disk.img
-	rm -f proc/ring3prog.bin proc/ring3prog_linked.elf proc/ring3prog_raw.o
-	rm -f proc/init.bin proc/init_linked.elf proc/init_raw.o
-	rm -f proc/hello_service.bin proc/hello_service_linked.elf proc/hello_service_raw.o
+	rm -f proc/ring3prog.bin proc/ring3prog_linked.elf
+	rm -f proc/init.bin proc/init_linked.elf
+	rm -f proc/hello_service.bin proc/hello_service_linked.elf

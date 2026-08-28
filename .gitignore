@@ -6,6 +6,7 @@
 *.bin
 *.gen.s
 *.d
+build/
 .claude/settings.local.json
 .VSCodeCounter/
 graphify-out/cache/
