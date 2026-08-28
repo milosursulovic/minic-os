@@ -22,5 +22,12 @@ if [ ! -f disk.img ]; then
     make disk
 fi
 
+# -monitor unix:...  exposes the QEMU human-monitor on a local socket
+# alongside the GTK display, so a running session can be inspected live
+# (screendump, sendkey, winlist-style shell commands via the monitor)
+# without disturbing whatever's on screen - see .claude/skills/
+# kernel-qemu-test/SKILL.md for the exact recipe.
+rm -f /tmp/minic-os-qemu-mon.sock
 qemu-system-x86_64 -kernel kernel.elf -display gtk -serial stdio \
+    -monitor unix:/tmp/minic-os-qemu-mon.sock,server,nowait \
     -drive file=disk.img,format=raw,if=ide
