@@ -39,6 +39,7 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
                     g_vga_cursor = g_vga_cursor - 1;
                     g_vga[g_vga_cursor].character = ' ';
                     g_vga[g_vga_cursor].color = 0x0F;
+                    vga_update_cursor(g_vga_cursor);
                     serial_putc('\b');
                     serial_putc(' ');
                     serial_putc('\b');

@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -108,6 +108,36 @@ static void cmd_reset(void) {
     g_last_alloc = NULL;
     vga_print("heap reset");
     serial_print("heap reset");
+}
+
+// QEMU/Bochs's ACPI PM shutdown trick: writing 0x2000 to the PM1a control
+// port (0x604 under QEMU's default i440fx machine) requests S5 (soft off)
+// - no real ACPI table parsing exists in this kernel, this is a
+// QEMU/Bochs-specific shortcut, not real-hardware ACPI. Never returns on
+// QEMU; on real hardware (or a different virtual chipset) it's a no-op.
+static void cmd_shutdown(void) {
+    vga_print("shutting down (QEMU/Bochs ACPI trick - no-op on real hardware)");
+    serial_print("shutting down (QEMU/Bochs ACPI trick - no-op on real hardware)");
+    outw(0x604, 0x2000);
+}
+
+// Reads the real hardware cursor position straight back off the CRTC
+// (index 0x0E/0x0F) and compares it to g_vga_cursor - proves the two are
+// actually in sync, not just "vga_update_cursor() got called somewhere".
+static void cmd_cursor(void) {
+    outb(0x3D4, 0x0E);
+    u8 hi = inb(0x3D5);
+    outb(0x3D4, 0x0F);
+    u8 lo = inb(0x3D5);
+    int hw_pos = ((int) hi << 8) | (int) lo;
+    int sw_pos = g_vga_cursor;  // captured before any printing below moves it
+
+    vga_print("cursor hw=0x");
+    serial_print("cursor hw=0x");
+    print_hex((u64) hw_pos);
+    vga_print(" sw=0x");
+    serial_print(" sw=0x");
+    print_hex((u64) sw_pos);
 }
 
 static void cmd_frames(void) {
@@ -239,6 +269,7 @@ static void cmd_clear(void) {
         i = i + 1;
     }
     g_vga_cursor = 80;
+    vga_update_cursor(g_vga_cursor);
 }
 
 static void cmd_ps(void) {
@@ -1190,6 +1221,10 @@ void run_command(void) {
         cmd_mem();
     } else if (streq(g_line_buffer, "reset")) {
         cmd_reset();
+    } else if (streq(g_line_buffer, "shutdown")) {
+        cmd_shutdown();
+    } else if (streq(g_line_buffer, "cursor")) {
+        cmd_cursor();
     } else if (streq(g_line_buffer, "frames")) {
         cmd_frames();
     } else if (streq(g_line_buffer, "frame")) {

@@ -51,6 +51,7 @@ void vga_putc(char c) {
     g_vga[g_vga_cursor].character = (u8) c;
     g_vga[g_vga_cursor].color = 0x0F;
     g_vga_cursor = g_vga_cursor + 1;
+    vga_update_cursor(g_vga_cursor);
 }
 
 void vga_print(const char* s) {
@@ -67,4 +68,19 @@ void new_line(void) {
     if (g_vga_cursor >= 2000) {
         g_vga_cursor = 80;  // wrap; row 0 keeps the boot message (no real scrolling yet)
     }
+    vga_update_cursor(g_vga_cursor);
+}
+
+void vga_enable_cursor(void) {
+    outb(0x3D4, 0x0A);
+    outb(0x3D5, (u8) ((inb(0x3D5) & 0xC0) | 14));  // start scanline 14 - underline shape
+    outb(0x3D4, 0x0B);
+    outb(0x3D5, (u8) ((inb(0x3D5) & 0xE0) | 15));  // end scanline 15
+}
+
+void vga_update_cursor(int pos) {
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (u8) (pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (u8) ((pos >> 8) & 0xFF));
 }

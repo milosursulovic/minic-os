@@ -36,6 +36,8 @@ void _start(void) {
 
     g_vga = (volatile vga_char*) 0xB8000;
     g_vga_cursor = 80;  // second row, leave the boot message on row 0
+    vga_enable_cursor();
+    vga_update_cursor(g_vga_cursor);
     init_scancode_table();
 
     idt_init();
