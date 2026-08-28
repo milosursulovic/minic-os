@@ -14,7 +14,10 @@
 // window_draw_text (same pointer-to-struct reasoning as 26/30, plus an
 // embedded raw ring3 string pointer - trusted as-is, same precedent as
 // syscalls 4/5/6's path pointers), 33 window_query (body-local origin +
-// dims packed into the return value, same style as 31 mouse_query).
+// dims packed into the return value, same style as 31 mouse_query), 34
+// window_create_borderless (same pointer-to-struct reasoning as 26, minus
+// title_color - no titlebar to color), 35 get_ticks (raw g_tick_count,
+// no args, no pointer needed).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -32,6 +35,7 @@
 #include "../drivers/vbe.h"
 #include "../gfx/window.h"
 #include "../drivers/mouse.h"
+#include "../isr/isr.h"
 
 typedef struct __attribute__((packed)) {
     i32 x;
@@ -59,6 +63,14 @@ typedef struct __attribute__((packed)) {
     u32 bg_color;
     char* text;
 } window_draw_text_args;
+
+typedef struct __attribute__((packed)) {
+    i32 x;
+    i32 y;
+    u32 width;
+    u32 height;
+    u32 body_color;
+} window_create_borderless_args;
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -705,6 +717,22 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
             | ((u64) body_width & 0xFFFF) << 32
             | (((u64) body_height & 0xFFFF) << 48);
         return packed;
+    }
+    if (num == 34) {
+        if (!g_fb_enabled) {
+            vbe_init(800, 600);
+        }
+        window_create_borderless_args* args = (window_create_borderless_args*) a1;
+        int id = window_create_borderless(args->x, args->y, args->width, args->height,
+                                           args->body_color);
+        if (id < 0) {
+            return (u64) -1;
+        }
+        compositor_redraw();
+        return (u64) id;
+    }
+    if (num == 35) {
+        return g_tick_count;
     }
     return (u64) -1;  // unknown syscall
 }

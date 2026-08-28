@@ -96,13 +96,40 @@ treat a mismatch as a real bug, not a rounding/formatting difference.
   of scope for whatever feature you're testing when you hit it. Workaround
   for testing a click: type the triggering command first, THEN fire
   `mouse_button` - do not plan to type anything else in that QEMU session
-  afterward. There's no known way yet to both simulate a real click AND
-  keep driving the shell via keyboard afterward in the same boot.
+  afterward. **Instead of a follow-up shell command, use `screendump`
+  (below) to verify the result** - it needs no guest keyboard input at all,
+  so it sidesteps this bug entirely.
 - **Command batching (many `sendkey`/monitor round trips issued too fast)
   can occasionally hang** - keep the `sleep 0.1` between keystrokes and a
   `sleep 1`+ pause after the final `ret` before reading `serial.log`.
 
-## 6. Cleanup
+## 6. Visual verification via `screendump` (no guest keyboard needed)
+
+For GUI features (window/compositor/font/mouse work), a pixel-value
+readback via a shell command is the primary assertion (see §4), but a real
+screenshot is a strong secondary check - and the *only* way to verify
+anything after a `mouse_button` press, since that kills further keyboard
+input for the rest of the boot (§5). QEMU's monitor `screendump` captures
+the display straight from its internal framebuffer state, entirely
+independent of the guest's keyboard - it works even headless (`-display
+none`) and even after the mouse_button bug has fired:
+
+```bash
+echo "screendump /absolute/path/out.ppm" | socat - unix-connect:qemu-mon.sock
+```
+
+`screendump` only writes PPM. Convert to something the Read tool displays
+well:
+```bash
+python3 -c "from PIL import Image; Image.open('/absolute/path/out.ppm').save('/absolute/path/out.png')"
+```
+Then use the Read tool on the `.png` directly - it's a real screenshot, so
+this catches things a handful of hand-picked pixel checks might miss (e.g.
+confirms a whole window's layout looks right, not just 2-3 sampled points).
+Delete the `.ppm`/`.png` when done - they're scratch verification output,
+not deliverables.
+
+## 7. Cleanup
 
 ```bash
 pkill -f "qemu-system-x86_64.*kernel.elf"   # run this alone, not chained (see gotcha above)

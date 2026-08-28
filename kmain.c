@@ -21,6 +21,8 @@ extern u8 g_test_prog_start;
 extern u8 g_test_prog_end;
 extern u8 g_init_prog_start;
 extern u8 g_init_prog_end;
+extern u8 g_desktop_shell_prog_start;
+extern u8 g_desktop_shell_prog_end;
 #pragma GCC visibility pop
 
 void _start(void) {
@@ -69,6 +71,11 @@ void _start(void) {
 
     // init process: spawns proc/hello_service.c via spawn_builtin once running.
     spawn_process(&g_init_prog_start, &g_init_prog_end, 0x80000000, 0x80020000);
+
+    // Desktop shell: wallpaper + taskbar + launcher, runs forever from
+    // boot (not shell-triggered like ring3prog.c's demos) - activates the
+    // framebuffer/graphics mode unconditionally on every boot from here on.
+    spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end, 0x80000000, 0x80020000);
 
     __asm__ volatile("sti");
 

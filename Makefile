@@ -62,7 +62,7 @@ DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 ASM_SRCS := boot/boot.s boot/interrupts.s sched/switch.s syscall/usermode.s
 ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './.claude/*'))
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './proc/desktop_shell.c' -not -path './.claude/*'))
 C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
 .PHONY: all run iso disk clean
@@ -134,6 +134,18 @@ proc/hello_service.bin: proc/hello_service.c proc/ring3.ld
 
 -include $(BUILD_DIR)/proc/hello_service.d
 
+# The desktop shell - same shape again, auto-spawned by kmain.c alongside
+# init (not shell-triggered like ring3prog.c's demos).
+proc/desktop_shell.bin: proc/desktop_shell.c proc/gui_toolkit.h proc/ring3.ld
+	@mkdir -p $(BUILD_DIR)/proc
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/desktop_shell.bin -MF $(BUILD_DIR)/proc/desktop_shell.d -S -o $(BUILD_DIR)/proc/desktop_shell.gen.s proc/desktop_shell.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/desktop_shell.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/desktop_shell_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/desktop_shell_linked.elf $(BUILD_DIR)/proc/desktop_shell_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(BUILD_DIR)/proc/desktop_shell_linked.elf proc/desktop_shell.bin
+
+-include $(BUILD_DIR)/proc/desktop_shell.d
+
 # `.incbin` in each *_blob.s resolves relative to the assembler's own
 # working directory, not the .s file's location - `cd proc` first,
 # matching the MiniC-era build's own convention. `../$@` still lands the
@@ -150,8 +162,12 @@ $(BUILD_DIR)/proc/hello_service_blob.o: proc/hello_service_blob.s proc/hello_ser
 	@mkdir -p $(BUILD_DIR)/proc
 	cd proc && $(AS) --32 hello_service_blob.s -o ../$@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o
-	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o
+$(BUILD_DIR)/proc/desktop_shell_blob.o: proc/desktop_shell_blob.s proc/desktop_shell.bin
+	@mkdir -p $(BUILD_DIR)/proc
+	cd proc && $(AS) --32 desktop_shell_blob.s -o ../$@
+
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o
+	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o
 	@echo "built kernel.elf"
 
 disk.img:
@@ -180,3 +196,4 @@ clean:
 	rm -f proc/ring3prog.bin proc/ring3prog_linked.elf
 	rm -f proc/init.bin proc/init_linked.elf
 	rm -f proc/hello_service.bin proc/hello_service_linked.elf
+	rm -f proc/desktop_shell.bin proc/desktop_shell_linked.elf

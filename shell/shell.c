@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -1056,6 +1056,26 @@ static void cmd_buttoncontent(void) {
     print_hex((u64) fb_get_pixel(470, 260));
 }
 
+// Reads back pixels from the desktop shell (proc/desktop_shell.c),
+// auto-spawned at boot - no trigger needed, unlike ring3button/ring3text.
+// wallpaper: a point well away from the taskbar, must be the flat
+// wallpaper color. taskbar_top/taskbar_bottom: the same x, first and last
+// row of the 20px-tall taskbar - both must read the taskbar's own
+// explicit background fill, proving no titlebar strip got drawn at the
+// top (a titlebar bug would leave taskbar_top black - the window's
+// untouched-cell default - while taskbar_bottom stayed correct).
+static void cmd_desktop(void) {
+    vga_print("desktop wallpaper=0x");
+    serial_print("desktop wallpaper=0x");
+    print_hex((u64) fb_get_pixel(400, 100));
+    vga_print(" taskbar_top=0x");
+    serial_print(" taskbar_top=0x");
+    print_hex((u64) fb_get_pixel(400, 580));
+    vga_print(" taskbar_bottom=0x");
+    serial_print(" taskbar_bottom=0x");
+    print_hex((u64) fb_get_pixel(400, 599));
+}
+
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
 // proxy, and resolves an unreachable address (must fail cleanly).
 static void cmd_arp(void) {
@@ -1315,6 +1335,8 @@ void run_command(void) {
         cmd_textcontent();
     } else if (streq(g_line_buffer, "buttoncontent")) {
         cmd_buttoncontent();
+    } else if (streq(g_line_buffer, "desktop")) {
+        cmd_desktop();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
     } else if (streq(g_line_buffer, "ping")) {

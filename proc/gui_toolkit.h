@@ -27,6 +27,23 @@ typedef struct __attribute__((packed)) {
     char* text;
 } gt_window_draw_text_args;
 
+typedef struct __attribute__((packed)) {
+    i32 x;
+    i32 y;
+    u32 width;
+    u32 height;
+    u32 body_color;
+} gt_window_create_borderless_args;
+
+typedef struct __attribute__((packed)) {
+    i32 x;
+    i32 y;
+    u32 width;
+    u32 height;
+    u32 body_color;
+    u32 title_color;
+} gt_window_create_args;
+
 static u64 gt_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     u64 result;
     register u64 r_num __asm__("rax") = num;
@@ -39,6 +56,24 @@ static u64 gt_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
                       : "memory");
     result = r_num;
     return result;
+}
+
+// Ordinary bordered window - same as ring3prog.c's own window_create()
+// wrapper, duplicated here so gui_toolkit.h stays self-contained. Returns
+// -1 on failure.
+static __attribute__((unused)) int gt_window_create(i32 x, i32 y, u32 width, u32 height, u32 body_color, u32 title_color) {
+    gt_window_create_args args;
+    args.x = x;
+    args.y = y;
+    args.width = width;
+    args.height = height;
+    args.body_color = body_color;
+    args.title_color = title_color;
+    u64 result = gt_syscall(26, (u64) &args, 0, 0);
+    if (result == (u64) -1) {
+        return -1;
+    }
+    return (int) result;
 }
 
 // Returns false if id is invalid. body_x/body_y/body_width/body_height are
@@ -62,6 +97,57 @@ static void gt_mouse_query(i32* x, i32* y, u8* buttons) {
     *x = (i32) (packed & 0xFFFF);
     *y = (i32) ((packed >> 16) & 0xFFFF);
     *buttons = (u8) ((packed >> 32) & 0xFF);
+}
+
+// Same slot/z-order rules as window_create, minus a titlebar - see
+// gfx/window.h's window_create_borderless(). Returns -1 on failure.
+static __attribute__((unused)) int gt_window_create_borderless(i32 x, i32 y, u32 width, u32 height, u32 body_color) {
+    gt_window_create_borderless_args args;
+    args.x = x;
+    args.y = y;
+    args.width = width;
+    args.height = height;
+    args.body_color = body_color;
+    u64 result = gt_syscall(34, (u64) &args, 0, 0);
+    if (result == (u64) -1) {
+        return -1;
+    }
+    return (int) result;
+}
+
+// Raw PIT ticks since boot (isr.c's g_tick_count) - uptime, not wall-clock
+// time. No RTC/CMOS driver exists in this kernel yet.
+static __attribute__((unused)) u64 gt_get_ticks(void) {
+    return gt_syscall(35, 0, 0, 0);
+}
+
+// Minimal, self-contained hex formatter - lib/strings.c's format_hex()
+// isn't linked into ring3 programs (each is its own standalone-linked
+// blob, see proc/ring3.ld). Null-terminates, unlike format_hex(), since
+// window_draw_text's syscall dereferences a null-terminated string on
+// the kernel side. Returns the digit count, not counting the terminator.
+static __attribute__((unused)) int gt_format_hex(u64 value, char* out) {
+    const char* digits = "0123456789abcdef";
+    if (value == 0) {
+        out[0] = '0';
+        out[1] = '\0';
+        return 1;
+    }
+    char buf[16];
+    int i = 15;
+    while (value > 0 && i >= 0) {
+        buf[i] = digits[value % 16];
+        value = value / 16;
+        i = i - 1;
+    }
+    int len = 15 - i;
+    int j = 0;
+    while (j < len) {
+        out[j] = buf[i + 1 + j];
+        j = j + 1;
+    }
+    out[len] = '\0';
+    return len;
 }
 
 typedef struct {
