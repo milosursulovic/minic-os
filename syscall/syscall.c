@@ -17,7 +17,10 @@
 // dims packed into the return value, same style as 31 mouse_query), 34
 // window_create_borderless (same pointer-to-struct reasoning as 26, minus
 // title_color - no titlebar to color), 35 get_ticks (raw g_tick_count,
-// no args, no pointer needed).
+// no args, no pointer needed), 36 term_read (pointer-to-struct - since_pos
+// plus an embedded raw ring3 output-buffer pointer, trusted as-is like
+// every other embedded pointer here - copies g_term_scrollback content
+// since since_pos, returns bytes copied).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -71,6 +74,12 @@ typedef struct __attribute__((packed)) {
     u32 height;
     u32 body_color;
 } window_create_borderless_args;
+
+typedef struct __attribute__((packed)) {
+    u64 since_pos;
+    char* out_buf;
+    u32 max_len;
+} term_read_args;
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -733,6 +742,27 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     }
     if (num == 35) {
         return g_tick_count;
+    }
+    if (num == 36) {
+        term_read_args* args = (term_read_args*) a1;
+        u64 since_pos = args->since_pos;
+        // Caller fell behind further than the buffer holds - clamp to the
+        // oldest byte still available. A caller that was already behind
+        // before this clamp and tracks its own position as since_pos+copied
+        // will re-sync from here; with a 16KB buffer and a caller that
+        // polls every loop iteration, this is not expected to trigger in
+        // practice - not resolved further than that.
+        if (g_term_write_pos > TERM_SCROLLBACK_SIZE
+            && since_pos < g_term_write_pos - TERM_SCROLLBACK_SIZE) {
+            since_pos = g_term_write_pos - TERM_SCROLLBACK_SIZE;
+        }
+        u32 copied = 0;
+        while (since_pos < g_term_write_pos && copied < args->max_len) {
+            args->out_buf[copied] = g_term_scrollback[since_pos % TERM_SCROLLBACK_SIZE];
+            since_pos = since_pos + 1;
+            copied = copied + 1;
+        }
+        return (u64) copied;
     }
     return (u64) -1;  // unknown syscall
 }

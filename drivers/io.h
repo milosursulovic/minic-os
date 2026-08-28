@@ -35,4 +35,13 @@ void vga_enable_cursor(void);
 // cursor glyph itself never moves.
 void vga_update_cursor(int pos);
 
+// Every character vga_putc() ever draws is also mirrored here (a plain
+// ring buffer, wrapping on storage - g_term_write_pos itself only ever
+// grows) - this is what lets a ring3 terminal window (proc/terminal.c)
+// show the exact same output the console shell already prints, with no
+// change to how shell commands produce that output at all.
+#define TERM_SCROLLBACK_SIZE 16384
+extern char g_term_scrollback[TERM_SCROLLBACK_SIZE];
+extern u64 g_term_write_pos;
+
 #pragma GCC visibility pop

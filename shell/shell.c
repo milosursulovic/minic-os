@@ -1058,16 +1058,19 @@ static void cmd_buttoncontent(void) {
 
 // Reads back pixels from the desktop shell (proc/desktop_shell.c),
 // auto-spawned at boot - no trigger needed, unlike ring3button/ring3text.
-// wallpaper: a point well away from the taskbar, must be the flat
-// wallpaper color. taskbar_top/taskbar_bottom: the same x, first and last
-// row of the 20px-tall taskbar - both must read the taskbar's own
-// explicit background fill, proving no titlebar strip got drawn at the
-// top (a titlebar bug would leave taskbar_top black - the window's
-// untouched-cell default - while taskbar_bottom stayed correct).
+// wallpaper: a point clear of both the taskbar AND the terminal window
+// (proc/terminal.c, at (100,60)-(600,380) - (400,100) used to be a valid
+// open-wallpaper point before that window existed and started covering
+// it), must be the flat wallpaper color. taskbar_top/taskbar_bottom: the
+// same x, first and last row of the 20px-tall taskbar - both must read
+// the taskbar's own explicit background fill, proving no titlebar strip
+// got drawn at the top (a titlebar bug would leave taskbar_top black -
+// the window's untouched-cell default - while taskbar_bottom stayed
+// correct).
 static void cmd_desktop(void) {
     vga_print("desktop wallpaper=0x");
     serial_print("desktop wallpaper=0x");
-    print_hex((u64) fb_get_pixel(400, 100));
+    print_hex((u64) fb_get_pixel(700, 450));
     vga_print(" taskbar_top=0x");
     serial_print(" taskbar_top=0x");
     print_hex((u64) fb_get_pixel(400, 580));

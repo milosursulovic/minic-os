@@ -23,6 +23,8 @@ extern u8 g_init_prog_start;
 extern u8 g_init_prog_end;
 extern u8 g_desktop_shell_prog_start;
 extern u8 g_desktop_shell_prog_end;
+extern u8 g_terminal_prog_start;
+extern u8 g_terminal_prog_end;
 #pragma GCC visibility pop
 
 void _start(void) {
@@ -76,6 +78,12 @@ void _start(void) {
     // boot (not shell-triggered like ring3prog.c's demos) - activates the
     // framebuffer/graphics mode unconditionally on every boot from here on.
     spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end, 0x80000000, 0x80020000);
+
+    // Terminal emulator: mirrors the console shell's own output into a
+    // real GUI window (drivers/io.c's g_term_scrollback, syscall 36) -
+    // the physical keyboard still only ever fills g_line_buffer below,
+    // unchanged.
+    spawn_process(&g_terminal_prog_start, &g_terminal_prog_end, 0x80000000, 0x80020000);
 
     __asm__ volatile("sti");
 

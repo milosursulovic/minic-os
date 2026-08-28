@@ -44,6 +44,12 @@ typedef struct __attribute__((packed)) {
     u32 title_color;
 } gt_window_create_args;
 
+typedef struct __attribute__((packed)) {
+    u64 since_pos;
+    char* out_buf;
+    u32 max_len;
+} gt_term_read_args;
+
 static u64 gt_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     u64 result;
     register u64 r_num __asm__("rax") = num;
@@ -80,7 +86,7 @@ static __attribute__((unused)) int gt_window_create(i32 x, i32 y, u32 width, u32
 // screen coordinates/dims of the window's body (past the titlebar) -
 // matches window_fill_content_rect/window_draw_text's own coordinate
 // origin, so callers here never need to know TITLEBAR_HEIGHT.
-static bool gt_window_query(int id, i32* body_x, i32* body_y, u32* body_width, u32* body_height) {
+static __attribute__((unused)) bool gt_window_query(int id, i32* body_x, i32* body_y, u32* body_width, u32* body_height) {
     u64 packed = gt_syscall(33, (u64) id, 0, 0);
     if (packed == (u64) -1) {
         return false;
@@ -92,7 +98,7 @@ static bool gt_window_query(int id, i32* body_x, i32* body_y, u32* body_width, u
     return true;
 }
 
-static void gt_mouse_query(i32* x, i32* y, u8* buttons) {
+static __attribute__((unused)) void gt_mouse_query(i32* x, i32* y, u8* buttons) {
     u64 packed = gt_syscall(31, 0, 0, 0);
     *x = (i32) (packed & 0xFFFF);
     *y = (i32) ((packed >> 16) & 0xFFFF);
@@ -119,6 +125,21 @@ static __attribute__((unused)) int gt_window_create_borderless(i32 x, i32 y, u32
 // time. No RTC/CMOS driver exists in this kernel yet.
 static __attribute__((unused)) u64 gt_get_ticks(void) {
     return gt_syscall(35, 0, 0, 0);
+}
+
+// Copies console-shell output produced since since_pos into out_buf (up
+// to max_len bytes) - the same text every cmd_* already prints via
+// vga_print/serial_print, mirrored kernel-side (drivers/io.c). Returns
+// the number of bytes actually copied (0 if already caught up). If the
+// caller fell more than TERM_SCROLLBACK_SIZE bytes behind, some output
+// is silently lost - not resolved further than that (see syscall 36's
+// comment in syscall/syscall.c).
+static __attribute__((unused)) u32 gt_term_read(u64 since_pos, char* out_buf, u32 max_len) {
+    gt_term_read_args args;
+    args.since_pos = since_pos;
+    args.out_buf = out_buf;
+    args.max_len = max_len;
+    return (u32) gt_syscall(36, (u64) &args, 0, 0);
 }
 
 // Minimal, self-contained hex formatter - lib/strings.c's format_hex()
@@ -160,7 +181,7 @@ typedef struct {
                                   // button_poll() only redraws on a change
 } button;
 
-static void button_draw(button* self, bool pressed) {
+static __attribute__((unused)) void button_draw(button* self, bool pressed) {
     u32 color = pressed ? self->pressed_color : self->normal_color;
 
     gt_window_fill_rect_args fill_args;
@@ -185,7 +206,7 @@ static void button_draw(button* self, bool pressed) {
     gt_syscall(32, (u64) &text_args, 0, 0);
 }
 
-static void button_init(button* self, int window_id, u32 x, u32 y, u32 width, u32 height,
+static __attribute__((unused)) void button_init(button* self, int window_id, u32 x, u32 y, u32 width, u32 height,
                          char* label, u32 normal_color, u32 pressed_color, u32 label_color) {
     self->window_id = window_id;
     self->x = x;
@@ -215,7 +236,7 @@ static void button_init(button* self, int window_id, u32 x, u32 y, u32 width, u3
 // top doesn't matter here) - a real Window Server would gate this on
 // focus/z-order too; that's still point 18's open "focus" item, not this
 // widget's job.
-static bool button_poll(button* self) {
+static __attribute__((unused)) bool button_poll(button* self) {
     i32 win_x, win_y;
     u32 win_width, win_height;
     if (!gt_window_query(self->window_id, &win_x, &win_y, &win_width, &win_height)) {

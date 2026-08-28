@@ -50,6 +50,19 @@ static void bb_fill_rect(u32 x, u32 y, u32 w, u32 h, u32 color) {
     }
 }
 
+// Save/restore IF (not a bare cli/sti pair, so this is correct regardless
+// of whether interrupts were already off in the caller) - used to make a
+// critical section atomic with respect to the timer ISR's preemption.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
+
 static bool fits_on_screen(i32 x, i32 y, u32 width, u32 height) {
     if (x < 0 || y < 0) {
         return false;
@@ -84,11 +97,22 @@ int window_create(i32 x, i32 y, u32 width, u32 height, u32 body_color, u32 title
     if (!fits_on_screen(x, y, width, height)) {
         return -1;
     }
+    // Find-a-free-slot-then-mark-it-used is a real critical section: two
+    // ring3 tasks can both call a window_create* syscall around the same
+    // moment (e.g. at boot, desktop_shell.c and terminal.c both do) and
+    // the timer ISR can preempt between the scan and the write below -
+    // without this, both tasks can see the same slot as free and one's
+    // window silently clobbers the other's (found via a real symptom: a
+    // window that visually existed but never showed the content its own
+    // owning task kept writing - a second task's window_create had
+    // stomped the same slot after the fact).
+    u64 saved_flags = disable_interrupts();
     int id = 0;
     while (id < WINDOW_SLOTS && g_windows[id].used) {
         id = id + 1;
     }
     if (id >= WINDOW_SLOTS) {
+        restore_interrupts(saved_flags);
         return -1;
     }
 
@@ -104,6 +128,7 @@ int window_create(i32 x, i32 y, u32 width, u32 height, u32 body_color, u32 title
 
     g_window_zorder[g_window_zorder_count] = id;
     g_window_zorder_count = g_window_zorder_count + 1;
+    restore_interrupts(saved_flags);
     return id;
 }
 
@@ -114,11 +139,14 @@ int window_create_borderless(i32 x, i32 y, u32 width, u32 height, u32 body_color
     if (!fits_on_screen(x, y, width, height)) {
         return -1;
     }
+    // Same slot-allocation race as window_create() above - see its comment.
+    u64 saved_flags = disable_interrupts();
     int id = 0;
     while (id < WINDOW_SLOTS && g_windows[id].used) {
         id = id + 1;
     }
     if (id >= WINDOW_SLOTS) {
+        restore_interrupts(saved_flags);
         return -1;
     }
 
@@ -134,6 +162,7 @@ int window_create_borderless(i32 x, i32 y, u32 width, u32 height, u32 body_color
 
     g_window_zorder[g_window_zorder_count] = id;
     g_window_zorder_count = g_window_zorder_count + 1;
+    restore_interrupts(saved_flags);
     return id;
 }
 
@@ -288,13 +317,10 @@ void compositor_redraw(void) {
     // Publish: one tight, branch-light pass from the back buffer to the
     // real MMIO framebuffer - the only part of a redraw an external
     // observer can actually catch mid-flight, and now the smallest
-    // possible window for that. cli/sti (save/restore IF, not a bare
-    // pair, so this is correct regardless of the caller's own state)
-    // additionally blocks a guest-side timer preemption from landing
-    // here too - belt and suspenders, not a substitute for the back
-    // buffer itself.
-    u64 saved_flags;
-    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    // possible window for that. Disabling interrupts additionally blocks
+    // a guest-side timer preemption from landing here too - belt and
+    // suspenders, not a substitute for the back buffer itself.
+    u64 saved_flags = disable_interrupts();
     u32 y = 0;
     while (y < g_fb_height) {
         u32 x = 0;
@@ -304,5 +330,5 @@ void compositor_redraw(void) {
         }
         y = y + 1;
     }
-    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+    restore_interrupts(saved_flags);
 }

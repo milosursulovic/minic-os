@@ -5,6 +5,14 @@
 volatile vga_char* g_vga;
 int g_vga_cursor;
 
+char g_term_scrollback[TERM_SCROLLBACK_SIZE];
+u64 g_term_write_pos;
+
+static void term_scrollback_append(char c) {
+    g_term_scrollback[g_term_write_pos % TERM_SCROLLBACK_SIZE] = c;
+    g_term_write_pos = g_term_write_pos + 1;
+}
+
 void outb(u16 port, u8 value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
@@ -52,6 +60,7 @@ void vga_putc(char c) {
     g_vga[g_vga_cursor].color = 0x0F;
     g_vga_cursor = g_vga_cursor + 1;
     vga_update_cursor(g_vga_cursor);
+    term_scrollback_append(c);
 }
 
 void vga_print(const char* s) {
@@ -64,6 +73,7 @@ void vga_print(const char* s) {
 
 void new_line(void) {
     serial_putc('\n');
+    term_scrollback_append('\n');
     g_vga_cursor = ((g_vga_cursor / 80) + 1) * 80;
     if (g_vga_cursor >= 2000) {
         g_vga_cursor = 80;  // wrap; row 0 keeps the boot message (no real scrolling yet)
