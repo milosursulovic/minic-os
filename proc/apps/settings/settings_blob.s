@@ -9,5 +9,5 @@
 .global g_settings_prog_end
 
 g_settings_prog_start:
-.incbin "settings.bin"
+.incbin "../../../build/proc/apps/settings/settings.bin"
 g_settings_prog_end:

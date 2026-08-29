@@ -31,14 +31,14 @@ AS := as
 LD := ld
 OBJCOPY := objcopy
 
-# Every generated .o/.gen.s/.d lands here, mirroring the source tree
-# (build/kernel/drivers/io.o for kernel/drivers/io.c, etc), so `ls` in a source
-# directory only ever shows the .c/.h that actually live there. The real
-# deliverables (kernel.elf, minic-os.iso, disk.img) and every ring3
-# program's .bin blob stay where they are (proc/demo/ or proc/apps/,
-# next to their own .c/_blob.s) - the .bin files are read by `.incbin` in
-# the hand-written *_blob.s files via a relative path (see the rules
-# below), so moving them means also editing those .s files.
+# Every generated file - .o/.gen.s/.d, the standalone _linked.elf, and
+# each ring3 program's final .bin - lands here, mirroring the source tree
+# (build/kernel/drivers/io.o for kernel/drivers/io.c, etc), so `ls` in a
+# source directory only ever shows the .c/.h/_blob.s that actually live
+# there. Only kernel.elf/minic-os.iso/disk.img (the real deliverables)
+# stay at the repo root. Each *_blob.s's `.incbin` reads its .bin straight
+# out of build/ via a relative path (see the rules below) - moving where
+# a .bin lands means also editing that one line in the matching _blob.s.
 BUILD_DIR := build
 
 CFLAGS := -ffreestanding -m64 -mgeneral-regs-only -mno-red-zone \
@@ -101,85 +101,85 @@ $(C_OBJS): $(BUILD_DIR)/%.o: %.c
 # program's code and string literals would land far apart in the final
 # image, breaking the "one contiguous copyable blob" assumption the
 # whole loader depends on. Every intermediate here (.gen.s, _raw.o,
-# _linked.elf, .d) goes into build/proc/ - only the final .bin, read by
-# .incbin below, stays in proc/ itself.
-proc/demo/ring3prog/ring3prog.bin: proc/demo/ring3prog/ring3prog.c proc/ring3.ld
+# _linked.elf, and the final .bin, read by .incbin below) goes into
+# build/proc/ - nothing generated lands in proc/ itself anymore.
+$(BUILD_DIR)/proc/demo/ring3prog/ring3prog.bin: proc/demo/ring3prog/ring3prog.c proc/ring3.ld
 	@mkdir -p $(BUILD_DIR)/proc/demo/ring3prog
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/demo/ring3prog/ring3prog.bin -MF $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.d -S -o $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.gen.s proc/demo/ring3prog/ring3prog.c
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.bin -MF $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.d -S -o $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.gen.s proc/demo/ring3prog/ring3prog.c
 	{ echo ".code64"; cat $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/demo/ring3prog/ring3prog_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/demo/ring3prog/ring3prog_linked.elf $(BUILD_DIR)/proc/demo/ring3prog/ring3prog_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		$(BUILD_DIR)/proc/demo/ring3prog/ring3prog_linked.elf proc/demo/ring3prog/ring3prog.bin
+		$(BUILD_DIR)/proc/demo/ring3prog/ring3prog_linked.elf $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.bin
 
 -include $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.d
 
 # Two more standalone-linked ring3 programs (init, and the trivial
 # service it spawns) - same shape as ring3prog.bin above, just two more.
-proc/demo/init/init.bin: proc/demo/init/init.c proc/ring3.ld
+$(BUILD_DIR)/proc/demo/init/init.bin: proc/demo/init/init.c proc/ring3.ld
 	@mkdir -p $(BUILD_DIR)/proc/demo/init
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/demo/init/init.bin -MF $(BUILD_DIR)/proc/demo/init/init.d -S -o $(BUILD_DIR)/proc/demo/init/init.gen.s proc/demo/init/init.c
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/demo/init/init.bin -MF $(BUILD_DIR)/proc/demo/init/init.d -S -o $(BUILD_DIR)/proc/demo/init/init.gen.s proc/demo/init/init.c
 	{ echo ".code64"; cat $(BUILD_DIR)/proc/demo/init/init.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/demo/init/init_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/demo/init/init_linked.elf $(BUILD_DIR)/proc/demo/init/init_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		$(BUILD_DIR)/proc/demo/init/init_linked.elf proc/demo/init/init.bin
+		$(BUILD_DIR)/proc/demo/init/init_linked.elf $(BUILD_DIR)/proc/demo/init/init.bin
 
 -include $(BUILD_DIR)/proc/demo/init/init.d
 
-proc/demo/hello_service/hello_service.bin: proc/demo/hello_service/hello_service.c proc/ring3.ld
+$(BUILD_DIR)/proc/demo/hello_service/hello_service.bin: proc/demo/hello_service/hello_service.c proc/ring3.ld
 	@mkdir -p $(BUILD_DIR)/proc/demo/hello_service
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/demo/hello_service/hello_service.bin -MF $(BUILD_DIR)/proc/demo/hello_service/hello_service.d -S -o $(BUILD_DIR)/proc/demo/hello_service/hello_service.gen.s proc/demo/hello_service/hello_service.c
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/demo/hello_service/hello_service.bin -MF $(BUILD_DIR)/proc/demo/hello_service/hello_service.d -S -o $(BUILD_DIR)/proc/demo/hello_service/hello_service.gen.s proc/demo/hello_service/hello_service.c
 	{ echo ".code64"; cat $(BUILD_DIR)/proc/demo/hello_service/hello_service.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/demo/hello_service/hello_service_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/demo/hello_service/hello_service_linked.elf $(BUILD_DIR)/proc/demo/hello_service/hello_service_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		$(BUILD_DIR)/proc/demo/hello_service/hello_service_linked.elf proc/demo/hello_service/hello_service.bin
+		$(BUILD_DIR)/proc/demo/hello_service/hello_service_linked.elf $(BUILD_DIR)/proc/demo/hello_service/hello_service.bin
 
 -include $(BUILD_DIR)/proc/demo/hello_service/hello_service.d
 
 # The desktop shell - same shape again, auto-spawned by kmain.c alongside
 # init (not shell-triggered like ring3prog.c's demos).
-proc/apps/desktop_shell/desktop_shell.bin: proc/apps/desktop_shell/desktop_shell.c proc/gui_toolkit.h proc/ring3.ld
+$(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.bin: proc/apps/desktop_shell/desktop_shell.c proc/gui_toolkit.h proc/ring3.ld
 	@mkdir -p $(BUILD_DIR)/proc/apps/desktop_shell
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/apps/desktop_shell/desktop_shell.bin -MF $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.d -S -o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.gen.s proc/apps/desktop_shell/desktop_shell.c
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.bin -MF $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.d -S -o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.gen.s proc/apps/desktop_shell/desktop_shell.c
 	{ echo ".code64"; cat $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_linked.elf $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		$(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_linked.elf proc/apps/desktop_shell/desktop_shell.bin
+		$(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_linked.elf $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.bin
 
 -include $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.d
 
 # The terminal emulator - same shape again, auto-spawned by kmain.c
 # alongside desktop_shell/init.
-proc/apps/terminal/terminal.bin: proc/apps/terminal/terminal.c proc/gui_toolkit.h proc/ring3.ld
+$(BUILD_DIR)/proc/apps/terminal/terminal.bin: proc/apps/terminal/terminal.c proc/gui_toolkit.h proc/ring3.ld
 	@mkdir -p $(BUILD_DIR)/proc/apps/terminal
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/apps/terminal/terminal.bin -MF $(BUILD_DIR)/proc/apps/terminal/terminal.d -S -o $(BUILD_DIR)/proc/apps/terminal/terminal.gen.s proc/apps/terminal/terminal.c
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/apps/terminal/terminal.bin -MF $(BUILD_DIR)/proc/apps/terminal/terminal.d -S -o $(BUILD_DIR)/proc/apps/terminal/terminal.gen.s proc/apps/terminal/terminal.c
 	{ echo ".code64"; cat $(BUILD_DIR)/proc/apps/terminal/terminal.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/apps/terminal/terminal_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/apps/terminal/terminal_linked.elf $(BUILD_DIR)/proc/apps/terminal/terminal_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		$(BUILD_DIR)/proc/apps/terminal/terminal_linked.elf proc/apps/terminal/terminal.bin
+		$(BUILD_DIR)/proc/apps/terminal/terminal_linked.elf $(BUILD_DIR)/proc/apps/terminal/terminal.bin
 
 -include $(BUILD_DIR)/proc/apps/terminal/terminal.d
 
 # The file manager - same shape again, auto-spawned by kmain.c alongside
 # desktop_shell/terminal/init.
-proc/apps/file_manager/file_manager.bin: proc/apps/file_manager/file_manager.c proc/gui_toolkit.h proc/ring3.ld kernel/fs/minifs/minifs.h
+$(BUILD_DIR)/proc/apps/file_manager/file_manager.bin: proc/apps/file_manager/file_manager.c proc/gui_toolkit.h proc/ring3.ld kernel/fs/minifs/minifs.h
 	@mkdir -p $(BUILD_DIR)/proc/apps/file_manager
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/apps/file_manager/file_manager.bin -MF $(BUILD_DIR)/proc/apps/file_manager/file_manager.d -S -o $(BUILD_DIR)/proc/apps/file_manager/file_manager.gen.s proc/apps/file_manager/file_manager.c
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/apps/file_manager/file_manager.bin -MF $(BUILD_DIR)/proc/apps/file_manager/file_manager.d -S -o $(BUILD_DIR)/proc/apps/file_manager/file_manager.gen.s proc/apps/file_manager/file_manager.c
 	{ echo ".code64"; cat $(BUILD_DIR)/proc/apps/file_manager/file_manager.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/apps/file_manager/file_manager_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/apps/file_manager/file_manager_linked.elf $(BUILD_DIR)/proc/apps/file_manager/file_manager_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		$(BUILD_DIR)/proc/apps/file_manager/file_manager_linked.elf proc/apps/file_manager/file_manager.bin
+		$(BUILD_DIR)/proc/apps/file_manager/file_manager_linked.elf $(BUILD_DIR)/proc/apps/file_manager/file_manager.bin
 
 -include $(BUILD_DIR)/proc/apps/file_manager/file_manager.d
 
 # System Settings - same shape again, auto-spawned by kmain.c alongside
 # desktop_shell/terminal/file_manager/init.
-proc/apps/settings/settings.bin: proc/apps/settings/settings.c proc/gui_toolkit.h proc/ring3.ld
+$(BUILD_DIR)/proc/apps/settings/settings.bin: proc/apps/settings/settings.c proc/gui_toolkit.h proc/ring3.ld
 	@mkdir -p $(BUILD_DIR)/proc/apps/settings
-	$(CC) $(CFLAGS) -MMD -MP -MT proc/apps/settings/settings.bin -MF $(BUILD_DIR)/proc/apps/settings/settings.d -S -o $(BUILD_DIR)/proc/apps/settings/settings.gen.s proc/apps/settings/settings.c
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/apps/settings/settings.bin -MF $(BUILD_DIR)/proc/apps/settings/settings.d -S -o $(BUILD_DIR)/proc/apps/settings/settings.gen.s proc/apps/settings/settings.c
 	{ echo ".code64"; cat $(BUILD_DIR)/proc/apps/settings/settings.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/apps/settings/settings_raw.o
 	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/apps/settings/settings_linked.elf $(BUILD_DIR)/proc/apps/settings/settings_raw.o
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
-		$(BUILD_DIR)/proc/apps/settings/settings_linked.elf proc/apps/settings/settings.bin
+		$(BUILD_DIR)/proc/apps/settings/settings_linked.elf $(BUILD_DIR)/proc/apps/settings/settings.bin
 
 -include $(BUILD_DIR)/proc/apps/settings/settings.d
 
@@ -189,31 +189,31 @@ proc/apps/settings/settings.bin: proc/apps/settings/settings.c proc/gui_toolkit.
 # convention. `../../../$@` (one more `../` than when each program sat
 # directly in proc/apps or proc/demo) still lands the output back in
 # build/proc/... since $@ already carries that full prefix.
-$(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o: proc/demo/ring3prog/ring3blob.s proc/demo/ring3prog/ring3prog.bin
+$(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o: proc/demo/ring3prog/ring3blob.s $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.bin
 	@mkdir -p $(BUILD_DIR)/proc/demo/ring3prog
 	cd proc/demo/ring3prog && $(AS) --32 ring3blob.s -o ../../../$@
 
-$(BUILD_DIR)/proc/demo/init/init_blob.o: proc/demo/init/init_blob.s proc/demo/init/init.bin
+$(BUILD_DIR)/proc/demo/init/init_blob.o: proc/demo/init/init_blob.s $(BUILD_DIR)/proc/demo/init/init.bin
 	@mkdir -p $(BUILD_DIR)/proc/demo/init
 	cd proc/demo/init && $(AS) --32 init_blob.s -o ../../../$@
 
-$(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o: proc/demo/hello_service/hello_service_blob.s proc/demo/hello_service/hello_service.bin
+$(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o: proc/demo/hello_service/hello_service_blob.s $(BUILD_DIR)/proc/demo/hello_service/hello_service.bin
 	@mkdir -p $(BUILD_DIR)/proc/demo/hello_service
 	cd proc/demo/hello_service && $(AS) --32 hello_service_blob.s -o ../../../$@
 
-$(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o: proc/apps/desktop_shell/desktop_shell_blob.s proc/apps/desktop_shell/desktop_shell.bin
+$(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o: proc/apps/desktop_shell/desktop_shell_blob.s $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.bin
 	@mkdir -p $(BUILD_DIR)/proc/apps/desktop_shell
 	cd proc/apps/desktop_shell && $(AS) --32 desktop_shell_blob.s -o ../../../$@
 
-$(BUILD_DIR)/proc/apps/terminal/terminal_blob.o: proc/apps/terminal/terminal_blob.s proc/apps/terminal/terminal.bin
+$(BUILD_DIR)/proc/apps/terminal/terminal_blob.o: proc/apps/terminal/terminal_blob.s $(BUILD_DIR)/proc/apps/terminal/terminal.bin
 	@mkdir -p $(BUILD_DIR)/proc/apps/terminal
 	cd proc/apps/terminal && $(AS) --32 terminal_blob.s -o ../../../$@
 
-$(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o: proc/apps/file_manager/file_manager_blob.s proc/apps/file_manager/file_manager.bin
+$(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o: proc/apps/file_manager/file_manager_blob.s $(BUILD_DIR)/proc/apps/file_manager/file_manager.bin
 	@mkdir -p $(BUILD_DIR)/proc/apps/file_manager
 	cd proc/apps/file_manager && $(AS) --32 file_manager_blob.s -o ../../../$@
 
-$(BUILD_DIR)/proc/apps/settings/settings_blob.o: proc/apps/settings/settings_blob.s proc/apps/settings/settings.bin
+$(BUILD_DIR)/proc/apps/settings/settings_blob.o: proc/apps/settings/settings_blob.s $(BUILD_DIR)/proc/apps/settings/settings.bin
 	@mkdir -p $(BUILD_DIR)/proc/apps/settings
 	cd proc/apps/settings && $(AS) --32 settings_blob.s -o ../../../$@
 
@@ -244,10 +244,3 @@ iso: kernel.elf
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f kernel.elf minic-os.iso disk.img
-	rm -f proc/demo/ring3prog/ring3prog.bin proc/demo/ring3prog/ring3prog_linked.elf
-	rm -f proc/demo/init/init.bin proc/demo/init/init_linked.elf
-	rm -f proc/demo/hello_service/hello_service.bin proc/demo/hello_service/hello_service_linked.elf
-	rm -f proc/apps/desktop_shell/desktop_shell.bin proc/apps/desktop_shell/desktop_shell_linked.elf
-	rm -f proc/apps/terminal/terminal.bin proc/apps/terminal/terminal_linked.elf
-	rm -f proc/apps/file_manager/file_manager.bin proc/apps/file_manager/file_manager_linked.elf
-	rm -f proc/apps/settings/settings.bin proc/apps/settings/settings_linked.elf

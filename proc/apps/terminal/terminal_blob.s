@@ -9,5 +9,5 @@
 .global g_terminal_prog_end
 
 g_terminal_prog_start:
-.incbin "terminal.bin"
+.incbin "../../../build/proc/apps/terminal/terminal.bin"
 g_terminal_prog_end:

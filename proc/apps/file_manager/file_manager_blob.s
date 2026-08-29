@@ -9,5 +9,5 @@
 .global g_file_manager_prog_end
 
 g_file_manager_prog_start:
-.incbin "file_manager.bin"
+.incbin "../../../build/proc/apps/file_manager/file_manager.bin"
 g_file_manager_prog_end:

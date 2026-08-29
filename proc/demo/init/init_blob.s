@@ -8,5 +8,5 @@
 .global g_init_prog_end
 
 g_init_prog_start:
-.incbin "init.bin"
+.incbin "../../../build/proc/demo/init/init.bin"
 g_init_prog_end:

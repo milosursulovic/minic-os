@@ -9,5 +9,5 @@
 .global g_desktop_shell_prog_end
 
 g_desktop_shell_prog_start:
-.incbin "desktop_shell.bin"
+.incbin "../../../build/proc/apps/desktop_shell/desktop_shell.bin"
 g_desktop_shell_prog_end:

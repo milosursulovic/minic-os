@@ -10,5 +10,5 @@
 .global g_test_prog_end
 
 g_test_prog_start:
-.incbin "ring3prog.bin"
+.incbin "../../../build/proc/demo/ring3prog/ring3prog.bin"
 g_test_prog_end:

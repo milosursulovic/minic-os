@@ -10,5 +10,5 @@
 .global g_hello_service_prog_end
 
 g_hello_service_prog_start:
-.incbin "hello_service.bin"
+.incbin "../../../build/proc/demo/hello_service/hello_service.bin"
 g_hello_service_prog_end:
