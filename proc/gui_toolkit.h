@@ -141,7 +141,7 @@ static __attribute__((unused)) u64 gt_get_ticks(void) {
 // the number of bytes actually copied (0 if already caught up). If the
 // caller fell more than TERM_SCROLLBACK_SIZE bytes behind, some output
 // is silently lost - not resolved further than that (see syscall 36's
-// comment in syscall/syscall.c).
+// comment in kernel/syscall/syscall.c).
 static __attribute__((unused)) u32 gt_term_read(u64 since_pos, char* out_buf, u32 max_len) {
     gt_term_read_args args;
     args.since_pos = since_pos;
@@ -152,7 +152,7 @@ static __attribute__((unused)) u32 gt_term_read(u64 since_pos, char* out_buf, u3
 
 // Lists one entry (0..MINIFS_MAX_FILES-1) of dir_path ("" = /system
 // root). Returns false past the last used slot or an unresolvable
-// dir_path - same as fs_list_entry (disk/minifs.c), which this wraps
+// dir_path - same as fs_list_entry (fs/minifs.c), which this wraps
 // via syscall 37.
 static __attribute__((unused)) bool gt_fs_list(char* dir_path, int index, char* name_out, u32* size_out, bool* is_dir_out) {
     gt_fs_list_args args;

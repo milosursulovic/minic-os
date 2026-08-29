@@ -8,7 +8,7 @@
 // existed at all). No yield/sleep syscall exists for ring3 - polling
 // busy-spins.
 
-#include "../types.h"
+#include "../../types.h"
 
 #define SYS_QUERY 3
 #define SYS_SPAWN_BUILTIN 11

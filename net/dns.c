@@ -4,7 +4,7 @@
 #include "dns.h"
 #include "udp.h"
 #include "ip.h"
-#include "../isr/isr.h"
+#include "../kernel/isr/isr.h"
 
 static const u16 DNS_PORT = 53;
 static const u16 DNS_SRC_PORT = 12345;

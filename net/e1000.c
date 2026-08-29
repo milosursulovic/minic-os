@@ -4,8 +4,8 @@
 
 #include "e1000.h"
 #include "../drivers/pci.h"
-#include "../mm/paging.h"
-#include "../mm/frames.h"
+#include "../kernel/mm/paging.h"
+#include "../kernel/mm/frames.h"
 
 static const u8 E1000_BUS = 0;
 static const u8 E1000_DEVICE = 3;

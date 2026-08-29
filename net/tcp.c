@@ -11,8 +11,8 @@
 #include "arp.h"
 #include "e1000.h"
 #include "dns.h"
-#include "../isr/isr.h"
-#include "../sched/task.h"
+#include "../kernel/isr/isr.h"
+#include "../kernel/sched/task.h"
 
 static const u8 IP_PROTOCOL_TCP = 6;
 

@@ -8,8 +8,8 @@
 // _start must be at offset 0 - see ring3prog.c's own comment on this;
 // same __attribute__((section(".text.start"))) + ring3.ld requirement.
 
-#include "../types.h"
-#include "gui_toolkit.h"
+#include "../../types.h"
+#include "../gui_toolkit.h"
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600

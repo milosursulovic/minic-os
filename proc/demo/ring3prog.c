@@ -6,8 +6,8 @@
 // plus ring3.ld's ".text.start" force that regardless of gcc's own
 // function ordering.
 
-#include "../types.h"
-#include "gui_toolkit.h"
+#include "../../types.h"
+#include "../gui_toolkit.h"
 
 #define RIGHT_QUERY 1
 

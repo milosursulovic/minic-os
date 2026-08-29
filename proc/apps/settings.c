@@ -16,8 +16,8 @@
 // _start must be at offset 0 - see ring3prog.c's own comment on this;
 // same __attribute__((section(".text.start"))) + ring3.ld requirement.
 
-#include "../types.h"
-#include "gui_toolkit.h"
+#include "../../types.h"
+#include "../gui_toolkit.h"
 
 #define WINDOW_X 620
 #define WINDOW_Y 60
@@ -57,7 +57,7 @@ static button g_swatch_gray;
 #define COLOR_MAROON 0x003A1C1Cu
 #define COLOR_GRAY 0x002A2A2Au
 
-// fs_write_file (disk/minifs.c) fails if the name already exists - a
+// fs_write_file (fs/minifs.c) fails if the name already exists - a
 // real bug hit here in practice: the first color pick creates
 // settings.cfg fine, but every pick after that silently no-ops, leaving
 // the old color in place forever. Delete-then-recreate is this

@@ -1,7 +1,7 @@
 // VFS backend for /devices: not disk-backed, reflects live kernel state (like /proc).
 
 #include "devfs.h"
-#include "../isr/isr.h"
+#include "../kernel/isr/isr.h"
 #include "../lib/strings.h"
 
 // Only "ticks" exists so far.

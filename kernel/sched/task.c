@@ -8,10 +8,10 @@
 #include "../mm/frames.h"
 #include "../mm/paging.h"
 #include "../isr/isr.h"
-#include "../proc/channel.h"
-#include "../proc/io_request.h"
-#include "../proc/net_request.h"
-#include "../proc/net_tcp_request.h"
+#include "../../proc/ipc/channel.h"
+#include "../../proc/ipc/io_request.h"
+#include "../../proc/ipc/net_request.h"
+#include "../../proc/ipc/net_tcp_request.h"
 
 #pragma GCC visibility push(hidden)
 extern void switch_context(u64* old_rsp_out, u64 new_rsp);

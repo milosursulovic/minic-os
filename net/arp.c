@@ -4,8 +4,8 @@
 #include "arp.h"
 #include "e1000.h"
 #include "ip.h"
-#include "../isr/isr.h"
-#include "../sched/task.h"
+#include "../kernel/isr/isr.h"
+#include "../kernel/sched/task.h"
 
 typedef struct {
     bool used;

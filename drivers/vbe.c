@@ -8,7 +8,7 @@
 #include "vbe.h"
 #include "io.h"
 #include "pci.h"
-#include "../mm/paging.h"
+#include "../kernel/mm/paging.h"
 #include "../gfx/font.h"
 
 static const u16 VBE_DISPI_IOPORT_INDEX = 0x01CE;

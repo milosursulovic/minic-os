@@ -5,7 +5,7 @@
 
 #include "mouse.h"
 #include "io.h"
-#include "../sched/task.h"
+#include "../kernel/sched/task.h"
 
 static const u16 PS2_DATA = 0x60;
 static const u16 PS2_STATUS_CMD = 0x64;

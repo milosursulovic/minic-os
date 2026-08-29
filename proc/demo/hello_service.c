@@ -1,7 +1,7 @@
 // Trivial service spawned by init.c - exits immediately via
 // process_exit() (syscall 12), so ps shows it exited=0x1.
 
-#include "../types.h"
+#include "../../types.h"
 
 #define SYS_PROCESS_EXIT 12
 

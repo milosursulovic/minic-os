@@ -5,15 +5,15 @@
 #include "drivers/io.h"
 #include "drivers/interrupts_init.h"
 #include "drivers/keyboard.h"
-#include "mm/frames.h"
-#include "mm/paging.h"
-#include "sched/task.h"
-#include "proc/channel.h"
+#include "kernel/mm/frames.h"
+#include "kernel/mm/paging.h"
+#include "kernel/sched/task.h"
+#include "proc/ipc/channel.h"
 #include "proc/process.h"
-#include "proc/io_request.h"
-#include "proc/net_request.h"
-#include "proc/net_tcp_request.h"
-#include "disk/vfs.h"
+#include "proc/ipc/io_request.h"
+#include "proc/ipc/net_request.h"
+#include "proc/ipc/net_tcp_request.h"
+#include "fs/vfs.h"
 #include "shell/shell.h"
 
 #pragma GCC visibility push(hidden)
@@ -75,7 +75,7 @@ void _start(void) {
     vfs_mount("/system", BACKEND_MINIFS);
     vfs_mount("/devices", BACKEND_DEVICE);
 
-    // init process: spawns proc/hello_service.c via spawn_builtin once running.
+    // init process: spawns proc/demo/hello_service.c via spawn_builtin once running.
     spawn_process(&g_init_prog_start, &g_init_prog_end, 0x80000000, 0x80020000);
 
     // Desktop shell: wallpaper + taskbar + launcher, runs forever from
@@ -90,11 +90,11 @@ void _start(void) {
     spawn_process(&g_terminal_prog_start, &g_terminal_prog_end, 0x80000000, 0x80020000);
 
     // File manager: real navigable GUI browser over the hierarchical
-    // MiniFS tree (syscalls 5/37/38/39) - see proc/file_manager.c.
+    // MiniFS tree (syscalls 5/37/38/39) - see proc/apps/file_manager.c.
     spawn_process(&g_file_manager_prog_start, &g_file_manager_prog_end, 0x80000000, 0x80020000);
 
     // System Settings: Display (persisted wallpaper color) + System Info
-    // (live uptime/memory/disk stats) - see proc/settings.c.
+    // (live uptime/memory/disk stats) - see proc/apps/settings.c.
     spawn_process(&g_settings_prog_start, &g_settings_prog_end, 0x80000000, 0x80020000);
 
     __asm__ volatile("sti");

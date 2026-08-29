@@ -1,4 +1,4 @@
-// IDT setup + 8259 PIC/PIT config. Entry stubs are hand-written in boot/interrupts.s.
+// IDT setup + 8259 PIC/PIT config. Entry stubs are hand-written in kernel/boot/interrupts.s.
 
 #include "interrupts_init.h"
 #include "io.h"

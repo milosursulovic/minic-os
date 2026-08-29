@@ -1,5 +1,5 @@
 // File Manager (Faza II point 24) - a real navigable GUI browser over
-// the hierarchical MiniFS (disk/minifs.c). Auto-spawned by kmain.c at
+// the hierarchical MiniFS (fs/minifs.c). Auto-spawned by kmain.c at
 // boot (Mechanism A, same as desktop_shell.c/terminal.c).
 //
 // Deliberately NOT polled on a tick interval: this program is the only
@@ -27,9 +27,9 @@
 // _start must be at offset 0 - see ring3prog.c's own comment on this;
 // same __attribute__((section(".text.start"))) + ring3.ld requirement.
 
-#include "../types.h"
-#include "gui_toolkit.h"
-#include "../disk/minifs.h"
+#include "../../types.h"
+#include "../gui_toolkit.h"
+#include "../../fs/minifs.h"
 
 #define WINDOW_X 100
 #define WINDOW_Y 390

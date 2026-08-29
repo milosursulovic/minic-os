@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../types.h"
-#include "process.h"
+#include "../../types.h"
+#include "../process.h"
 
 #pragma GCC visibility push(hidden)
 
