@@ -217,8 +217,26 @@ $(BUILD_DIR)/proc/apps/settings/settings_blob.o: proc/apps/settings/settings_blo
 	@mkdir -p $(BUILD_DIR)/proc/apps/settings
 	cd proc/apps/settings && $(AS) --32 settings_blob.s -o ../../../$@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o
-	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o
+# These three `.incbin` a real, committed binary asset directly (assets/*.png)
+# instead of a build/-generated .bin - the source is the PNG file itself, not
+# something the ring3-program sub-pipeline produces, so the prerequisite is
+# that asset path rather than another rule's output.
+$(BUILD_DIR)/kernel/gfx/png/cursor_blob.o: kernel/gfx/png/cursor_blob.s assets/cursor.png
+	@mkdir -p $(BUILD_DIR)/kernel/gfx/png
+	cd kernel/gfx/png && $(AS) --32 cursor_blob.s -o ../../../$@
+
+$(BUILD_DIR)/kernel/gfx/png/png_test_stored_blob.o: kernel/gfx/png/png_test_stored_blob.s assets/png_test_stored.png
+	@mkdir -p $(BUILD_DIR)/kernel/gfx/png
+	cd kernel/gfx/png && $(AS) --32 png_test_stored_blob.s -o ../../../$@
+
+$(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o: kernel/gfx/png/png_test_huffman_blob.s assets/png_test_huffman.png
+	@mkdir -p $(BUILD_DIR)/kernel/gfx/png
+	cd kernel/gfx/png && $(AS) --32 png_test_huffman_blob.s -o ../../../$@
+
+PNG_ASSET_BLOBS := $(BUILD_DIR)/kernel/gfx/png/cursor_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_stored_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o
+
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(PNG_ASSET_BLOBS)
+	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(PNG_ASSET_BLOBS)
 	@echo "built kernel.elf"
 
 disk.img:

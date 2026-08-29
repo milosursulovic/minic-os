@@ -26,6 +26,8 @@
 #include "../../kernel/drivers/vbe/vbe.h"
 #include "../../kernel/drivers/mouse/mouse.h"
 #include "../../kernel/gfx/window/window.h"
+#include "../../kernel/gfx/image/image.h"
+#include "../../kernel/gfx/png/png.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -119,8 +121,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest");
 }
 
 static void cmd_ticks(void) {
@@ -537,7 +539,7 @@ static char g_shell_cwd[128] = "";
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 70
+#define SHELL_COMMAND_COUNT 71
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -568,7 +570,7 @@ static void shell_commands_init(void) {
     g_shell_commands[60] = "wincontent"; g_shell_commands[61] = "textcontent"; g_shell_commands[62] = "buttoncontent";
     g_shell_commands[63] = "desktop"; g_shell_commands[64] = "arp"; g_shell_commands[65] = "ping";
     g_shell_commands[66] = "ipconfig"; g_shell_commands[67] = "dns"; g_shell_commands[68] = "tcp";
-    g_shell_commands[69] = "echo";
+    g_shell_commands[69] = "echo"; g_shell_commands[70] = "pngtest";
     g_shell_commands_initialized = true;
 }
 
@@ -1897,6 +1899,81 @@ static void cmd_echo(void) {
     serial_print(text);
 }
 
+#pragma GCC visibility push(hidden)
+extern u8 g_png_test_stored_start;
+extern u8 g_png_test_stored_end;
+extern u8 g_png_test_huffman_start;
+extern u8 g_png_test_huffman_end;
+extern u8 g_cursor_png_start;
+extern u8 g_cursor_png_end;
+#pragma GCC visibility pop
+
+static void print_labeled_hex(const char* label, u64 value) {
+    vga_print(label);
+    serial_print(label);
+    print_hex(value);
+}
+
+// Exercises the hand-written PNG decoder (kernel/gfx/png/png.c) against
+// three real embedded PNGs and prints exact values to compare by hand:
+// a tiny stored-DEFLATE-block PNG with hand-picked pixels, a 64x64
+// dynamic-Huffman PNG whose pixels follow a known formula, and the real
+// cursor.png asset - plus a deliberate one-byte corruption to prove the
+// CRC32 check actually rejects bad input instead of decoding garbage.
+static void cmd_pngtest(void) {
+    u32 stored_size = (u32) ((u64) &g_png_test_stored_end - (u64) &g_png_test_stored_start);
+    image stored_img;
+    bool ok1 = png_decode(&g_png_test_stored_start, stored_size, &stored_img);
+    print_labeled_hex("stored ok=0x", ok1 ? 1 : 0);
+    if (ok1) {
+        print_labeled_hex(" w=0x", stored_img.width);
+        print_labeled_hex(" h=0x", stored_img.height);
+        print_labeled_hex(" px0=0x", stored_img.pixels[0]);   // expect 0x00000000 (0,0,0)
+        print_labeled_hex(" px1=0x", stored_img.pixels[1]);   // expect 0x00FF0000 (255,0,0)
+        print_labeled_hex(" px15=0x", stored_img.pixels[15]); // expect 0x00FFFFFF (255,255,255)
+    }
+
+    u32 huff_size = (u32) ((u64) &g_png_test_huffman_end - (u64) &g_png_test_huffman_start);
+    image huff_img;
+    bool ok2 = png_decode(&g_png_test_huffman_start, huff_size, &huff_img);
+    print_labeled_hex(" huffman ok=0x", ok2 ? 1 : 0);
+    if (ok2) {
+        print_labeled_hex(" w=0x", huff_img.width);
+        print_labeled_hex(" h=0x", huff_img.height);
+        u32 x = 37;
+        u32 y = 50;
+        u32 expect = (((x * 7) % 256) << 16) | (((y * 11) % 256) << 8) | (((x ^ y) * 3) % 256);
+        print_labeled_hex(" px37_50=0x", huff_img.pixels[y * huff_img.width + x]);
+        print_labeled_hex(" expect=0x", expect);
+    }
+
+    u32 cursor_size = (u32) ((u64) &g_cursor_png_end - (u64) &g_cursor_png_start);
+    image cursor_img;
+    bool ok3 = png_decode(&g_cursor_png_start, cursor_size, &cursor_img);
+    print_labeled_hex(" cursor ok=0x", ok3 ? 1 : 0);
+    if (ok3) {
+        print_labeled_hex(" w=0x", cursor_img.width);
+        print_labeled_hex(" h=0x", cursor_img.height);
+        print_labeled_hex(" px0=0x", cursor_img.pixels[0]);           // expect 0x00000000 (black outline)
+        print_labeled_hex(" px_transparent=0x", cursor_img.pixels[1]); // expect 0xFFFFFFFF
+    }
+
+    // Corrupt one byte inside the stored PNG's chunk data (CRC32 covers
+    // the whole type+data span of every chunk, so any single-byte flip
+    // past the 8-byte signature breaks some chunk's CRC) and confirm
+    // png_decode rejects it instead of producing wrong pixels.
+    if (stored_size <= 256) {
+        u8 corrupt[256];
+        for (u32 i = 0; i < stored_size; i = i + 1) {
+            corrupt[i] = (&g_png_test_stored_start)[i];
+        }
+        corrupt[stored_size / 2] = corrupt[stored_size / 2] ^ 0xFF;
+        image bad_img;
+        bool ok4 = png_decode(corrupt, stored_size, &bad_img);
+        print_labeled_hex(" corrupt_rejected=0x", ok4 ? 0 : 1); // expect 1
+    }
+}
+
 void run_command(void) {
     if (streq(g_line_buffer, "help")) {
         cmd_help();
@@ -2044,6 +2121,8 @@ void run_command(void) {
         cmd_tcp();
     } else if (starts_with(g_line_buffer, "echo ")) {
         cmd_echo();
+    } else if (streq(g_line_buffer, "pngtest")) {
+        cmd_pngtest();
     } else if (g_line_len > 0) {
         vga_print("unknown command");
         serial_print("unknown command");
