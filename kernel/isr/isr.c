@@ -1,17 +1,17 @@
 // Called from boot/interrupts.s's isr_common_stub for every known vector.
 
 #include "isr.h"
-#include "../../drivers/io.h"
-#include "../../drivers/keyboard.h"
-#include "../../drivers/mouse.h"
-#include "../../drivers/vbe.h"
-#include "../../gfx/window.h"
-#include "../../lib/strings.h"
+#include "../drivers/io.h"
+#include "../drivers/keyboard.h"
+#include "../drivers/mouse.h"
+#include "../drivers/vbe.h"
+#include "../gfx/window.h"
+#include "../lib/strings.h"
 #include "../sched/task.h"
 
 u64 g_tick_count;
 
-// Drives the mouse cursor's on-screen redraw (gfx/window.c's draw_cursor(),
+// Drives the mouse cursor's on-screen redraw (kernel/gfx/window.c's draw_cursor(),
 // composited last in every compositor_redraw() call) independent of
 // whatever else is or isn't changing on screen - without this, the cursor
 // only moves when some unrelated window redraw happens to fire (a button

@@ -29,8 +29,8 @@
 // read directly from mm/frames.h's globals and fs_superblock_info()).
 
 #include "syscall.h"
-#include "../../drivers/io.h"
-#include "../../lib/strings.h"
+#include "../drivers/io.h"
+#include "../lib/strings.h"
 #include "../sched/task.h"
 #include "../../proc/process.h"
 #include "../../proc/ipc/object.h"
@@ -38,13 +38,13 @@
 #include "../../proc/ipc/io_request.h"
 #include "../../proc/ipc/net_request.h"
 #include "../../proc/ipc/net_tcp_request.h"
-#include "../../fs/vfs.h"
-#include "../../fs/minifs.h"
+#include "../fs/vfs.h"
+#include "../fs/minifs.h"
 #include "../mm/paging.h"
 #include "../mm/frames.h"
-#include "../../drivers/vbe.h"
-#include "../../gfx/window.h"
-#include "../../drivers/mouse.h"
+#include "../drivers/vbe.h"
+#include "../gfx/window.h"
+#include "../drivers/mouse.h"
 #include "../isr/isr.h"
 
 typedef struct __attribute__((packed)) {

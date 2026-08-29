@@ -114,7 +114,7 @@ static __attribute__((unused)) void gt_mouse_query(i32* x, i32* y, u8* buttons) 
 }
 
 // Same slot/z-order rules as window_create, minus a titlebar - see
-// gfx/window.h's window_create_borderless(). Returns -1 on failure.
+// kernel/gfx/window.h's window_create_borderless(). Returns -1 on failure.
 static __attribute__((unused)) int gt_window_create_borderless(i32 x, i32 y, u32 width, u32 height, u32 body_color) {
     gt_window_create_borderless_args args;
     args.x = x;
@@ -137,7 +137,7 @@ static __attribute__((unused)) u64 gt_get_ticks(void) {
 
 // Copies console-shell output produced since since_pos into out_buf (up
 // to max_len bytes) - the same text every cmd_* already prints via
-// vga_print/serial_print, mirrored kernel-side (drivers/io.c). Returns
+// vga_print/serial_print, mirrored kernel-side (kernel/drivers/io.c). Returns
 // the number of bytes actually copied (0 if already caught up). If the
 // caller fell more than TERM_SCROLLBACK_SIZE bytes behind, some output
 // is silently lost - not resolved further than that (see syscall 36's
@@ -152,7 +152,7 @@ static __attribute__((unused)) u32 gt_term_read(u64 since_pos, char* out_buf, u3
 
 // Lists one entry (0..MINIFS_MAX_FILES-1) of dir_path ("" = /system
 // root). Returns false past the last used slot or an unresolvable
-// dir_path - same as fs_list_entry (fs/minifs.c), which this wraps
+// dir_path - same as fs_list_entry (kernel/fs/minifs.c), which this wraps
 // via syscall 37.
 static __attribute__((unused)) bool gt_fs_list(char* dir_path, int index, char* name_out, u32* size_out, bool* is_dir_out) {
     gt_fs_list_args args;
@@ -204,12 +204,12 @@ static __attribute__((unused)) bool gt_sys_info(u32* total_frames_out, u32* free
     return gt_syscall(40, (u64) &args, 0, 0) == 0;
 }
 
-// Minimal, self-contained hex formatter - lib/strings.c's format_hex()
+// Minimal, self-contained hex formatter - kernel/lib/strings.c's format_hex()
 // isn't linked into ring3 programs (each is its own standalone-linked
 // blob, see proc/ring3.ld). Null-terminates, unlike format_hex(), since
 // window_draw_text's syscall dereferences a null-terminated string on
 // the kernel side. Returns the digit count, not counting the terminator.
-// Uppercase A-F, not lowercase - the font (gfx/font.h) has no lowercase
+// Uppercase A-F, not lowercase - the font (kernel/gfx/font.h) has no lowercase
 // glyphs at all, so a lowercase hex digit used to render as an invisible
 // gap (found via Settings' memory stats, the first caller whose values
 // routinely land above 0xF - desktop_shell's tick counts and File

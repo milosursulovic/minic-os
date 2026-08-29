@@ -6,7 +6,7 @@
 #include "../kernel/mm/paging.h"
 #include "../kernel/sched/task.h"
 #include "ipc/object.h"
-#include "../fs/vfs.h"
+#include "../kernel/fs/vfs.h"
 
 #pragma GCC visibility push(hidden)
 extern void run_ring3_test(u64 entry, u64 user_stack);

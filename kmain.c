@@ -2,9 +2,9 @@
 // first 1GB of physical memory identity-mapped.
 
 #include "types.h"
-#include "drivers/io.h"
-#include "drivers/interrupts_init.h"
-#include "drivers/keyboard.h"
+#include "kernel/drivers/io.h"
+#include "kernel/drivers/interrupts_init.h"
+#include "kernel/drivers/keyboard.h"
 #include "kernel/mm/frames.h"
 #include "kernel/mm/paging.h"
 #include "kernel/sched/task.h"
@@ -13,7 +13,7 @@
 #include "proc/ipc/io_request.h"
 #include "proc/ipc/net_request.h"
 #include "proc/ipc/net_tcp_request.h"
-#include "fs/vfs.h"
+#include "kernel/fs/vfs.h"
 #include "shell/shell.h"
 
 #pragma GCC visibility push(hidden)
@@ -84,7 +84,7 @@ void _start(void) {
     spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end, 0x80000000, 0x80020000);
 
     // Terminal emulator: mirrors the console shell's own output into a
-    // real GUI window (drivers/io.c's g_term_scrollback, syscall 36) -
+    // real GUI window (kernel/drivers/io.c's g_term_scrollback, syscall 36) -
     // the physical keyboard still only ever fills g_line_buffer below,
     // unchanged.
     spawn_process(&g_terminal_prog_start, &g_terminal_prog_end, 0x80000000, 0x80020000);

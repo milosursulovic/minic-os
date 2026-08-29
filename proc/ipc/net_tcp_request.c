@@ -1,7 +1,7 @@
 // Backs syscalls 24/25 (async TCP fetch, issue+wait).
 
 #include "net_tcp_request.h"
-#include "../../net/tcp.h"
+#include "../../kernel/net/tcp.h"
 #include "../../kernel/sched/task.h"
 
 net_tcp_request g_net_tcp_requests[TCP_REQUEST_SLOTS];

@@ -1,7 +1,7 @@
 // Backs syscalls 16-19 (async file read/write, issue+wait).
 
 #include "io_request.h"
-#include "../../fs/vfs.h"
+#include "../../kernel/fs/vfs.h"
 #include "../../kernel/sched/task.h"
 
 io_request g_io_requests[IO_REQUEST_SLOTS];

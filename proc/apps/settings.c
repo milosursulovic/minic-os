@@ -57,7 +57,7 @@ static button g_swatch_gray;
 #define COLOR_MAROON 0x003A1C1Cu
 #define COLOR_GRAY 0x002A2A2Au
 
-// fs_write_file (fs/minifs.c) fails if the name already exists - a
+// fs_write_file (kernel/fs/minifs.c) fails if the name already exists - a
 // real bug hit here in practice: the first color pick creates
 // settings.cfg fine, but every pick after that silently no-ops, leaving
 // the old color in place forever. Delete-then-recreate is this

@@ -32,7 +32,7 @@ LD := ld
 OBJCOPY := objcopy
 
 # Every generated .o/.gen.s/.d lands here, mirroring the source tree
-# (build/drivers/io.o for drivers/io.c, etc), so `ls` in a source
+# (build/kernel/drivers/io.o for kernel/drivers/io.c, etc), so `ls` in a source
 # directory only ever shows the .c/.h that actually live there. The real
 # deliverables (kernel.elf, minic-os.iso, disk.img) and every ring3
 # program's .bin blob stay where they are (proc/demo/ or proc/apps/,
@@ -161,7 +161,7 @@ proc/apps/terminal.bin: proc/apps/terminal.c proc/gui_toolkit.h proc/ring3.ld
 
 # The file manager - same shape again, auto-spawned by kmain.c alongside
 # desktop_shell/terminal/init.
-proc/apps/file_manager.bin: proc/apps/file_manager.c proc/gui_toolkit.h proc/ring3.ld fs/minifs.h
+proc/apps/file_manager.bin: proc/apps/file_manager.c proc/gui_toolkit.h proc/ring3.ld kernel/fs/minifs.h
 	@mkdir -p $(BUILD_DIR)/proc/apps
 	$(CC) $(CFLAGS) -MMD -MP -MT proc/apps/file_manager.bin -MF $(BUILD_DIR)/proc/apps/file_manager.d -S -o $(BUILD_DIR)/proc/apps/file_manager.gen.s proc/apps/file_manager.c
 	{ echo ".code64"; cat $(BUILD_DIR)/proc/apps/file_manager.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/apps/file_manager_raw.o

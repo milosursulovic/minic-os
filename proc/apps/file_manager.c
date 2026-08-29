@@ -1,5 +1,5 @@
 // File Manager (Faza II point 24) - a real navigable GUI browser over
-// the hierarchical MiniFS (fs/minifs.c). Auto-spawned by kmain.c at
+// the hierarchical MiniFS (kernel/fs/minifs.c). Auto-spawned by kmain.c at
 // boot (Mechanism A, same as desktop_shell.c/terminal.c).
 //
 // Deliberately NOT polled on a tick interval: this program is the only
@@ -17,7 +17,7 @@
 // tick-interval throttling would be: zero redundant redraws, not just
 // throttled ones.
 //
-// Row/entry names are uppercased for display only - font (gfx/font.h)
+// Row/entry names are uppercased for display only - font (kernel/gfx/font.h)
 // has no lowercase glyphs, same technique as terminal.c.
 //
 // New File/New Dir use canned auto-incrementing names (FILEn.MFS /
@@ -29,7 +29,7 @@
 
 #include "../../types.h"
 #include "../gui_toolkit.h"
-#include "../../fs/minifs.h"
+#include "../../kernel/fs/minifs.h"
 
 #define WINDOW_X 100
 #define WINDOW_Y 390

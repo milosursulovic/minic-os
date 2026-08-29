@@ -1,8 +1,8 @@
 // Backs syscalls 20-23 (async ping/DNS, issue+wait).
 
 #include "net_request.h"
-#include "../../net/icmp.h"
-#include "../../net/dns.h"
+#include "../../kernel/net/icmp.h"
+#include "../../kernel/net/dns.h"
 #include "../../kernel/sched/task.h"
 
 net_ping_request g_net_ping_requests[NET_PING_SLOTS];

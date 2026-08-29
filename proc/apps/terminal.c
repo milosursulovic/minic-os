@@ -4,14 +4,14 @@
 //
 // Deliberately NOT a second keyboard-input target: the physical keyboard
 // still only ever fills g_line_buffer (kernel/isr/isr.c, unchanged) - this
-// window just polls drivers/io.c's g_term_scrollback (syscall 36,
+// window just polls kernel/drivers/io.c's g_term_scrollback (syscall 36,
 // gt_term_read) and redraws whatever the console shell already printed.
 // That's what lets this share every one of run_command()'s ~70 commands
 // with zero shell.c refactor, and zero risk to the console's own
 // existing keyboard-driven behavior (real regression risk otherwise -
 // see project memory on this session's QEMU sendkey test workflow).
 //
-// Known limitation: the font (gfx/font.h) only has A-Z, 0-9, space, and
+// Known limitation: the font (kernel/gfx/font.h) only has A-Z, 0-9, space, and
 // `. , ! ? : -` - real shell output uses lowercase and other punctuation
 // (`=`, `/`, `<`, `>`, ...) constantly, so mirrored text will show gaps
 // wherever an unsupported character would be. Not fixed here - expanding
@@ -22,7 +22,7 @@
 
 #include "../../types.h"
 #include "../gui_toolkit.h"
-#include "../../gfx/font.h"  // FONT_GLYPH_WIDTH/HEIGHT only - font_get_glyph() itself is never called from ring3
+#include "../../kernel/gfx/font.h"  // FONT_GLYPH_WIDTH/HEIGHT only - font_get_glyph() itself is never called from ring3
 
 #define WINDOW_X 100
 #define WINDOW_Y 60
@@ -85,7 +85,7 @@ static void terminal_feed(char c) {
         return;
     }
     if (g_cur_col < COLS) {
-        // Display-only uppercasing - the font (gfx/font.h) has no
+        // Display-only uppercasing - the font (kernel/gfx/font.h) has no
         // lowercase glyphs at all, so real shell output (almost all
         // lowercase) would otherwise render as mostly blank cells. This
         // doesn't touch the real shell/g_line_buffer/g_term_scrollback
