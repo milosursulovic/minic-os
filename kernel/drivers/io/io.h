@@ -57,5 +57,14 @@ void term_scrollback_backspace(void);
 // produced by any shell command's output, so it's free to use as a
 // dedicated "wipe the mirrored view" signal for terminal.c's terminal_feed().
 void term_scrollback_clear(void);
+// Real cursor movement (Left/Right arrows, and the internal cursor-reposition
+// step after a mid-line insert/delete redraws its tail) is pure hardware
+// cursor repositioning on the real VGA side - no character is drawn, so
+// vga_putc()'s own automatic mirroring never sees it. These two marker
+// bytes (0x02/0x03 - unused anywhere else in this stream) let the GUI
+// terminal window (proc/apps/terminal.c) move its own tracked column in
+// lockstep, same "backspace/clear are just more bytes in the stream" idea.
+void term_scrollback_cursor_left(void);
+void term_scrollback_cursor_right(void);
 
 #pragma GCC visibility pop

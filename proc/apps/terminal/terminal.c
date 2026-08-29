@@ -88,6 +88,18 @@ static void terminal_feed(char c) {
         }
         return;
     }
+    if (c == (char) 0x02) {  // real cursor moved left (Left arrow, or a mid-line insert/delete repositioning) - no content change
+        if (g_cur_col > 0) {
+            g_cur_col = g_cur_col - 1;
+        }
+        return;
+    }
+    if (c == (char) 0x03) {  // real cursor moved right (Right arrow)
+        if (g_cur_col < COLS) {
+            g_cur_col = g_cur_col + 1;
+        }
+        return;
+    }
     if (c == '\b') {
         // The console's own backspace handling (isr.c) never crosses a
         // line boundary either (same-line-only erase) - mirror that
@@ -204,6 +216,24 @@ void _start(void) {
                     row = row + 1;
                 }
             }
+
+            // Visual cursor indicator - a thin underline at the current
+            // (row, col). No extra row redraw needed to erase a stale mark
+            // from a previous position first: every branch above already
+            // repaints g_cur_row's own content this same batch (cleared ->
+            // the whole body just got blanked; scrolled -> every row,
+            // g_cur_row included; the common case -> the partial-range
+            // loop always includes g_cur_row), and terminal_redraw_row()
+            // does a full background fill before its text, which already
+            // wipes any old cursor pixels on that row.
+            gt_window_fill_rect_args cursor_args;
+            cursor_args.id = window_id;
+            cursor_args.x = (u32) (g_cur_col * CHAR_W);
+            cursor_args.y = (u32) (g_cur_row * CHAR_H + (CHAR_H - 2));
+            cursor_args.width = CHAR_W - 1;
+            cursor_args.height = 2;
+            cursor_args.color = TEXT_COLOR;
+            gt_syscall(30, (u64) &cursor_args, 0, 0);
         }
     }
 }

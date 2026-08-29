@@ -64,6 +64,17 @@ void shell_history_add(const char* line) {
 // same mirroring as isr.c's own Backspace) then retypes whatever
 // g_history_browse_index now points at (or nothing, for -1).
 static void shell_history_redraw(void) {
+    // g_vga_cursor might be sitting mid-line (Left/Right arrow) rather than
+    // at the true end of the current line - walk it out to the end first
+    // (mirroring every step, so the GUI terminal's own tracked column
+    // follows along), since the erase loop below assumes it's erasing
+    // from there.
+    while (g_line_cursor < g_line_len) {
+        g_vga_cursor = g_vga_cursor + 1;
+        g_line_cursor = g_line_cursor + 1;
+        term_scrollback_cursor_right();
+    }
+
     while (g_line_len > 0) {
         g_line_len = g_line_len - 1;
         g_vga_cursor = g_vga_cursor - 1;
@@ -88,6 +99,7 @@ static void shell_history_redraw(void) {
             i = i + 1;
         }
     }
+    g_line_cursor = g_line_len;  // recall always lands the cursor at the end, same as a real shell
 }
 
 void shell_history_up(void) {
@@ -592,6 +604,19 @@ static void tab_replace_word(int count, const char* text) {
 void shell_tab_complete(void) {
     shell_commands_init();
 
+    // Completion always operates on the LAST word in the line (word_start
+    // is computed from g_line_len below, not from wherever the cursor
+    // happens to be) - if the cursor was moved mid-line (Left/Right
+    // arrow), walk it back out to the end first, mirroring every step, so
+    // tab_replace_word()'s own erase/retype (which assumes it's editing
+    // right at the end) stays correct instead of silently editing the
+    // wrong screen position.
+    while (g_line_cursor < g_line_len) {
+        g_vga_cursor = g_vga_cursor + 1;
+        g_line_cursor = g_line_cursor + 1;
+        term_scrollback_cursor_right();
+    }
+
     // g_line_buffer is only null-terminated at g_line_len on Enter (isr.c) -
     // mid-typing it can hold stale trailing bytes from a previous, longer
     // command. Every string op below treats g_line_buffer as a real
@@ -692,6 +717,7 @@ void shell_tab_complete(void) {
             vga_putc(' ');
             serial_putc(' ');
         }
+        g_line_cursor = g_line_len;
         return;
     }
 
@@ -715,6 +741,7 @@ void shell_tab_complete(void) {
         serial_putc((u8) g_line_buffer[p]);
         p = p + 1;
     }
+    g_line_cursor = g_line_len;
 }
 
 static int g_next_file_index;

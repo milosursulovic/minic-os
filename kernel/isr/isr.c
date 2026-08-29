@@ -79,11 +79,59 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
         g_extended_prefix = false;
 
         if (extended) {
-            if (!g_editor_active) {  // no arrow-key history recall inside a full-screen edit session
+            if (!g_editor_active) {  // no arrow-key history recall/cursor movement inside a full-screen edit session
                 if (scancode == 0x48) {  // Up arrow (press - its release is 0xE0 0xC8, ignored below)
                     shell_history_up();
                 } else if (scancode == 0x50) {  // Down arrow
                     shell_history_down();
+                } else if (scancode == 0x4B) {  // Left arrow
+                    if (g_line_cursor > 0) {
+                        g_line_cursor = g_line_cursor - 1;
+                        g_vga_cursor = g_vga_cursor - 1;
+                        vga_update_cursor(g_vga_cursor);
+                        term_scrollback_cursor_left();
+                    }
+                } else if (scancode == 0x4D) {  // Right arrow
+                    if (g_line_cursor < g_line_len) {
+                        g_line_cursor = g_line_cursor + 1;
+                        g_vga_cursor = g_vga_cursor + 1;
+                        vga_update_cursor(g_vga_cursor);
+                        term_scrollback_cursor_right();
+                    }
+                } else if (scancode == 0x53) {  // Delete (the dedicated key, not the numpad one)
+                    if (g_line_cursor < g_line_len) {
+                        int i = g_line_cursor;
+                        while (i < g_line_len - 1) {
+                            g_line_buffer[i] = g_line_buffer[i + 1];
+                            i = i + 1;
+                        }
+                        g_line_len = g_line_len - 1;
+
+                        int tail_len = g_line_len - g_line_cursor;
+                        int j = g_line_cursor;
+                        while (j < g_line_len) {
+                            vga_putc(g_line_buffer[j]);
+                            serial_putc((u8) g_line_buffer[j]);
+                            j = j + 1;
+                        }
+                        // The vacated trailing cell must go through vga_putc
+                        // too (not a direct g_vga[] write) - it needs the
+                        // exact same automatic scrollback mirroring every
+                        // other character here gets, or the GUI terminal's
+                        // own tracked cursor column would fall one short of
+                        // where the "move cursor back" loop below assumes
+                        // it landed.
+                        vga_putc(' ');
+                        serial_putc(' ');
+
+                        int k = 0;
+                        while (k < tail_len + 1) {
+                            g_vga_cursor = g_vga_cursor - 1;
+                            term_scrollback_cursor_left();
+                            k = k + 1;
+                        }
+                        vga_update_cursor(g_vga_cursor);
+                    }
                 }
             }
             outb(0x20, 0x20);
@@ -93,17 +141,48 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
         if (scancode < 0x80) {  // top bit set = key release, ignore those
             if (g_editor_active) {  // shell/editor.c owns every keystroke while a full-screen edit session is open
                 editor_handle_scancode(scancode);
-            } else if (scancode == 0x0E) {  // Backspace
-                if (g_line_len > 0) {
+            } else if (scancode == 0x0E) {  // Backspace - removes the char BEFORE the cursor, not always the last one
+                if (g_line_cursor > 0) {
+                    int i = g_line_cursor - 1;
+                    while (i < g_line_len - 1) {
+                        g_line_buffer[i] = g_line_buffer[i + 1];
+                        i = i + 1;
+                    }
                     g_line_len = g_line_len - 1;
+                    g_line_cursor = g_line_cursor - 1;
                     g_vga_cursor = g_vga_cursor - 1;
-                    g_vga[g_vga_cursor].character = ' ';
-                    g_vga[g_vga_cursor].color = 0x0F;
-                    vga_update_cursor(g_vga_cursor);
-                    serial_putc('\b');
+                    // This initial one-column step (real cursor moving back
+                    // to the deletion point, before anything's redrawn)
+                    // needs its own mirror marker too - without it the
+                    // mirror's net movement across this whole Backspace
+                    // would come out zero (it gets this many chars forward
+                    // from the redraw below, then the same number back at
+                    // the end - this one extra step is what actually moves
+                    // it left by one overall, matching the real cursor).
+                    term_scrollback_cursor_left();
+
+                    int tail_len = g_line_len - g_line_cursor;
+                    int j = g_line_cursor;
+                    while (j < g_line_len) {
+                        vga_putc(g_line_buffer[j]);
+                        serial_putc((u8) g_line_buffer[j]);
+                        j = j + 1;
+                    }
+                    // The vacated trailing cell must go through vga_putc too
+                    // (not a direct g_vga[] write) - same reasoning as the
+                    // Delete-key branch above: it needs the exact same
+                    // automatic scrollback mirroring every other character
+                    // here gets.
+                    vga_putc(' ');
                     serial_putc(' ');
-                    serial_putc('\b');
-                    term_scrollback_backspace();
+
+                    int k = 0;
+                    while (k < tail_len + 1) {
+                        g_vga_cursor = g_vga_cursor - 1;
+                        term_scrollback_cursor_left();
+                        k = k + 1;
+                    }
+                    vga_update_cursor(g_vga_cursor);
                 }
             } else if (scancode == 0x0F) {  // Tab - shell/shell.c owns command/argument completion
                 shell_tab_complete();
@@ -125,10 +204,36 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
                     shell_history_add(g_line_buffer);
                     g_line_ready = true;
                 } else if (c != '\0' && g_line_len < 127) {
-                    g_line_buffer[g_line_len] = c;
+                    // Inserts AT the cursor (shifts the tail right first) -
+                    // this is a strict superset of plain append: when the
+                    // cursor is already at the end (the common case),
+                    // tail_len below is 0 and the "move cursor back" loop
+                    // never runs, so this behaves exactly like the old
+                    // append-only code.
+                    int i = g_line_len;
+                    while (i > g_line_cursor) {
+                        g_line_buffer[i] = g_line_buffer[i - 1];
+                        i = i - 1;
+                    }
+                    g_line_buffer[g_line_cursor] = c;
                     g_line_len = g_line_len + 1;
-                    vga_putc(c);
-                    serial_putc((u8) c);
+
+                    int j = g_line_cursor;
+                    while (j < g_line_len) {
+                        vga_putc(g_line_buffer[j]);
+                        serial_putc((u8) g_line_buffer[j]);
+                        j = j + 1;
+                    }
+                    g_line_cursor = g_line_cursor + 1;
+
+                    int tail_len = g_line_len - g_line_cursor;
+                    int k = 0;
+                    while (k < tail_len) {
+                        g_vga_cursor = g_vga_cursor - 1;
+                        term_scrollback_cursor_left();
+                        k = k + 1;
+                    }
+                    vga_update_cursor(g_vga_cursor);
                 }
             }
         }

@@ -93,6 +93,7 @@ void _start(void) {
             run_command();
             g_line_ready = false;
             g_line_len = 0;
+            g_line_cursor = 0;
             // A full-screen `edit` session (shell/editor.c) has already
             // taken over the display by the time cmd_edit() returns here -
             // reprinting a prompt on top of it would stomp the freshly-

@@ -8,6 +8,7 @@ char g_scancode_table[128];
 char g_line_buffer[128];
 int g_line_len;
 bool g_line_ready;
+int g_line_cursor;
 
 void init_scancode_table(void) {
     g_scancode_table[0x1E] = 'a'; g_scancode_table[0x30] = 'b'; g_scancode_table[0x2E] = 'c';

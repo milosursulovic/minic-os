@@ -21,6 +21,14 @@ void term_scrollback_clear(void) {
     term_scrollback_append('\f');
 }
 
+void term_scrollback_cursor_left(void) {
+    term_scrollback_append((char) 0x02);
+}
+
+void term_scrollback_cursor_right(void) {
+    term_scrollback_append((char) 0x03);
+}
+
 void outb(u16 port, u8 value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
