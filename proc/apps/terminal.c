@@ -3,7 +3,7 @@
 // boot (Mechanism A, same as desktop_shell.c/init.c/hello_service.c).
 //
 // Deliberately NOT a second keyboard-input target: the physical keyboard
-// still only ever fills g_line_buffer (isr/isr.c, unchanged) - this
+// still only ever fills g_line_buffer (kernel/isr/isr.c, unchanged) - this
 // window just polls drivers/io.c's g_term_scrollback (syscall 36,
 // gt_term_read) and redraws whatever the console shell already printed.
 // That's what lets this share every one of run_command()'s ~70 commands
@@ -20,9 +20,9 @@
 // _start must be at offset 0 - see ring3prog.c's own comment on this;
 // same __attribute__((section(".text.start"))) + ring3.ld requirement.
 
-#include "../types.h"
-#include "gui_toolkit.h"
-#include "../gfx/font.h"  // FONT_GLYPH_WIDTH/HEIGHT only - font_get_glyph() itself is never called from ring3
+#include "../../types.h"
+#include "../gui_toolkit.h"
+#include "../../gfx/font.h"  // FONT_GLYPH_WIDTH/HEIGHT only - font_get_glyph() itself is never called from ring3
 
 #define WINDOW_X 100
 #define WINDOW_Y 60
@@ -70,6 +70,17 @@ static void terminal_feed(char c) {
         if (g_cur_row >= ROWS) {
             terminal_scroll_up();
             g_cur_row = ROWS - 1;
+        }
+        return;
+    }
+    if (c == '\b') {
+        // The console's own backspace handling (isr.c) never crosses a
+        // line boundary either (same-line-only erase) - mirror that
+        // exactly, don't invent a "back onto the previous row" behavior
+        // the real console doesn't have.
+        if (g_cur_col > 0) {
+            g_cur_col = g_cur_col - 1;
+            g_lines[g_cur_row][g_cur_col] = '\0';
         }
         return;
     }

@@ -4,17 +4,17 @@
 #include "../drivers/io.h"
 #include "../drivers/keyboard.h"
 #include "../lib/strings.h"
-#include "../mm/heap.h"
-#include "../mm/frames.h"
-#include "../mm/paging.h"
-#include "../sched/task.h"
-#include "../proc/channel.h"
-#include "../isr/isr.h"
-#include "../disk/ata.h"
-#include "../disk/minifs.h"
-#include "../disk/vfs.h"
+#include "../kernel/mm/heap.h"
+#include "../kernel/mm/frames.h"
+#include "../kernel/mm/paging.h"
+#include "../kernel/sched/task.h"
+#include "../proc/ipc/channel.h"
+#include "../kernel/isr/isr.h"
+#include "../fs/ata.h"
+#include "../fs/minifs.h"
+#include "../fs/vfs.h"
 #include "../proc/process.h"
-#include "../proc/object.h"
+#include "../proc/ipc/object.h"
 #include "../drivers/pci.h"
 #include "../net/e1000.h"
 #include "../net/arp.h"
@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -119,6 +119,38 @@ static void cmd_shutdown(void) {
     vga_print("shutting down (QEMU/Bochs ACPI trick - no-op on real hardware)");
     serial_print("shutting down (QEMU/Bochs ACPI trick - no-op on real hardware)");
     outw(0x604, 0x2000);
+}
+
+// The classic 8042 keyboard-controller reset pulse - a real CPU reset,
+// works on real hardware (unlike cmd_shutdown's QEMU/Bochs-only ACPI
+// trick). Drains the controller's output buffer and waits for its input
+// buffer to go empty before pulsing, same sequence every real OS's
+// fallback reboot path uses, since writing the command byte while the
+// controller is mid-transaction is unreliable.
+//
+// Under this kernel's usual QEMU test setup (-kernel kernel.elf, no real
+// bootloader) this correctly resets the CPU, but does NOT loop back into
+// minic-os: QEMU's -kernel direct-boot shortcut doesn't reload the kernel
+// image on a guest-triggered reset (a general QEMU limitation, not fixable
+// from guest code), so the reset lands in SeaBIOS, which then has no
+// bootable device on the raw MiniFS disk.img and hangs there. The real
+// GRUB-ISO boot path (./build.sh iso, VirtualBox, real hardware) has an
+// actual bootloader on a bootable medium and reboots back into minic-os
+// correctly.
+static void cmd_reboot(void) {
+    vga_print("rebooting...");
+    serial_print("rebooting...");
+    u8 status;
+    do {
+        status = inb(0x64);
+        if (status & 1) {
+            inb(0x60);  // drain the output buffer
+        }
+    } while (status & 2);  // wait until the input buffer is empty
+    outb(0x64, 0xFE);      // pulse the CPU reset line
+    for (;;) {
+        __asm__ volatile("hlt");  // fallback if the pulse is ignored
+    }
 }
 
 // Reads the real hardware cursor position straight back off the CRTC
@@ -403,10 +435,15 @@ static void cmd_mkfs(void) {
     }
 }
 
-static int g_next_file_index;
-static char g_last_file_name[20];
+// "" = root, same convention proc/apps/file_manager.c's own current_path
+// already uses. Kernel-shell-only state - File Manager's own GUI
+// navigation (syscalls 37-39) is separate and unaffected.
+static char g_shell_cwd[128] = "";
 
-// Creates a new file each call: file0.mfs, file1.mfs, ...
+static int g_next_file_index;
+static char g_last_file_name[128];  // full path, not just the bare name - cmd_cat needs no cwd logic of its own
+
+// Creates a new file each call, inside the current directory: file0.mfs, file1.mfs, ...
 static void cmd_mkfile(void) {
     char name_buf[20];
     name_buf[0] = 'f'; name_buf[1] = 'i'; name_buf[2] = 'l'; name_buf[3] = 'e';
@@ -426,13 +463,16 @@ static void cmd_mkfile(void) {
     content_buf[i] = '\0';
     i = i + 1;
 
-    bool ok = fs_write_file(name_buf, (u8*) &content_buf[0], (u32) i);
+    char full_path[128];
+    join_path(full_path, g_shell_cwd, name_buf);
+
+    bool ok = fs_write_file(full_path, (u8*) &content_buf[0], (u32) i);
     if (!ok) {
         vga_print("mkfile failed");
         serial_print("mkfile failed");
         return;
     }
-    copy_name(&g_last_file_name[0], name_buf);
+    copy_name(&g_last_file_name[0], full_path);
     g_next_file_index = g_next_file_index + 1;
     vga_print("created ");
     serial_print("created ");
@@ -478,7 +518,7 @@ static void cmd_ls(void) {
         char name[20];
         u32 size;
         bool is_dir;
-        if (fs_list_entry("", i, name, &size, &is_dir)) {
+        if (fs_list_entry(g_shell_cwd, i, name, &size, &is_dir)) {
             vga_print(name);
             serial_print(name);
             if (is_dir) {
@@ -498,6 +538,221 @@ static void cmd_ls(void) {
         vga_print("(empty)");
         serial_print("(empty)");
     }
+}
+
+static void cmd_pwd(void) {
+    vga_print("/");
+    serial_print("/");
+    vga_print(g_shell_cwd);
+    serial_print(g_shell_cwd);
+}
+
+// `cd` (no arg) or `cd /` -> root. `cd ..` -> strip the last component
+// (same logic as proc/apps/file_manager.c's navigate_up). Otherwise
+// resolve the arg against the current dir and only commit if
+// fs_dir_exists confirms it's real - a failed cd leaves g_shell_cwd
+// untouched, never half-updated.
+static void cmd_cd_root(void) {
+    g_shell_cwd[0] = '\0';
+}
+
+static void cmd_cd(void) {
+    char* arg = &g_line_buffer[3];  // past "cd "
+    if (streq(arg, "/")) {
+        cmd_cd_root();
+        return;
+    }
+    if (streq(arg, "..")) {
+        int len = strlen_(g_shell_cwd);
+        int i = len - 1;
+        while (i >= 0 && g_shell_cwd[i] != '/') {
+            i = i - 1;
+        }
+        if (i < 0) {
+            g_shell_cwd[0] = '\0';
+        } else {
+            g_shell_cwd[i] = '\0';
+        }
+        return;
+    }
+    char new_path[128];
+    join_path(new_path, g_shell_cwd, arg);
+    if (!fs_dir_exists(new_path)) {
+        vga_print("cd: no such directory");
+        serial_print("cd: no such directory");
+        return;
+    }
+    int i = 0;
+    while (new_path[i] != '\0' && i < 127) {
+        g_shell_cwd[i] = new_path[i];
+        i = i + 1;
+    }
+    g_shell_cwd[i] = '\0';
+}
+
+static void cmd_mkdir(void) {
+    char* arg = &g_line_buffer[6];  // past "mkdir "
+    char new_path[128];
+    join_path(new_path, g_shell_cwd, arg);
+    bool ok = fs_create_dir(new_path);
+    if (!ok) {
+        vga_print("mkdir failed");
+        serial_print("mkdir failed");
+        return;
+    }
+    vga_print("created ");
+    serial_print("created ");
+    vga_print(arg);
+    serial_print(arg);
+}
+
+// Splits "<first> <second>" (whatever follows a command's own prefix,
+// e.g. args = &g_line_buffer[3] past "cp ") into two path fragments -
+// shared by cp/mv, the only two commands here that take two arguments.
+// No tokenizer exists in this codebase - same manual space-scan style as
+// every other multi-word-free command. Returns false (usage error
+// already printed) if there's no second argument.
+static bool split_two_args(char* args, char* first_out, char** second_out) {
+    int space = 0;
+    while (args[space] != '\0' && args[space] != ' ') {
+        space = space + 1;
+    }
+    if (args[space] == '\0') {
+        vga_print("usage: <cmd> <src> <dst>");
+        serial_print("usage: <cmd> <src> <dst>");
+        return false;
+    }
+    int i = 0;
+    while (i < space) {
+        first_out[i] = args[i];
+        i = i + 1;
+    }
+    first_out[i] = '\0';
+    *second_out = &args[space + 1];
+    return true;
+}
+
+// cp <src> <dst>, both resolved against the current directory. Unlike
+// mkfile's deliberate create-only demo semantics, a real `cp` is
+// expected to overwrite an existing destination - MiniFS's
+// fs_write_file refuses to write over an existing file (same limitation
+// this session's Settings fix already hit for /system/settings.cfg), so
+// delete-then-write is the only way to get real overwrite behavior.
+static void cmd_cp(void) {
+    char src_name[64];
+    char* dst_name;
+    if (!split_two_args(&g_line_buffer[3], src_name, &dst_name)) {  // past "cp "
+        return;
+    }
+
+    char src_path[128];
+    char dst_path[128];
+    join_path(src_path, g_shell_cwd, src_name);
+    join_path(dst_path, g_shell_cwd, dst_name);
+
+    u8 buf[4096];
+    int n = fs_read_file(src_path, buf, sizeof(buf));
+    if (n == -2) {
+        vga_print("cp: source too large");
+        serial_print("cp: source too large");
+        return;
+    }
+    if (n < 0) {
+        vga_print("cp: source not found");
+        serial_print("cp: source not found");
+        return;
+    }
+    fs_delete_file(dst_path);  // overwrite semantics - failure here just means dst didn't exist yet, expected
+    bool ok = fs_write_file(dst_path, buf, (u32) n);
+    if (!ok) {
+        vga_print("cp failed");
+        serial_print("cp failed");
+        return;
+    }
+    vga_print("copied");
+    serial_print("copied");
+}
+
+// mv <src> <dst> - MiniFS has no real in-place rename, so this is
+// genuinely copy-then-delete-original, same honesty as every other
+// documented limitation in this codebase, not hidden behind a
+// misleadingly "atomic-sounding" name.
+static void cmd_mv(void) {
+    char src_name[64];
+    char* dst_name;
+    if (!split_two_args(&g_line_buffer[3], src_name, &dst_name)) {  // past "mv "
+        return;
+    }
+
+    char src_path[128];
+    char dst_path[128];
+    join_path(src_path, g_shell_cwd, src_name);
+    join_path(dst_path, g_shell_cwd, dst_name);
+
+    u8 buf[4096];
+    int n = fs_read_file(src_path, buf, sizeof(buf));
+    if (n == -2) {
+        vga_print("mv: source too large");
+        serial_print("mv: source too large");
+        return;
+    }
+    if (n < 0) {
+        vga_print("mv: source not found");
+        serial_print("mv: source not found");
+        return;
+    }
+    fs_delete_file(dst_path);  // overwrite semantics, same as cp
+    bool ok = fs_write_file(dst_path, buf, (u32) n);
+    if (!ok) {
+        vga_print("mv failed");
+        serial_print("mv failed");
+        return;
+    }
+    fs_delete_file(src_path);
+    vga_print("moved");
+    serial_print("moved");
+}
+
+// touch <name> - creates an empty file. Unlike mkfile's deliberate
+// create-only demo semantics, real touch never fails just because the
+// file already exists (it would normally just update a timestamp there -
+// no timestamp concept exists in this kernel at all, so an existing file
+// is simply left alone and still reported as success).
+static void cmd_touch(void) {
+    char* arg = &g_line_buffer[6];  // past "touch "
+    char path[128];
+    join_path(path, g_shell_cwd, arg);
+    u8 empty = 0;
+    fs_write_file(path, &empty, 0);
+    vga_print("touched ");
+    serial_print("touched ");
+    vga_print(arg);
+    serial_print(arg);
+}
+
+// cat <name> - reads an explicit path relative to the current directory,
+// unlike bare `cat` (still kept, unchanged) which only ever replays
+// whatever `mkfile` last created.
+static void cmd_cat_path(void) {
+    char* arg = &g_line_buffer[4];  // past "cat "
+    char path[128];
+    join_path(path, g_shell_cwd, arg);
+    u8 buf[65];
+    int n = fs_read_file(path, buf, 64);
+    if (n == -2) {
+        vga_print("cat: file too large to display");
+        serial_print("cat: file too large to display");
+        return;
+    }
+    if (n < 0) {
+        vga_print("cat: file not found");
+        serial_print("cat: file not found");
+        return;
+    }
+    buf[n] = 0;
+    char* s = (char*) &buf[0];
+    vga_print(s);
+    serial_print(s);
 }
 
 static void cmd_vfs_cat(void) {
@@ -1061,10 +1316,10 @@ static void cmd_buttoncontent(void) {
     print_hex((u64) fb_get_pixel(470, 260));
 }
 
-// Reads back pixels from the desktop shell (proc/desktop_shell.c),
+// Reads back pixels from the desktop shell (proc/apps/desktop_shell.c),
 // auto-spawned at boot - no trigger needed, unlike ring3button/ring3text.
 // wallpaper: a point clear of both the taskbar AND the terminal window
-// (proc/terminal.c, at (100,60)-(600,380) - (400,100) used to be a valid
+// (proc/apps/terminal.c, at (100,60)-(600,380) - (400,100) used to be a valid
 // open-wallpaper point before that window existed and started covering
 // it), must be the flat wallpaper color. taskbar_top/taskbar_bottom: the
 // same x, first and last row of the 20px-tall taskbar - both must read
@@ -1257,6 +1512,8 @@ void run_command(void) {
         cmd_reset();
     } else if (streq(g_line_buffer, "shutdown")) {
         cmd_shutdown();
+    } else if (streq(g_line_buffer, "reboot")) {
+        cmd_reboot();
     } else if (streq(g_line_buffer, "cursor")) {
         cmd_cursor();
     } else if (streq(g_line_buffer, "frames")) {
@@ -1291,8 +1548,24 @@ void run_command(void) {
         cmd_mkfile();
     } else if (streq(g_line_buffer, "cat")) {
         cmd_cat();
+    } else if (starts_with(g_line_buffer, "cat ")) {
+        cmd_cat_path();
     } else if (streq(g_line_buffer, "ls")) {
         cmd_ls();
+    } else if (streq(g_line_buffer, "pwd")) {
+        cmd_pwd();
+    } else if (streq(g_line_buffer, "cd")) {
+        cmd_cd_root();
+    } else if (starts_with(g_line_buffer, "cd ")) {
+        cmd_cd();
+    } else if (starts_with(g_line_buffer, "mkdir ")) {
+        cmd_mkdir();
+    } else if (starts_with(g_line_buffer, "cp ")) {
+        cmd_cp();
+    } else if (starts_with(g_line_buffer, "mv ")) {
+        cmd_mv();
+    } else if (starts_with(g_line_buffer, "touch ")) {
+        cmd_touch();
     } else if (starts_with(g_line_buffer, "vfscat ")) {
         cmd_vfs_cat();
     } else if (streq(g_line_buffer, "vfswrite")) {

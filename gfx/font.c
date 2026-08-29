@@ -1,4 +1,4 @@
-// Hand-authored 5x7 bitmap font - A-Z, 0-9, space, and . , ! ? : - only.
+// Hand-authored 5x7 bitmap font - A-Z, 0-9, space, and . , ! ? : - > only.
 // Every other character (lowercase, other punctuation) is a known gap,
 // closed in a later milestone; font_get_glyph() returns false for them.
 
@@ -53,6 +53,7 @@ static const glyph_entry GLYPHS[] = {
     {'?', {0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b00000, 0b00100}},
     {':', {0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000}},
     {'-', {0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000}},
+    {'>', {0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000}},
 };
 
 #define GLYPH_COUNT (int) (sizeof(GLYPHS) / sizeof(GLYPHS[0]))

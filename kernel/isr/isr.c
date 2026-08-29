@@ -1,12 +1,12 @@
 // Called from boot/interrupts.s's isr_common_stub for every known vector.
 
 #include "isr.h"
-#include "../drivers/io.h"
-#include "../drivers/keyboard.h"
-#include "../drivers/mouse.h"
-#include "../drivers/vbe.h"
-#include "../gfx/window.h"
-#include "../lib/strings.h"
+#include "../../drivers/io.h"
+#include "../../drivers/keyboard.h"
+#include "../../drivers/mouse.h"
+#include "../../drivers/vbe.h"
+#include "../../gfx/window.h"
+#include "../../lib/strings.h"
 #include "../sched/task.h"
 
 u64 g_tick_count;
@@ -71,6 +71,7 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
                     serial_putc('\b');
                     serial_putc(' ');
                     serial_putc('\b');
+                    term_scrollback_backspace();
                 }
             } else {
                 char c = g_scancode_table[scancode];

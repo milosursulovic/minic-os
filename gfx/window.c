@@ -8,6 +8,8 @@
 #include "../drivers/mouse.h"
 #include "font.h"
 #include "../lib/strings.h"
+#include "image.h"
+#include "cursor_image.h"
 
 window g_windows[WINDOW_SLOTS];
 int g_window_zorder[WINDOW_SLOTS];
@@ -32,7 +34,7 @@ u32 g_window_content[WINDOW_SLOTS][WINDOW_CONTENT_MAX_WIDTH * WINDOW_CONTENT_MAX
 #define COMPOSITOR_BACKBUFFER_HEIGHT 600
 static u32 g_backbuffer[COMPOSITOR_BACKBUFFER_WIDTH * COMPOSITOR_BACKBUFFER_HEIGHT];
 
-static void bb_put_pixel(u32 x, u32 y, u32 color) {
+void bb_put_pixel(u32 x, u32 y, u32 color) {
     if (x >= COMPOSITOR_BACKBUFFER_WIDTH || y >= COMPOSITOR_BACKBUFFER_HEIGHT) {
         return;
     }
@@ -297,50 +299,13 @@ static void draw_window_content(window* w, int id) {
     }
 }
 
-// Classic arrow cursor, hotspot at its top-left corner (mouse_x, mouse_y) -
-// the corner a real arrow cursor's click point sits at, same convention as
-// every desktop pointer. A plain growing right-triangle (the previous
-// shape here) reads as a wedge, not an arrow - a real arrow's head is cut
-// off flat partway down and finishes with a narrower heel/tail below the
-// cut, which is what actually makes it recognizable. 0 = transparent
-// (background shows through), 1 = black outline, 2 = white fill.
-#define CURSOR_WIDTH 11
-#define CURSOR_HEIGHT 16
-static const u8 CURSOR_BITMAP[CURSOR_HEIGHT][CURSOR_WIDTH] = {
-    {1,0,0,0,0,0,0,0,0,0,0},
-    {1,1,0,0,0,0,0,0,0,0,0},
-    {1,2,1,0,0,0,0,0,0,0,0},
-    {1,2,2,1,0,0,0,0,0,0,0},
-    {1,2,2,2,1,0,0,0,0,0,0},
-    {1,2,2,2,2,1,0,0,0,0,0},
-    {1,2,2,2,2,2,1,0,0,0,0},
-    {1,2,2,2,2,2,2,1,0,0,0},
-    {1,2,2,2,2,2,2,2,1,0,0},
-    {1,2,2,2,2,2,2,2,2,1,0},
-    {1,2,2,2,2,2,1,1,1,1,1},  // flat cut across the head's base
-    {1,2,2,1,1,0,0,0,0,0,0},
-    {1,2,1,2,1,0,0,0,0,0,0},
-    {1,1,0,2,1,0,0,0,0,0,0},
-    {1,0,0,0,2,1,0,0,0,0,0},
-    {0,0,0,0,0,1,0,0,0,0,0},
-};
-
+// The cursor is a real image asset now (gfx/cursor_image.c), drawn by the
+// generic gfx/image.c renderer - the compositor itself no longer knows
+// anything about the cursor's shape, only that it draws "an image" at the
+// live mouse position.
 static void draw_cursor(void) {
-    i32 mouse_x = g_mouse_x;
-    i32 mouse_y = g_mouse_y;
-    int row = 0;
-    while (row < CURSOR_HEIGHT) {
-        int col = 0;
-        while (col < CURSOR_WIDTH) {
-            u8 cell = CURSOR_BITMAP[row][col];
-            if (cell != 0) {
-                u32 color = (cell == 1) ? 0x00000000u : 0x00FFFFFFu;
-                bb_put_pixel((u32) (mouse_x + col), (u32) (mouse_y + row), color);
-            }
-            col = col + 1;
-        }
-        row = row + 1;
-    }
+    cursor_image_init();
+    draw_image((u32) g_mouse_x, (u32) g_mouse_y, &g_cursor_image);
 }
 
 void compositor_redraw(void) {

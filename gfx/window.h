@@ -66,5 +66,10 @@ bool window_draw_text(int id, u32 x, u32 y, const char* text, u32 fg, u32 bg);
 bool window_query(int id, i32* body_x, i32* body_y, u32* body_width, u32* body_height);
 // Fills the background, then draws every window bottom-to-top.
 void compositor_redraw(void);
+// Writes one pixel into the compositor's off-screen backbuffer (bounds-
+// checked, out-of-range is a silent no-op) - the one seam gfx/image.c's
+// generic draw_image() needs; the backbuffer array itself and every other
+// backbuffer helper (bb_fill_rect) stay private to window.c.
+void bb_put_pixel(u32 x, u32 y, u32 color);
 
 #pragma GCC visibility pop

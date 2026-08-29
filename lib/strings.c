@@ -105,3 +105,22 @@ int format_hex(u64 value, u8* out) {
     }
     return len;
 }
+
+void join_path(char* out, const char* base, const char* name) {
+    int i = 0;
+    if (base[0] != '\0') {
+        while (base[i] != '\0') {
+            out[i] = base[i];
+            i = i + 1;
+        }
+        out[i] = '/';
+        i = i + 1;
+    }
+    int j = 0;
+    while (name[j] != '\0') {
+        out[i] = name[j];
+        i = i + 1;
+        j = j + 1;
+    }
+    out[i] = '\0';
+}

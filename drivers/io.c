@@ -13,6 +13,10 @@ static void term_scrollback_append(char c) {
     g_term_write_pos = g_term_write_pos + 1;
 }
 
+void term_scrollback_backspace(void) {
+    term_scrollback_append('\b');
+}
+
 void outb(u16 port, u8 value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }

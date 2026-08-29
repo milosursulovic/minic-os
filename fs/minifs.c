@@ -359,6 +359,11 @@ bool fs_list_entry(const char* dir_path, int index, char* name_out, u32* size_ou
     return true;
 }
 
+bool fs_dir_exists(const char* path) {
+    u32 dir_lba;
+    return resolve_dir(path, &dir_lba);
+}
+
 // Returns byte count read, -1 if not found (or path resolves to a
 // directory - reading a directory as a file fails the same way), -2 if
 // too big for max_len.
