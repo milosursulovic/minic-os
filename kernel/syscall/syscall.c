@@ -825,9 +825,14 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         return (u64) copied;
     }
     if (num == 37) {
+        // Routed through the VFS now (was a direct fs_list_entry call) so
+        // a caller navigating from dir_path == "" sees the real mount
+        // table (system/devices/processes) as the true namespace root,
+        // not just a raw MiniFS listing - see kernel/fs/vfs/vfs.c's
+        // vfs_list_entry().
         fs_list_args* args = (fs_list_args*) a1;
-        bool ok = fs_list_entry(args->dir_path, args->index, args->name_out,
-                                 args->size_out, args->is_dir_out);
+        bool ok = vfs_list_entry(args->dir_path, args->index, args->name_out,
+                                  args->size_out, args->is_dir_out);
         return (u64) ok;
     }
     if (num == 38) {

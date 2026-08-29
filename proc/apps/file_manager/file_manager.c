@@ -83,6 +83,46 @@ static int strlen_local(const char* s) {
     return n;
 }
 
+static bool starts_with_local(const char* s, const char* prefix) {
+    int i = 0;
+    while (prefix[i] != '\0') {
+        if (s[i] != prefix[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// do_new_file/do_new_dir/do_delete's raw MiniFS syscalls (38/39, and
+// gt_vfs_write's own "/system/" prefix requirement) are only ever
+// meaningful inside the one writable mount - /devices and /processes
+// reflect live kernel state, not something you create or delete files
+// in. g_current_path is a real VFS-absolute path now ("/system",
+// "/system/sub", "/devices", ...), so this is a real, not cosmetic, gate.
+static bool in_system_mount(void) {
+    return starts_with_local(g_current_path, "/system");
+}
+
+// gt_fs_mkdir/gt_fs_delete (syscalls 38/39) are deliberately left VFS-
+// unaware - they still expect a bare MiniFS-relative path, same as
+// before this session's VFS-root rework. Strips the "/system" prefix
+// (+ one following '/', if present) from a real VFS-absolute path,
+// mirroring vfs.c's own internal vfs_strip_prefix() (can't share that
+// directly - it's kernel-side, this runs in ring3).
+static void strip_system_prefix(char* out, const char* path) {
+    const char* rest = &path[7];  // strlen("/system")
+    if (rest[0] == '/') {
+        rest = &rest[1];
+    }
+    int i = 0;
+    while (rest[i] != '\0') {
+        out[i] = rest[i];
+        i = i + 1;
+    }
+    out[i] = '\0';
+}
+
 static void uppercase_copy(char* dst, const char* src, int max_len) {
     int i = 0;
     while (src[i] != '\0' && i < max_len - 1) {
@@ -96,9 +136,10 @@ static void uppercase_copy(char* dst, const char* src, int max_len) {
     dst[i] = '\0';
 }
 
-// path/name for a bare name at root, or path/name joined with '/'
-// otherwise - the join both fs_* syscalls (relative to MiniFS root) and
-// New File's vfs path (once /system/ is prefixed) need.
+// g_current_path is a real VFS-absolute path ("" only for the true
+// virtual root, "/system", "/devices", "/system/sub", ...) - joining a
+// name onto the empty root correctly produces "/name" (entering a mount),
+// same "/" the join onto any non-empty base already naturally carries.
 static void join_path(char* out, const char* base, const char* name) {
     int i = 0;
     if (base[0] != '\0') {
@@ -106,9 +147,9 @@ static void join_path(char* out, const char* base, const char* name) {
             out[i] = base[i];
             i = i + 1;
         }
-        out[i] = '/';
-        i = i + 1;
     }
+    out[i] = '/';
+    i = i + 1;
     int j = 0;
     while (name[j] != '\0') {
         out[i] = name[j];
@@ -202,10 +243,9 @@ static void redraw_path_label(int window_id) {
         i = i + 1;
     }
     if (g_current_path[0] == '\0') {
-        g_path_label[i] = 'R'; i = i + 1;
-        g_path_label[i] = 'O'; i = i + 1;
-        g_path_label[i] = 'O'; i = i + 1;
-        g_path_label[i] = 'T'; i = i + 1;
+        // The real VFS root itself - a literal "/" (font gained this
+        // glyph earlier this session), not the old fixed "ROOT" text.
+        g_path_label[i] = '/'; i = i + 1;
         g_path_label[i] = '\0';
     } else {
         uppercase_copy(&g_path_label[i], g_current_path, 64 - i);
@@ -266,6 +306,9 @@ static void redraw_all_rows(int window_id) {
 }
 
 static void do_new_file(int window_id) {
+    if (!in_system_mount()) {  // /devices, /processes reflect live kernel state - read-only
+        return;
+    }
     int attempt = 0;
     while (attempt < 10) {
         char name[20];
@@ -275,17 +318,11 @@ static void do_new_file(int window_id) {
         name[9] = '\0';
         g_next_file_num = g_next_file_num + 1;
 
-        char rel_path[MAX_PATH_LEN];
-        join_path(rel_path, g_current_path, name);
-        char full_path[MAX_PATH_LEN + 8];
-        full_path[0] = '/'; full_path[1] = 's'; full_path[2] = 'y'; full_path[3] = 's';
-        full_path[4] = 't'; full_path[5] = 'e'; full_path[6] = 'm'; full_path[7] = '/';
-        int i = 0;
-        while (rel_path[i] != '\0') {
-            full_path[8 + i] = rel_path[i];
-            i = i + 1;
-        }
-        full_path[8 + i] = '\0';
+        // g_current_path is already a real VFS-absolute path ("/system"
+        // or "/system/sub") - the join is the full path gt_vfs_write
+        // needs directly, no more manual "/system/" prefix-copying.
+        char full_path[MAX_PATH_LEN];
+        join_path(full_path, g_current_path, name);
 
         u8 content = 0;
         if (gt_vfs_write(full_path, &content, 1)) {
@@ -299,6 +336,9 @@ static void do_new_file(int window_id) {
 }
 
 static void do_new_dir(int window_id) {
+    if (!in_system_mount()) {
+        return;
+    }
     int attempt = 0;
     while (attempt < 10) {
         char name[20];
@@ -307,8 +347,10 @@ static void do_new_dir(int window_id) {
         name[7] = '\0';
         g_next_dir_num = g_next_dir_num + 1;
 
-        char rel_path[MAX_PATH_LEN];
-        join_path(rel_path, g_current_path, name);
+        char full_path[MAX_PATH_LEN];
+        join_path(full_path, g_current_path, name);
+        char rel_path[MAX_PATH_LEN];  // gt_fs_mkdir (syscall 39) is VFS-unaware - bare MiniFS-relative
+        strip_system_prefix(rel_path, full_path);
         if (gt_fs_mkdir(rel_path)) {
             g_selected_index = -1;
             refresh_listing();
@@ -320,11 +362,16 @@ static void do_new_dir(int window_id) {
 }
 
 static void do_delete(int window_id) {
+    if (!in_system_mount()) {
+        return;
+    }
     if (g_selected_index < 0 || g_selected_index >= g_entry_count) {
         return;
     }
-    char rel_path[MAX_PATH_LEN];
-    join_path(rel_path, g_current_path, g_entries[g_selected_index].name);
+    char full_path[MAX_PATH_LEN];
+    join_path(full_path, g_current_path, g_entries[g_selected_index].name);
+    char rel_path[MAX_PATH_LEN];  // gt_fs_delete (syscall 38) is VFS-unaware - bare MiniFS-relative
+    strip_system_prefix(rel_path, full_path);
     gt_fs_delete(rel_path);
     g_selected_index = -1;
     refresh_listing();

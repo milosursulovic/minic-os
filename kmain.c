@@ -69,6 +69,7 @@ void _start(void) {
     create_isolated_task(&proc_receiver_entry);
     vfs_mount("/system", BACKEND_MINIFS);
     vfs_mount("/devices", BACKEND_DEVICE);
+    vfs_mount("/processes", BACKEND_PROCFS);
 
     // init process: spawns proc/demo/hello_service.c via spawn_builtin once running.
     spawn_process(&g_init_prog_start, &g_init_prog_end, 0x80000000, 0x80020000);
