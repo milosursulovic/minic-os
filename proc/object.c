@@ -6,7 +6,7 @@
 kernel_object g_objects[8];
 int g_object_count;
 
-handle g_handle_tables[4][8];
+handle g_handle_tables[MAX_PROCESSES][8];
 
 int alloc_object(int type, int data_index) {
     int i = 0;

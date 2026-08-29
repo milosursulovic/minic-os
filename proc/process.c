@@ -14,7 +14,7 @@ extern u8 g_test_prog_start;
 extern u8 g_test_prog_end;
 #pragma GCC visibility pop
 
-process g_processes[4];
+process g_processes[MAX_PROCESSES];
 int g_process_count;
 
 // run_ring3_test() never returns - last kernel-mode code this task runs.
@@ -37,7 +37,7 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
         }
         p = p + 1;
     }
-    if (proc_index < 0 && g_process_count >= 4) {
+    if (proc_index < 0 && g_process_count >= MAX_PROCESSES) {
         return -1;
     }
 

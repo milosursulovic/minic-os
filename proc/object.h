@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../types.h"
+#include "process.h"
 
 #pragma GCC visibility push(hidden)
 
@@ -32,7 +33,7 @@ typedef struct {
 
 #define HANDLES_PER_PROCESS 8
 
-extern handle g_handle_tables[4][8];
+extern handle g_handle_tables[MAX_PROCESSES][8];
 
 int alloc_object(int type, int data_index);
 void free_object(int object_index);

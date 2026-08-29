@@ -477,9 +477,14 @@ static void cmd_ls(void) {
     while (i < MINIFS_MAX_FILES) {
         char name[20];
         u32 size;
-        if (fs_list_entry(i, name, &size)) {
+        bool is_dir;
+        if (fs_list_entry("", i, name, &size, &is_dir)) {
             vga_print(name);
             serial_print(name);
+            if (is_dir) {
+                vga_print("/");
+                serial_print("/");
+            }
             vga_print(" 0x");
             serial_print(" 0x");
             print_hex((u64) size);

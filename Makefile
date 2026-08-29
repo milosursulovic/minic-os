@@ -62,7 +62,7 @@ DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 ASM_SRCS := boot/boot.s boot/interrupts.s sched/switch.s syscall/usermode.s
 ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './proc/desktop_shell.c' -not -path './proc/terminal.c' -not -path './.claude/*'))
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './proc/desktop_shell.c' -not -path './proc/terminal.c' -not -path './proc/file_manager.c' -not -path './.claude/*'))
 C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
 .PHONY: all run iso disk clean
@@ -158,6 +158,18 @@ proc/terminal.bin: proc/terminal.c proc/gui_toolkit.h proc/ring3.ld
 
 -include $(BUILD_DIR)/proc/terminal.d
 
+# The file manager - same shape again, auto-spawned by kmain.c alongside
+# desktop_shell/terminal/init.
+proc/file_manager.bin: proc/file_manager.c proc/gui_toolkit.h proc/ring3.ld disk/minifs.h
+	@mkdir -p $(BUILD_DIR)/proc
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/file_manager.bin -MF $(BUILD_DIR)/proc/file_manager.d -S -o $(BUILD_DIR)/proc/file_manager.gen.s proc/file_manager.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/file_manager.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/file_manager_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/file_manager_linked.elf $(BUILD_DIR)/proc/file_manager_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(BUILD_DIR)/proc/file_manager_linked.elf proc/file_manager.bin
+
+-include $(BUILD_DIR)/proc/file_manager.d
+
 # `.incbin` in each *_blob.s resolves relative to the assembler's own
 # working directory, not the .s file's location - `cd proc` first,
 # matching the MiniC-era build's own convention. `../$@` still lands the
@@ -182,8 +194,12 @@ $(BUILD_DIR)/proc/terminal_blob.o: proc/terminal_blob.s proc/terminal.bin
 	@mkdir -p $(BUILD_DIR)/proc
 	cd proc && $(AS) --32 terminal_blob.s -o ../$@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o $(BUILD_DIR)/proc/terminal_blob.o
-	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o $(BUILD_DIR)/proc/terminal_blob.o
+$(BUILD_DIR)/proc/file_manager_blob.o: proc/file_manager_blob.s proc/file_manager.bin
+	@mkdir -p $(BUILD_DIR)/proc
+	cd proc && $(AS) --32 file_manager_blob.s -o ../$@
+
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o $(BUILD_DIR)/proc/terminal_blob.o $(BUILD_DIR)/proc/file_manager_blob.o
+	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o $(BUILD_DIR)/proc/terminal_blob.o $(BUILD_DIR)/proc/file_manager_blob.o
 	@echo "built kernel.elf"
 
 disk.img:
@@ -214,3 +230,4 @@ clean:
 	rm -f proc/hello_service.bin proc/hello_service_linked.elf
 	rm -f proc/desktop_shell.bin proc/desktop_shell_linked.elf
 	rm -f proc/terminal.bin proc/terminal_linked.elf
+	rm -f proc/file_manager.bin proc/file_manager_linked.elf

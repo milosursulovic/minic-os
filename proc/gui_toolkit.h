@@ -50,6 +50,14 @@ typedef struct __attribute__((packed)) {
     u32 max_len;
 } gt_term_read_args;
 
+typedef struct __attribute__((packed)) {
+    char* dir_path;
+    int index;
+    char* name_out;
+    u32* size_out;
+    bool* is_dir_out;
+} gt_fs_list_args;
+
 static u64 gt_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3) {
     u64 result;
     register u64 r_num __asm__("rax") = num;
@@ -140,6 +148,37 @@ static __attribute__((unused)) u32 gt_term_read(u64 since_pos, char* out_buf, u3
     args.out_buf = out_buf;
     args.max_len = max_len;
     return (u32) gt_syscall(36, (u64) &args, 0, 0);
+}
+
+// Lists one entry (0..MINIFS_MAX_FILES-1) of dir_path ("" = /system
+// root). Returns false past the last used slot or an unresolvable
+// dir_path - same as fs_list_entry (disk/minifs.c), which this wraps
+// via syscall 37.
+static __attribute__((unused)) bool gt_fs_list(char* dir_path, int index, char* name_out, u32* size_out, bool* is_dir_out) {
+    gt_fs_list_args args;
+    args.dir_path = dir_path;
+    args.index = index;
+    args.name_out = name_out;
+    args.size_out = size_out;
+    args.is_dir_out = is_dir_out;
+    return gt_syscall(37, (u64) &args, 0, 0) != 0;
+}
+
+// Flat removal (no child-cascade check on a directory) - wraps
+// fs_delete_file via syscall 38.
+static __attribute__((unused)) bool gt_fs_delete(char* path) {
+    return gt_syscall(38, (u64) path, 0, 0) != 0;
+}
+
+// Wraps fs_create_dir via syscall 39.
+static __attribute__((unused)) bool gt_fs_mkdir(char* path) {
+    return gt_syscall(39, (u64) path, 0, 0) != 0;
+}
+
+// Wraps syscall 5 (vfs_write) - create-only-fails-if-exists, same as
+// every other vfs_write caller (cmd_mkfile, install, ...).
+static __attribute__((unused)) bool gt_vfs_write(char* path, u8* data, u32 len) {
+    return gt_syscall(5, (u64) path, (u64) data, (u64) len) != (u64) -1;
 }
 
 // Minimal, self-contained hex formatter - lib/strings.c's format_hex()

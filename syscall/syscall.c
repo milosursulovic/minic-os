@@ -20,7 +20,11 @@
 // no args, no pointer needed), 36 term_read (pointer-to-struct - since_pos
 // plus an embedded raw ring3 output-buffer pointer, trusted as-is like
 // every other embedded pointer here - copies g_term_scrollback content
-// since since_pos, returns bytes copied).
+// since since_pos, returns bytes copied), 37 fs_list (pointer-to-struct -
+// dir_path/index in, name_out/size_out/is_dir_out embedded raw ring3
+// pointers, wraps fs_list_entry), 38 fs_delete (raw char* path via a1,
+// wraps fs_delete_file), 39 fs_mkdir (raw char* path via a1, wraps
+// fs_create_dir).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -33,6 +37,7 @@
 #include "../proc/net_request.h"
 #include "../proc/net_tcp_request.h"
 #include "../disk/vfs.h"
+#include "../disk/minifs.h"
 #include "../mm/paging.h"
 #include "../mm/frames.h"
 #include "../drivers/vbe.h"
@@ -80,6 +85,14 @@ typedef struct __attribute__((packed)) {
     char* out_buf;
     u32 max_len;
 } term_read_args;
+
+typedef struct __attribute__((packed)) {
+    char* dir_path;
+    int index;
+    char* name_out;
+    u32* size_out;
+    bool* is_dir_out;
+} fs_list_args;
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -763,6 +776,22 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
             copied = copied + 1;
         }
         return (u64) copied;
+    }
+    if (num == 37) {
+        fs_list_args* args = (fs_list_args*) a1;
+        bool ok = fs_list_entry(args->dir_path, args->index, args->name_out,
+                                 args->size_out, args->is_dir_out);
+        return (u64) ok;
+    }
+    if (num == 38) {
+        char* path = (char*) a1;
+        bool ok = fs_delete_file(path);
+        return (u64) ok;
+    }
+    if (num == 39) {
+        char* path = (char*) a1;
+        bool ok = fs_create_dir(path);
+        return (u64) ok;
     }
     return (u64) -1;  // unknown syscall
 }
