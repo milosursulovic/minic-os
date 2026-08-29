@@ -4,10 +4,28 @@
 #include "../drivers/io.h"
 #include "../drivers/keyboard.h"
 #include "../drivers/mouse.h"
+#include "../drivers/vbe.h"
+#include "../gfx/window.h"
 #include "../lib/strings.h"
 #include "../sched/task.h"
 
 u64 g_tick_count;
+
+// Drives the mouse cursor's on-screen redraw (gfx/window.c's draw_cursor(),
+// composited last in every compositor_redraw() call) independent of
+// whatever else is or isn't changing on screen - without this, the cursor
+// only moves when some unrelated window redraw happens to fire (a button
+// state change, the uptime label's tick, etc), which looks frozen/laggy
+// during a plain mouse move with no clicks. Same tick-delta-AND-real-change
+// double guard as desktop_shell.c's uptime label and terminal.c's row
+// redraw - a compositor_redraw() is a full 800x600 backbuffer pass, so
+// firing it on every single timer tick (QEMU/TCG's PIT runs far faster
+// than the nominal 100Hz - see CLAUDE.md) would reintroduce the same
+// redraw-storm bug class already hit twice this session.
+#define CURSOR_REDRAW_TICK_INTERVAL 3
+static i32 g_cursor_last_drawn_x = -1;
+static i32 g_cursor_last_drawn_y = -1;
+static u64 g_cursor_last_redraw_tick;
 
 u64 read_cr2(void) {
     u64 value;
@@ -21,6 +39,16 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
         if (g_tick_count % 100 == 0) {
             serial_putc('.');  // one dot per ~1s at 100Hz, proves the timer keeps firing
         }
+
+        if (g_fb_enabled
+            && g_tick_count - g_cursor_last_redraw_tick >= CURSOR_REDRAW_TICK_INTERVAL
+            && (g_mouse_x != g_cursor_last_drawn_x || g_mouse_y != g_cursor_last_drawn_y)) {
+            g_cursor_last_drawn_x = g_mouse_x;
+            g_cursor_last_drawn_y = g_mouse_y;
+            g_cursor_last_redraw_tick = g_tick_count;
+            compositor_redraw();
+        }
+
         outb(0x20, 0x20);  // EOI before yield() might switch away
 
         // Calling yield() from inside the timer ISR is what makes scheduling

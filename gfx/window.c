@@ -5,6 +5,7 @@
 
 #include "window.h"
 #include "../drivers/vbe.h"
+#include "../drivers/mouse.h"
 #include "font.h"
 #include "../lib/strings.h"
 
@@ -296,6 +297,52 @@ static void draw_window_content(window* w, int id) {
     }
 }
 
+// Classic arrow cursor, hotspot at its top-left corner (mouse_x, mouse_y) -
+// the corner a real arrow cursor's click point sits at, same convention as
+// every desktop pointer. A plain growing right-triangle (the previous
+// shape here) reads as a wedge, not an arrow - a real arrow's head is cut
+// off flat partway down and finishes with a narrower heel/tail below the
+// cut, which is what actually makes it recognizable. 0 = transparent
+// (background shows through), 1 = black outline, 2 = white fill.
+#define CURSOR_WIDTH 11
+#define CURSOR_HEIGHT 16
+static const u8 CURSOR_BITMAP[CURSOR_HEIGHT][CURSOR_WIDTH] = {
+    {1,0,0,0,0,0,0,0,0,0,0},
+    {1,1,0,0,0,0,0,0,0,0,0},
+    {1,2,1,0,0,0,0,0,0,0,0},
+    {1,2,2,1,0,0,0,0,0,0,0},
+    {1,2,2,2,1,0,0,0,0,0,0},
+    {1,2,2,2,2,1,0,0,0,0,0},
+    {1,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,1,0,0,0},
+    {1,2,2,2,2,2,2,2,1,0,0},
+    {1,2,2,2,2,2,2,2,2,1,0},
+    {1,2,2,2,2,2,1,1,1,1,1},  // flat cut across the head's base
+    {1,2,2,1,1,0,0,0,0,0,0},
+    {1,2,1,2,1,0,0,0,0,0,0},
+    {1,1,0,2,1,0,0,0,0,0,0},
+    {1,0,0,0,2,1,0,0,0,0,0},
+    {0,0,0,0,0,1,0,0,0,0,0},
+};
+
+static void draw_cursor(void) {
+    i32 mouse_x = g_mouse_x;
+    i32 mouse_y = g_mouse_y;
+    int row = 0;
+    while (row < CURSOR_HEIGHT) {
+        int col = 0;
+        while (col < CURSOR_WIDTH) {
+            u8 cell = CURSOR_BITMAP[row][col];
+            if (cell != 0) {
+                u32 color = (cell == 1) ? 0x00000000u : 0x00FFFFFFu;
+                bb_put_pixel((u32) (mouse_x + col), (u32) (mouse_y + row), color);
+            }
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+}
+
 void compositor_redraw(void) {
     bb_fill_rect(0, 0, g_fb_width, g_fb_height, WINDOW_BACKGROUND_COLOR);
     int i = 0;
@@ -313,6 +360,7 @@ void compositor_redraw(void) {
         }
         i = i + 1;
     }
+    draw_cursor();
 
     // Publish: one tight, branch-light pass from the back buffer to the
     // real MMIO framebuffer - the only part of a redraw an external
