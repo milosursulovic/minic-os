@@ -47,6 +47,7 @@ static char g_lines[ROWS][COLS + 1];
 static int g_cur_row;
 static int g_cur_col;
 static bool g_scrolled_this_batch;
+static bool g_cleared_this_batch;
 
 static void terminal_scroll_up(void) {
     int row = 0;
@@ -74,7 +75,7 @@ static void terminal_feed(char c) {
         }
         g_cur_row = 0;
         g_cur_col = 0;
-        g_scrolled_this_batch = true;
+        g_cleared_this_batch = true;
         return;
     }
     if (c == '\n') {
@@ -165,6 +166,7 @@ void _start(void) {
             // a scroll actually shifted every row's content.
             int row_before_batch = g_cur_row;
             g_scrolled_this_batch = false;
+            g_cleared_this_batch = false;
 
             u32 i = 0;
             while (i < copied) {
@@ -173,7 +175,23 @@ void _start(void) {
             }
             last_pos = last_pos + copied;
 
-            if (g_scrolled_this_batch) {
+            if (g_cleared_this_batch) {
+                // Every row is uniformly blank after a clear - one single
+                // full-body fill (one compositor_redraw() pass) instead of
+                // ROWS separate per-row redraws (ROWS full passes, real
+                // enough synchronous overhead under an unthrottled poll
+                // loop to feel like the console had frozen for a moment -
+                // same overhead class this session already found and
+                // throttled for the uptime label/cursor/regular typing).
+                gt_window_fill_rect_args bg_args;
+                bg_args.id = window_id;
+                bg_args.x = 0;
+                bg_args.y = 0;
+                bg_args.width = BODY_WIDTH;
+                bg_args.height = BODY_HEIGHT;
+                bg_args.color = BODY_COLOR;
+                gt_syscall(30, (u64) &bg_args, 0, 0);
+            } else if (g_scrolled_this_batch) {
                 int row = 0;
                 while (row < ROWS) {
                     terminal_redraw_row(window_id, row);
