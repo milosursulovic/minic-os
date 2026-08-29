@@ -36,6 +36,15 @@
 // from the CMOS RTC via kernel/drivers/rtc/rtc.c), 43 sys_date (no args -
 // day/month/year packed into the return value, same style, no century
 // register read - see rtc.h).
+// 44 file_open (path via a1, mode via a2: 0=read/1=write - proc/ipc/file/
+// file.h's real persistent open-file object, first use of RIGHT_READ/
+// RIGHT_WRITE), 45/46 file_read/file_write (handle via a1, buffer pointer
+// via a2, length via a3 - real rights-checked, incremental, cursor-
+// advancing I/O, unlike syscalls 4/5's one-shot vfs_read/vfs_write), 47
+// file_seek (handle via a1, position via a2, read-mode only), 48
+// file_close (handle via a1 - write-mode commits the accumulated buffer
+// to real MiniFS storage, delete-then-write, same pattern as syscall 13's
+// handle_close but with a real commit step first).
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -47,6 +56,7 @@
 #include "../../proc/ipc/io_request/io_request.h"
 #include "../../proc/ipc/net_request/net_request.h"
 #include "../../proc/ipc/net_tcp_request/net_tcp_request.h"
+#include "../../proc/ipc/file/file.h"
 #include "../fs/vfs/vfs.h"
 #include "../fs/minifs/minifs.h"
 #include "../mm/paging/paging.h"
@@ -889,6 +899,123 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         rtc_read_date(&day, &month, &year);
         u64 packed = ((u64) day << 24) | ((u64) month << 16) | (u64) year;
         return packed;
+    }
+    if (num == 44) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        char* path = (char*) a1;
+        bool write_mode = a2 != 0;
+        int slot = file_object_open(path, write_mode);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_FILE, slot);
+        if (obj_index < 0) {
+            file_object_close(slot);
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, write_mode ? RIGHT_WRITE : RIGHT_READ);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            file_object_close(slot);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 45) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_READ) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_FILE) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        u8* buf = (u8*) a2;
+        int n = file_object_read(slot, buf, (u32) a3);
+        return (u64) n;
+    }
+    if (num == 46) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_WRITE) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_FILE) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        u8* data = (u8*) a2;
+        int n = file_object_write(slot, data, (u32) a3);
+        return (u64) n;
+    }
+    if (num == 47) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_READ) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_FILE) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        bool ok = file_object_seek(slot, (u32) a2);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 48) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_FILE) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        bool ok = file_object_close(slot);
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
+        return ok ? 0 : (u64) -1;
     }
     return (u64) -1;  // unknown syscall
 }

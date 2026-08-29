@@ -544,6 +544,45 @@ void _start(void) {
             }
             p = p + 1;
         }
+    } else if (trigger_value == 15) {
+        // trigger 15 (ring3fileobj): real persistent File kernel objects
+        // (gui_toolkit.h's gt_file_*, syscalls 44-48) - incremental
+        // cursor-advancing reads, enforced READ/WRITE handle rights, and
+        // buffered-write-commit-on-close, unlike syscalls 4/5's one-shot
+        // vfs_read/vfs_write.
+        int read_handle = gt_file_open("/system/file0.mfs", 0);
+        do_syscall(1, (u64) "file_open(file0.mfs, read) handle=0x", (u64) read_handle, 0);
+
+        u8 chunk1[4];
+        int n1 = gt_file_read(read_handle, chunk1, 4);
+        do_syscall(1, (u64) "read #1 n=0x", (u64) n1, 0);
+
+        u8 chunk2[64];
+        int n2 = gt_file_read(read_handle, chunk2, 64);
+        do_syscall(1, (u64) "read #2 n=0x", (u64) n2, 0);
+
+        u8 bogus_byte = 0x41;
+        int write_on_readonly = gt_file_write(read_handle, &bogus_byte, 1);
+        do_syscall(1, (u64) "write() on a read-only handle result=0x", (u64) write_on_readonly, 0);
+
+        gt_file_close(read_handle);
+
+        int write_handle = gt_file_open("/system/fileobjtest.mfs", 1);
+        do_syscall(1, (u64) "file_open(fileobjtest.mfs, write) handle=0x", (u64) write_handle, 0);
+        const char* part1 = "Hello ";
+        const char* part2 = "File Objects!";
+        gt_file_write(write_handle, (const u8*) part1, 6);
+        gt_file_write(write_handle, (const u8*) part2, 13);
+        bool closed_ok = gt_file_close(write_handle);
+        do_syscall(1, (u64) "close(write) ok=0x", (u64) closed_ok, 0);
+
+        int readback_handle = gt_file_open("/system/fileobjtest.mfs", 0);
+        u8 readback[32];
+        int n3 = gt_file_read(readback_handle, readback, 31);
+        readback[n3] = 0;
+        do_syscall(1, (u64) "readback n=0x", (u64) n3, 0);
+        do_syscall(1, (u64) &readback[0], 0, 0);
+        gt_file_close(readback_handle);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

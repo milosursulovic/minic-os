@@ -157,6 +157,36 @@ static __attribute__((unused)) bool gt_window_close(int id) {
     return gt_syscall(29, (u64) id, 0, 0) != 0;
 }
 
+// Real persistent open-file objects (proc/ipc/file/file.h via syscalls
+// 44-48) - open once, read/write/seek incrementally, close - unlike
+// gt_vfs_read/gt_vfs_write's one-shot open+op+close. mode 0=read/1=write;
+// the rights the handle gets are fixed at open time (RIGHT_READ or
+// RIGHT_WRITE, never both), so e.g. a read-mode handle's gt_file_write()
+// call is rejected by the kernel, not just by convention.
+static __attribute__((unused)) int gt_file_open(const char* path, int mode) {
+    u64 result = gt_syscall(44, (u64) path, (u64) mode, 0);
+    if (result == (u64) -1) {
+        return -1;
+    }
+    return (int) result;
+}
+
+static __attribute__((unused)) int gt_file_read(int handle, u8* buf, u32 max_len) {
+    return (int) gt_syscall(45, (u64) handle, (u64) buf, (u64) max_len);
+}
+
+static __attribute__((unused)) int gt_file_write(int handle, const u8* data, u32 len) {
+    return (int) gt_syscall(46, (u64) handle, (u64) data, (u64) len);
+}
+
+static __attribute__((unused)) bool gt_file_seek(int handle, u32 pos) {
+    return gt_syscall(47, (u64) handle, (u64) pos, 0) != (u64) -1;
+}
+
+static __attribute__((unused)) bool gt_file_close(int handle) {
+    return gt_syscall(48, (u64) handle, 0, 0) != (u64) -1;
+}
+
 // Spawns one of the fixed compiled-in GUI apps (0=terminal, 1=file_manager,
 // 2=settings - kernel/syscall/syscall.c's own gui_app_bounds()) instead of
 // kmain.c auto-spawning all of them at boot. Returns the new process index,

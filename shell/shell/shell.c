@@ -121,8 +121,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj");
 }
 
 static void cmd_ticks(void) {
@@ -571,7 +571,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 71
+#define SHELL_COMMAND_COUNT 72
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -603,6 +603,7 @@ static void shell_commands_init(void) {
     g_shell_commands[63] = "desktop"; g_shell_commands[64] = "arp"; g_shell_commands[65] = "ping";
     g_shell_commands[66] = "ipconfig"; g_shell_commands[67] = "dns"; g_shell_commands[68] = "tcp";
     g_shell_commands[69] = "echo"; g_shell_commands[70] = "pngtest";
+    g_shell_commands[71] = "ring3fileobj";
     g_shell_commands_initialized = true;
 }
 
@@ -1403,6 +1404,20 @@ static void cmd_ring3_button(void) {
     serial_print("sent ring3 button trigger");
 }
 
+// Exercises real persistent File kernel objects (proc/ipc/file/file.h,
+// syscalls 44-48, see ring3prog.c trigger 15) - incremental cursor reads,
+// enforced READ/WRITE handle rights, buffered-write-commit-on-close.
+static void cmd_ring3_file_object(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0xF);
+    if (!ok) {
+        vga_print("ring3fileobj failed - channel full");
+        serial_print("ring3fileobj failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 file-object trigger");
+    serial_print("sent ring3 file-object trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -2186,6 +2201,8 @@ void run_command(void) {
         cmd_ring3_mouse();
     } else if (streq(g_line_buffer, "ring3text")) {
         cmd_ring3_text();
+    } else if (streq(g_line_buffer, "ring3fileobj")) {
+        cmd_ring3_file_object();
     } else if (streq(g_line_buffer, "ring3button")) {
         cmd_ring3_button();
     } else if (streq(g_line_buffer, "pci")) {

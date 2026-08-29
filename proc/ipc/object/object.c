@@ -3,14 +3,14 @@
 
 #include "object.h"
 
-kernel_object g_objects[8];
+kernel_object g_objects[OBJECT_SLOTS];
 int g_object_count;
 
 handle g_handle_tables[MAX_PROCESSES][8];
 
 int alloc_object(int type, int data_index) {
     int i = 0;
-    while (i < 8) {
+    while (i < OBJECT_SLOTS) {
         if (!g_objects[i].used) {
             g_objects[i].used = true;
             g_objects[i].type = type;

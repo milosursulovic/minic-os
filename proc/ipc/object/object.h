@@ -10,20 +10,29 @@
 #define OBJ_IO_REQUEST 3
 #define OBJ_NET_PING_REQUEST 4
 #define OBJ_NET_TCP_REQUEST 5
+#define OBJ_FILE 6
 
 typedef struct {
     bool used;
     int type;
-    int data_index;  // index into g_processes[] or g_channels[], per type
+    int data_index;  // index into g_processes[]/g_channels[]/g_open_files[], per type
 } kernel_object;
 
-extern kernel_object g_objects[8];
+// Every process gets at least one self-object (proc/process.c's "handle 0
+// = myself") - with MAX_PROCESSES=8 that alone can nearly fill a small
+// table, leaving no room for channels/io_requests/file objects together.
+// Same "bump the cap before the new consumer starves everyone else"
+// lesson as MAX_TASKS/MAX_PROCESSES earlier this session.
+#define OBJECT_SLOTS 32
+extern kernel_object g_objects[OBJECT_SLOTS];
 extern int g_object_count;
 
 // Per-handle rights bitmask, checked before the object is touched.
 #define RIGHT_QUERY 1
 #define RIGHT_SEND 2
 #define RIGHT_RECEIVE 4
+#define RIGHT_READ 8
+#define RIGHT_WRITE 16
 
 typedef struct {
     bool used;
