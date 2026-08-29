@@ -520,10 +520,42 @@ static void cmd_mkfs(void) {
     }
 }
 
-// "" = root, same convention proc/apps/file_manager.c's own current_path
-// already uses. Kernel-shell-only state - File Manager's own GUI
-// navigation (syscalls 37-39) is separate and unaffected.
+// Real VFS-absolute path ("" = the virtual root, "/system", "/system/sub",
+// "/devices", "/processes", ...) - same convention
+// proc/apps/file_manager.c's own current_path already uses, and the same
+// real namespace it browses (this is genuinely the same mount table, not
+// a parallel copy). File Manager's own GUI navigation (syscalls 37-39) is
+// a separate call path but now resolves through the same VFS backend.
 static char g_shell_cwd[128] = "";
+
+// fs_create_dir/fs_delete_file (raw MiniFS, no VFS wrapper exists) and
+// the full-screen editor are only ever meaningful inside the one
+// writable mount - /devices and /processes reflect live kernel state,
+// not something you create/delete/edit files in. Same name/shape as
+// proc/apps/file_manager.c's own in_system_mount().
+static bool in_system_mount(const char* path) {
+    return starts_with(path, "/system");
+}
+
+// Strips a leading "/system" (+ one following '/', if present) from a
+// real VFS-absolute path, for the raw MiniFS calls that have no VFS
+// wrapper - MiniFS's own path resolver (fs/minifs/minifs.c's
+// split_path()) has no concept of a mount prefix at all, only bare-
+// relative paths. Byte-for-byte the same logic as
+// proc/apps/file_manager.c's own strip_system_prefix() (can't share it
+// directly - that one runs in ring3, this runs in the kernel).
+static void strip_system_prefix(char* out, const char* path) {
+    const char* rest = &path[7];  // strlen("/system")
+    if (rest[0] == '/') {
+        rest = &rest[1];
+    }
+    int i = 0;
+    while (rest[i] != '\0') {
+        out[i] = rest[i];
+        i = i + 1;
+    }
+    out[i] = '\0';
+}
 
 // Same ~70 command words cmd_help() prints below, minus the <addr>/<dir>/
 // <src>/... placeholder tokens (those aren't real command names) - a
@@ -640,8 +672,8 @@ void shell_tab_complete(void) {
     bool completing_command = (word_start == 0);
 
     // Collect matches - command names, or the current directory's own
-    // entries for an argument (same fs_list_entry loop cmd_ls already
-    // uses). Names are copied into a local buffer since fs_list_entry
+    // entries for an argument (same vfs_list_entry loop cmd_ls already
+    // uses). Names are copied into a local buffer since vfs_list_entry
     // hands back one entry at a time, not a stable pointer.
     char matches[MINIFS_MAX_FILES][20];
     int match_count = 0;
@@ -666,7 +698,7 @@ void shell_tab_complete(void) {
             char name[20];
             u32 size;
             bool is_dir;
-            if (fs_list_entry(g_shell_cwd, idx, name, &size, &is_dir)) {
+            if (vfs_list_entry(g_shell_cwd, idx, name, &size, &is_dir)) {
                 if (starts_with(name, word)) {
                     int j = 0;
                     while (name[j] != '\0' && j < 19) {
@@ -772,7 +804,7 @@ static void cmd_mkfile(void) {
     char full_path[128];
     join_path(full_path, g_shell_cwd, name_buf);
 
-    bool ok = fs_write_file(full_path, (u8*) &content_buf[0], (u32) i);
+    bool ok = vfs_write(full_path, (u8*) &content_buf[0], (u32) i);
     if (!ok) {
         vga_print("mkfile failed");
         serial_print("mkfile failed");
@@ -793,7 +825,7 @@ static void cmd_cat(void) {
         return;
     }
     u8 buf[65];
-    int n = fs_read_file(&g_last_file_name[0], buf, 64);
+    int n = vfs_read(&g_last_file_name[0], buf, 64);
     if (n < 0) {
         vga_print("cat failed");
         serial_print("cat failed");
@@ -806,17 +838,23 @@ static void cmd_cat(void) {
 }
 
 static void cmd_ls(void) {
-    u32 file_count;
-    if (!fs_superblock_info(&file_count)) {
-        vga_print("ls failed - disk read error");
-        serial_print("ls failed - disk read error");
-        return;
+    // file_count is a whole-MiniFS-volume stat (fs_superblock_info) - it
+    // only means something while actually browsing /system; the virtual
+    // root (the mount table itself) and /devices/processes (live kernel
+    // state, not a MiniFS volume) have no such concept.
+    if (in_system_mount(g_shell_cwd)) {
+        u32 file_count;
+        if (!fs_superblock_info(&file_count)) {
+            vga_print("ls failed - disk read error");
+            serial_print("ls failed - disk read error");
+            return;
+        }
+        vga_print("file_count: 0x");
+        serial_print("file_count: 0x");
+        print_hex((u64) file_count);
+        vga_print("  ");
+        serial_print("  ");
     }
-    vga_print("file_count: 0x");
-    serial_print("file_count: 0x");
-    print_hex((u64) file_count);
-    vga_print("  ");
-    serial_print("  ");
 
     int i = 0;
     int shown = 0;
@@ -824,7 +862,7 @@ static void cmd_ls(void) {
         char name[20];
         u32 size;
         bool is_dir;
-        if (fs_list_entry(g_shell_cwd, i, name, &size, &is_dir)) {
+        if (vfs_list_entry(g_shell_cwd, i, name, &size, &is_dir)) {
             vga_print(name);
             serial_print(name);
             if (is_dir) {
@@ -847,17 +885,25 @@ static void cmd_ls(void) {
 }
 
 static void cmd_pwd(void) {
-    vga_print("/");
-    serial_print("/");
+    if (g_shell_cwd[0] == '\0') {
+        vga_print("/");
+        serial_print("/");
+        return;
+    }
     vga_print(g_shell_cwd);
     serial_print(g_shell_cwd);
 }
 
 // `cd` (no arg) or `cd /` -> root. `cd ..` -> strip the last component
-// (same logic as proc/apps/file_manager.c's navigate_up). Otherwise
-// resolve the arg against the current dir and only commit if
-// fs_dir_exists confirms it's real - a failed cd leaves g_shell_cwd
-// untouched, never half-updated.
+// (same logic as proc/apps/file_manager.c's navigate_up, already correct
+// for an absolute path: truncating "/system" at its last '/' correctly
+// yields "", the virtual root). Otherwise resolve the arg against the
+// current dir and only commit if a real vfs_list_entry() scan finds a
+// same-named directory entry - this one check transparently covers
+// entering a top-level mount from root, a real MiniFS subdirectory, and
+// correctly refusing to "enter" a devfs/procfs pseudo-file (never
+// is_dir), with no per-backend special-casing here. A failed cd leaves
+// g_shell_cwd untouched, never half-updated.
 static void cmd_cd_root(void) {
     g_shell_cwd[0] = '\0';
 }
@@ -881,13 +927,29 @@ static void cmd_cd(void) {
         }
         return;
     }
-    char new_path[128];
-    join_path(new_path, g_shell_cwd, arg);
-    if (!fs_dir_exists(new_path)) {
+
+    bool found = false;
+    int idx = 0;
+    while (idx < MINIFS_MAX_FILES) {
+        char name[20];
+        u32 size;
+        bool is_dir;
+        if (vfs_list_entry(g_shell_cwd, idx, name, &size, &is_dir)) {
+            if (is_dir && streq(name, arg)) {
+                found = true;
+                break;
+            }
+        }
+        idx = idx + 1;
+    }
+    if (!found) {
         vga_print("cd: no such directory");
         serial_print("cd: no such directory");
         return;
     }
+
+    char new_path[128];
+    join_path(new_path, g_shell_cwd, arg);
     int i = 0;
     while (new_path[i] != '\0' && i < 127) {
         g_shell_cwd[i] = new_path[i];
@@ -900,7 +962,14 @@ static void cmd_mkdir(void) {
     char* arg = &g_line_buffer[6];  // past "mkdir "
     char new_path[128];
     join_path(new_path, g_shell_cwd, arg);
-    bool ok = fs_create_dir(new_path);
+    if (!in_system_mount(new_path)) {
+        vga_print("mkdir: not writable here");
+        serial_print("mkdir: not writable here");
+        return;
+    }
+    char stripped[128];
+    strip_system_prefix(stripped, new_path);
+    bool ok = fs_create_dir(stripped);
     if (!ok) {
         vga_print("mkdir failed");
         serial_print("mkdir failed");
@@ -957,7 +1026,7 @@ static void cmd_cp(void) {
     join_path(dst_path, g_shell_cwd, dst_name);
 
     u8 buf[4096];
-    int n = fs_read_file(src_path, buf, sizeof(buf));
+    int n = vfs_read(src_path, buf, sizeof(buf));
     if (n == -2) {
         vga_print("cp: source too large");
         serial_print("cp: source too large");
@@ -968,8 +1037,15 @@ static void cmd_cp(void) {
         serial_print("cp: source not found");
         return;
     }
-    fs_delete_file(dst_path);  // overwrite semantics - failure here just means dst didn't exist yet, expected
-    bool ok = fs_write_file(dst_path, buf, (u32) n);
+    if (!in_system_mount(dst_path)) {
+        vga_print("cp: destination not writable");
+        serial_print("cp: destination not writable");
+        return;
+    }
+    char stripped_dst[128];
+    strip_system_prefix(stripped_dst, dst_path);
+    fs_delete_file(stripped_dst);  // overwrite semantics - failure here just means dst didn't exist yet, expected
+    bool ok = vfs_write(dst_path, buf, (u32) n);
     if (!ok) {
         vga_print("cp failed");
         serial_print("cp failed");
@@ -996,7 +1072,7 @@ static void cmd_mv(void) {
     join_path(dst_path, g_shell_cwd, dst_name);
 
     u8 buf[4096];
-    int n = fs_read_file(src_path, buf, sizeof(buf));
+    int n = vfs_read(src_path, buf, sizeof(buf));
     if (n == -2) {
         vga_print("mv: source too large");
         serial_print("mv: source too large");
@@ -1007,14 +1083,25 @@ static void cmd_mv(void) {
         serial_print("mv: source not found");
         return;
     }
-    fs_delete_file(dst_path);  // overwrite semantics, same as cp
-    bool ok = fs_write_file(dst_path, buf, (u32) n);
+    if (!in_system_mount(dst_path)) {
+        vga_print("mv: destination not writable");
+        serial_print("mv: destination not writable");
+        return;
+    }
+    char stripped_dst[128];
+    strip_system_prefix(stripped_dst, dst_path);
+    fs_delete_file(stripped_dst);  // overwrite semantics, same as cp
+    bool ok = vfs_write(dst_path, buf, (u32) n);
     if (!ok) {
         vga_print("mv failed");
         serial_print("mv failed");
         return;
     }
-    fs_delete_file(src_path);
+    if (in_system_mount(src_path)) {
+        char stripped_src[128];
+        strip_system_prefix(stripped_src, src_path);
+        fs_delete_file(stripped_src);
+    }
     vga_print("moved");
     serial_print("moved");
 }
@@ -1028,8 +1115,13 @@ static void cmd_touch(void) {
     char* arg = &g_line_buffer[6];  // past "touch "
     char path[128];
     join_path(path, g_shell_cwd, arg);
+    if (!in_system_mount(path)) {
+        vga_print("touch: not writable here");
+        serial_print("touch: not writable here");
+        return;
+    }
     u8 empty = 0;
-    fs_write_file(path, &empty, 0);
+    vfs_write(path, &empty, 0);  // ignored, same as before: never fails just because the file already exists
     vga_print("touched ");
     serial_print("touched ");
     vga_print(arg);
@@ -1040,11 +1132,20 @@ static void cmd_touch(void) {
 // over the whole display until Esc; nothing else runs on this task while
 // g_editor_active is true (kmain.c's main loop skips its own prompt
 // reprint, isr.c routes every keystroke to editor_handle_scancode()).
+// editor.c itself stays completely VFS-unaware (raw MiniFS calls only) -
+// gate here and pass it the stripped bare-relative path.
 static void cmd_edit(void) {
     char* arg = &g_line_buffer[5];  // past "edit "
     char path[128];
     join_path(path, g_shell_cwd, arg);
-    editor_start(path);
+    if (!in_system_mount(path)) {
+        vga_print("edit: not writable here");
+        serial_print("edit: not writable here");
+        return;
+    }
+    char stripped[128];
+    strip_system_prefix(stripped, path);
+    editor_start(stripped);
 }
 
 // cat <name> - reads an explicit path relative to the current directory,
@@ -1055,7 +1156,7 @@ static void cmd_cat_path(void) {
     char path[128];
     join_path(path, g_shell_cwd, arg);
     u8 buf[65];
-    int n = fs_read_file(path, buf, 64);
+    int n = vfs_read(path, buf, 64);
     if (n == -2) {
         vga_print("cat: file too large to display");
         serial_print("cat: file too large to display");

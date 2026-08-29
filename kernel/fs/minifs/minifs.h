@@ -29,11 +29,6 @@ bool fs_superblock_info(u32* file_count_out);
 // any entry can itself be a subdirectory with its own 16 slots. Returns
 // false for an unused slot or an unresolvable dir_path.
 bool fs_list_entry(const char* dir_path, int index, char* name_out, u32* size_out, bool* is_dir_out);
-// Same path resolution as fs_list_entry's dir_path (every component,
-// including the last, must be a directory) - exposed on its own since a
-// caller like the shell's `cd` needs to validate a target before
-// committing to it, without also needing to list/read/write it.
-bool fs_dir_exists(const char* path);
 
 #define MINIFS_MAX_FILES 16
 
