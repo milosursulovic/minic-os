@@ -183,6 +183,17 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         serial_print(s);
         vga_print(s);
         print_hex(a2);
+        // TEMPORARY diagnostic tag for the button_poll self-corruption
+        // investigation (see [[project_button_poll_crash_bug]]) - every
+        // syscall-1 debug print now also names which task/process made
+        // it, so a bad-pointer report can be tied to a specific ring3
+        // program instead of just "something, somewhere". Remove once
+        // that bug is root-caused.
+        serial_print(" [task=0x");
+        print_hex((u64) g_current_task);
+        serial_print(" proc=0x");
+        print_hex((u64) g_tasks[g_current_task].process_index);
+        serial_print("]");
         serial_print("\n");
         return 0;
     }

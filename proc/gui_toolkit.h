@@ -273,6 +273,14 @@ static __attribute__((unused)) int gt_format_hex(u64 value, char* out) {
     return len;
 }
 
+// TEMPORARY diagnostic helper for the button_poll self-corruption
+// investigation ([[project_button_poll_crash_bug]] in project memory) -
+// wraps syscall 1 (message + one hex value, tagged with task/process
+// index kernel-side). Remove once that bug is root-caused.
+static __attribute__((unused)) void gt_debug_print(const char* msg, u64 value) {
+    gt_syscall(1, (u64) msg, value, 0);
+}
+
 typedef struct {
     int window_id;
     u32 x, y, width, height;  // body-local rect, passed to window_id at init
@@ -339,6 +347,19 @@ static __attribute__((unused)) void button_init(button* self, int window_id, u32
 // focus/z-order too; that's still point 18's open "focus" item, not this
 // widget's job.
 static __attribute__((unused)) bool button_poll(button* self) {
+    // TEMPORARY diagnostic guard - see gt_debug_print's own comment above
+    // and [[project_button_poll_crash_bug]]. A real button is always a
+    // static/local variable's address within this program's own private
+    // region (BUILTIN_LOAD_VADDR=0x80000000 + a few KB at most, every
+    // ring3 program here is tiny) - anything outside a generous margin of
+    // that range means `self` itself got corrupted somewhere between
+    // being computed at the call site and landing here, not a bug in
+    // *this* function. Logs and bails out instead of dereferencing
+    // garbage, so the kernel survives long enough to read the log.
+    if ((u64) self < 0x80000000 || (u64) self > 0x80100000) {
+        gt_debug_print("button_poll: BAD self ptr 0x", (u64) self);
+        return false;
+    }
     i32 win_x, win_y;
     u32 win_width, win_height;
     if (!gt_window_query(self->window_id, &win_x, &win_y, &win_width, &win_height)) {
