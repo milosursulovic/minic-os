@@ -1,11 +1,11 @@
 // Called from boot/interrupts.s's isr_common_stub for every known vector.
 
 #include "isr.h"
-#include "../drivers/io.h"
-#include "../drivers/keyboard.h"
-#include "../drivers/mouse.h"
-#include "../drivers/vbe.h"
-#include "../gfx/window.h"
+#include "../drivers/io/io.h"
+#include "../drivers/keyboard/keyboard.h"
+#include "../drivers/mouse/mouse.h"
+#include "../drivers/vbe/vbe.h"
+#include "../gfx/window/window.h"
 #include "../lib/strings.h"
 #include "../sched/task.h"
 

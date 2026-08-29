@@ -1,30 +1,30 @@
 // Interactive shell over keyboard.c's line buffer.
 
 #include "shell.h"
-#include "../kernel/drivers/io.h"
-#include "../kernel/drivers/keyboard.h"
+#include "../kernel/drivers/io/io.h"
+#include "../kernel/drivers/keyboard/keyboard.h"
 #include "../kernel/lib/strings.h"
-#include "../kernel/mm/heap.h"
-#include "../kernel/mm/frames.h"
-#include "../kernel/mm/paging.h"
+#include "../kernel/mm/heap/heap.h"
+#include "../kernel/mm/frames/frames.h"
+#include "../kernel/mm/paging/paging.h"
 #include "../kernel/sched/task.h"
-#include "../proc/ipc/channel.h"
+#include "../proc/ipc/channel/channel.h"
 #include "../kernel/isr/isr.h"
-#include "../kernel/fs/ata.h"
-#include "../kernel/fs/minifs.h"
-#include "../kernel/fs/vfs.h"
+#include "../kernel/fs/ata/ata.h"
+#include "../kernel/fs/minifs/minifs.h"
+#include "../kernel/fs/vfs/vfs.h"
 #include "../proc/process.h"
-#include "../proc/ipc/object.h"
-#include "../kernel/drivers/pci.h"
-#include "../kernel/net/e1000.h"
-#include "../kernel/net/arp.h"
-#include "../kernel/net/ip.h"
-#include "../kernel/net/icmp.h"
-#include "../kernel/net/dns.h"
-#include "../kernel/net/tcp.h"
-#include "../kernel/drivers/vbe.h"
-#include "../kernel/drivers/mouse.h"
-#include "../kernel/gfx/window.h"
+#include "../proc/ipc/object/object.h"
+#include "../kernel/drivers/pci/pci.h"
+#include "../kernel/net/e1000/e1000.h"
+#include "../kernel/net/arp/arp.h"
+#include "../kernel/net/ip/ip.h"
+#include "../kernel/net/icmp/icmp.h"
+#include "../kernel/net/dns/dns.h"
+#include "../kernel/net/tcp/tcp.h"
+#include "../kernel/drivers/vbe/vbe.h"
+#include "../kernel/drivers/mouse/mouse.h"
+#include "../kernel/gfx/window/window.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -37,8 +37,8 @@ void print_prompt(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -997,6 +997,21 @@ static void print_mac(u8* mac) {
     }
 }
 
+// Dotted-decimal, not hex - a real IP address, unlike a MAC, is expected
+// in decimal by every human and every other tool that will ever look at
+// this output (ping/ipconfig/traceroute/etc all agree on this).
+static void print_ip(u8* ip) {
+    int i = 0;
+    while (i < 4) {
+        print_decimal((u64) ip[i]);
+        if (i < 3) {
+            vga_print(".");
+            serial_print(".");
+        }
+        i = i + 1;
+    }
+}
+
 static void cmd_pci(void) {
     pci_enumerate();
     vga_print("pci devices: 0x");
@@ -1348,15 +1363,11 @@ static void cmd_desktop(void) {
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
 // proxy, and resolves an unreachable address (must fail cleanly).
 static void cmd_arp(void) {
-    u8 gateway_ip[4];
-    gateway_ip[0] = 10;
-    gateway_ip[1] = 0;
-    gateway_ip[2] = 2;
-    gateway_ip[3] = 2;
+    ip_init();  // must run before reading g_gateway_ip/g_dns_server_ip below
 
     u8 mac[6];
     u64 t0 = g_tick_count;
-    bool ok1 = arp_resolve(&gateway_ip[0], &mac[0]);
+    bool ok1 = arp_resolve(&g_gateway_ip[0], &mac[0]);
     u64 elapsed1 = g_tick_count - t0;
     vga_print("resolve gateway ok=0x");
     serial_print("resolve gateway ok=0x");
@@ -1372,7 +1383,7 @@ static void cmd_arp(void) {
 
     u8 mac2[6];
     u64 t1 = g_tick_count;
-    bool ok2 = arp_resolve(&gateway_ip[0], &mac2[0]);
+    bool ok2 = arp_resolve(&g_gateway_ip[0], &mac2[0]);
     u64 elapsed2 = g_tick_count - t1;
     vga_print(" cached_ok=0x");
     serial_print(" cached_ok=0x");
@@ -1381,13 +1392,8 @@ static void cmd_arp(void) {
     serial_print(" cached_elapsed_ticks=0x");
     print_hex(elapsed2);
 
-    u8 dns_ip[4];
-    dns_ip[0] = 10;
-    dns_ip[1] = 0;
-    dns_ip[2] = 2;
-    dns_ip[3] = 3;
     u8 mac3[6];
-    bool ok3 = arp_resolve(&dns_ip[0], &mac3[0]);
+    bool ok3 = arp_resolve(&g_dns_server_ip[0], &mac3[0]);
     vga_print(" resolve_dns_proxy_ok=0x");
     serial_print(" resolve_dns_proxy_ok=0x");
     print_hex((u64) ok3);
@@ -1409,23 +1415,108 @@ static void cmd_arp(void) {
     print_hex((u64) ok4);
 }
 
+// ping <host-or-ip> - a literal dotted-decimal IP is used as-is
+// (parse_ip); anything else is treated as a hostname and resolved via
+// the existing (previously unused by any command) dns_resolve_a(). Then
+// 4 real ICMP echo requests (icmp_ping() genuinely sends/waits for a
+// matching reply, not simulated), same real-shaped output every
+// Linux/Windows ping gives: one line per reply (or a timeout), then a
+// summary. There's no sub-tick timer here, and QEMU/TCG's real tick rate
+// is unreliable (see CLAUDE.md) - the "ms" figure is real ticks × 10
+// (nominal 100Hz), labeled "~" rather than presented as false precision.
+#define PING_COUNT 4
+#define PING_IDENTIFIER 0x1234
 static void cmd_ping(void) {
-    u8 gateway_ip[4];
-    gateway_ip[0] = 10;
-    gateway_ip[1] = 0;
-    gateway_ip[2] = 2;
-    gateway_ip[3] = 2;
+    char* arg = &g_line_buffer[5];  // past "ping "
+    if (arg[0] == '\0') {
+        vga_print("usage: ping <host-or-ip>");
+        serial_print("usage: ping <host-or-ip>");
+        return;
+    }
 
-    u64 start_tick = g_tick_count;
-    bool ok = icmp_ping(&gateway_ip[0], 0x1234, 0x1);
-    u64 elapsed = g_tick_count - start_tick;
+    u8 target_ip[4];
+    if (!parse_ip(arg, target_ip)) {
+        if (!dns_resolve_a(arg, target_ip)) {
+            vga_print("ping: could not resolve ");
+            serial_print("ping: could not resolve ");
+            vga_print(arg);
+            serial_print(arg);
+            return;
+        }
+    }
 
-    vga_print("ping gateway ok=0x");
-    serial_print("ping gateway ok=0x");
-    print_hex((u64) ok);
-    vga_print(" elapsed_ticks=0x");
-    serial_print(" elapsed_ticks=0x");
-    print_hex(elapsed);
+    vga_print("PING ");
+    serial_print("PING ");
+    print_ip(target_ip);
+    vga_print("  ");
+    serial_print("  ");
+
+    int received = 0;
+    int seq = 1;
+    while (seq <= PING_COUNT) {
+        u64 start_tick = g_tick_count;
+        bool ok = icmp_ping(target_ip, PING_IDENTIFIER, (u16) seq);
+        u64 elapsed = g_tick_count - start_tick;
+
+        if (ok) {
+            received = received + 1;
+            vga_print("12 bytes from ");
+            serial_print("12 bytes from ");
+            print_ip(target_ip);
+            vga_print(": icmp_seq=");
+            serial_print(": icmp_seq=");
+            print_decimal((u64) seq);
+            vga_print(" ttl=64 time=~");
+            serial_print(" ttl=64 time=~");
+            print_decimal(elapsed * 10);
+            vga_print("ms  ");
+            serial_print("ms  ");
+        } else {
+            vga_print("Request timeout for icmp_seq=");
+            serial_print("Request timeout for icmp_seq=");
+            print_decimal((u64) seq);
+            vga_print("  ");
+            serial_print("  ");
+        }
+        seq = seq + 1;
+    }
+
+    print_decimal((u64) PING_COUNT);
+    vga_print(" transmitted, ");
+    serial_print(" transmitted, ");
+    print_decimal((u64) received);
+    vga_print(" received");
+    serial_print(" received");
+}
+
+static void cmd_ipconfig(void) {
+    ip_init();  // must run before reading g_my_ip/g_gateway_ip/g_dns_server_ip
+
+    vga_print("IP: ");
+    serial_print("IP: ");
+    print_ip(g_my_ip);
+    vga_print("  GATEWAY: ");
+    serial_print("  GATEWAY: ");
+    print_ip(g_gateway_ip);
+    vga_print("  DNS: ");
+    serial_print("  DNS: ");
+    print_ip(g_dns_server_ip);
+
+    bool ok = e1000_init();
+    if (!ok) {
+        vga_print("  MAC: (e1000 not found)");
+        serial_print("  MAC: (e1000 not found)");
+        return;
+    }
+    u8 mac[6];
+    e1000_get_mac(&mac[0]);
+    vga_print("  MAC: ");
+    serial_print("  MAC: ");
+    print_mac(&mac[0]);
+    vga_print("  LINK: ");
+    serial_print("  LINK: ");
+    vga_print(e1000_link_up() ? "UP" : "DOWN");
+    serial_print(e1000_link_up() ? "UP" : "DOWN");
 }
 
 static void cmd_dns(void) {
@@ -1626,8 +1717,10 @@ void run_command(void) {
         cmd_desktop();
     } else if (streq(g_line_buffer, "arp")) {
         cmd_arp();
-    } else if (streq(g_line_buffer, "ping")) {
+    } else if (starts_with(g_line_buffer, "ping ")) {
         cmd_ping();
+    } else if (streq(g_line_buffer, "ipconfig")) {
+        cmd_ipconfig();
     } else if (streq(g_line_buffer, "dns")) {
         cmd_dns();
     } else if (streq(g_line_buffer, "tcp")) {

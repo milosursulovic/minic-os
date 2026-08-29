@@ -2,18 +2,18 @@
 // first 1GB of physical memory identity-mapped.
 
 #include "types.h"
-#include "kernel/drivers/io.h"
-#include "kernel/drivers/interrupts_init.h"
-#include "kernel/drivers/keyboard.h"
-#include "kernel/mm/frames.h"
-#include "kernel/mm/paging.h"
+#include "kernel/drivers/io/io.h"
+#include "kernel/drivers/interrupts_init/interrupts_init.h"
+#include "kernel/drivers/keyboard/keyboard.h"
+#include "kernel/mm/frames/frames.h"
+#include "kernel/mm/paging/paging.h"
 #include "kernel/sched/task.h"
-#include "proc/ipc/channel.h"
+#include "proc/ipc/channel/channel.h"
 #include "proc/process.h"
-#include "proc/ipc/io_request.h"
-#include "proc/ipc/net_request.h"
-#include "proc/ipc/net_tcp_request.h"
-#include "kernel/fs/vfs.h"
+#include "proc/ipc/io_request/io_request.h"
+#include "proc/ipc/net_request/net_request.h"
+#include "proc/ipc/net_tcp_request/net_tcp_request.h"
+#include "kernel/fs/vfs/vfs.h"
 #include "shell/shell.h"
 
 #pragma GCC visibility push(hidden)

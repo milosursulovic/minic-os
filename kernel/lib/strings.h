@@ -15,5 +15,13 @@ int format_hex(u64 value, u8* out);
 // No bounds checking - callers own a big-enough out buffer, same as
 // every other fixed-buffer helper in this codebase.
 void join_path(char* out, const char* base, const char* name);
+// Real dotted-decimal printing (0-255 per call), unlike print_hex - an
+// IP address printed in hex wouldn't look like a real IP to anyone.
+void print_decimal(u64 value);
+// Strict "A.B.C.D" (4 decimal octets 0-255) parser - returns false for
+// anything else, including a bare hostname, which is exactly how a
+// caller like cmd_ping tells "was I given a literal IP or a name to
+// resolve" apart.
+bool parse_ip(const char* s, u8* out);
 
 #pragma GCC visibility pop

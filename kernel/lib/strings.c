@@ -2,7 +2,7 @@
 // with gcc's builtin knowledge of the name `strlen`.
 
 #include "strings.h"
-#include "../drivers/io.h"
+#include "../drivers/io/io.h"
 
 bool streq(const char* a, const char* b) {
     int i = 0;
@@ -123,4 +123,55 @@ void join_path(char* out, const char* base, const char* name) {
         j = j + 1;
     }
     out[i] = '\0';
+}
+
+void print_decimal(u64 value) {
+    char buf[21];
+    buf[20] = '\0';
+    if (value == 0) {
+        buf[19] = '0';
+        vga_print(&buf[19]);
+        serial_print(&buf[19]);
+        return;
+    }
+    int i = 19;
+    while (value > 0 && i >= 0) {
+        buf[i] = (char) ('0' + (value % 10));
+        value = value / 10;
+        i = i - 1;
+    }
+    vga_print(&buf[i + 1]);
+    serial_print(&buf[i + 1]);
+}
+
+bool parse_ip(const char* s, u8* out) {
+    int octet = 0;
+    int value = 0;
+    int digits_in_octet = 0;
+    int i = 0;
+    while (true) {
+        char c = s[i];
+        if (c >= '0' && c <= '9') {
+            value = value * 10 + (c - '0');
+            digits_in_octet = digits_in_octet + 1;
+            if (digits_in_octet > 3 || value > 255) {
+                return false;
+            }
+        } else if (c == '.' || c == '\0') {
+            if (digits_in_octet == 0 || octet >= 4) {
+                return false;  // empty octet ("1..2.3") or too many dots
+            }
+            out[octet] = (u8) value;
+            octet = octet + 1;
+            value = 0;
+            digits_in_octet = 0;
+            if (c == '\0') {
+                break;
+            }
+        } else {
+            return false;  // anything else (letters, etc) means "not a literal IP"
+        }
+        i = i + 1;
+    }
+    return octet == 4;
 }

@@ -2,11 +2,11 @@
 // mechanism.
 
 #include "process.h"
-#include "../kernel/mm/frames.h"
-#include "../kernel/mm/paging.h"
+#include "../kernel/mm/frames/frames.h"
+#include "../kernel/mm/paging/paging.h"
 #include "../kernel/sched/task.h"
-#include "ipc/object.h"
-#include "../kernel/fs/vfs.h"
+#include "ipc/object/object.h"
+#include "../kernel/fs/vfs/vfs.h"
 
 #pragma GCC visibility push(hidden)
 extern void run_ring3_test(u64 entry, u64 user_stack);

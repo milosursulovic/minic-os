@@ -4,14 +4,14 @@
 // not sleep, to avoid colliding with a POSIX libc name.
 
 #include "task.h"
-#include "../mm/heap.h"
-#include "../mm/frames.h"
-#include "../mm/paging.h"
+#include "../mm/heap/heap.h"
+#include "../mm/frames/frames.h"
+#include "../mm/paging/paging.h"
 #include "../isr/isr.h"
-#include "../../proc/ipc/channel.h"
-#include "../../proc/ipc/io_request.h"
-#include "../../proc/ipc/net_request.h"
-#include "../../proc/ipc/net_tcp_request.h"
+#include "../../proc/ipc/channel/channel.h"
+#include "../../proc/ipc/io_request/io_request.h"
+#include "../../proc/ipc/net_request/net_request.h"
+#include "../../proc/ipc/net_tcp_request/net_tcp_request.h"
 
 #pragma GCC visibility push(hidden)
 extern void switch_context(u64* old_rsp_out, u64 new_rsp);
