@@ -45,6 +45,33 @@
 // fast TCG happens to be running the timer.
 #define UPTIME_REDRAW_TICK_INTERVAL 50
 
+// kernel/drivers/rtc/rtc.c reads the raw RTC value - QEMU's own RTC
+// defaults to UTC, confirmed empirically (screendump'd clock matched host
+// `date -u`). Real timezone/DST handling would need the RTC's date too
+// (deliberately not read - this driver is time-only), so for now this is
+// a single fixed offset for Europe/Belgrade - +2 (CEST, currently in
+// effect) rather than the +1 CET standard-time offset, since hardcoding
+// "whichever is correct right now" is more honest than hardcoding a
+// number that's already wrong today. Will read an hour off during CET
+// (~late Oct - late Mar) until this gets real DST-aware.
+#define BELGRADE_UTC_OFFSET_HOURS 2
+
+// Zero-padded 2-digit decimal ("09", not "9") - gt_format_hex/print_decimal
+// don't zero-pad, needed for a real HH:MM:SS clock read-out.
+static void format_2digit(u8 value, char* out) {
+    out[0] = (char) ('0' + (value / 10) % 10);
+    out[1] = (char) ('0' + value % 10);
+}
+
+// Zero-padded 4-digit decimal, for a year (2000-2099 - see rtc.h on why
+// it's always exactly 4 digits, no wider range to worry about here).
+static void format_4digit(u16 value, char* out) {
+    out[0] = (char) ('0' + (value / 1000) % 10);
+    out[1] = (char) ('0' + (value / 100) % 10);
+    out[2] = (char) ('0' + (value / 10) % 10);
+    out[3] = (char) ('0' + value % 10);
+}
+
 __attribute__((section(".text.start")))
 void _start(void) {
     // Settings (proc/settings.c) persists a chosen wallpaper color to
@@ -183,6 +210,58 @@ void _start(void) {
             label_args.bg_color = TASKBAR_COLOR;
             label_args.text = &uptime_text[0];
             gt_syscall(32, (u64) &label_args, 0, 0);
+
+            // Real wall-clock time (kernel/drivers/rtc/rtc.c via syscall 42) -
+            // redrawn on the exact same throttled cadence as uptime above,
+            // not a second unthrottled poll path.
+            u8 hour;
+            u8 minute;
+            u8 second;
+            gt_get_time(&hour, &minute, &second);
+            hour = (u8) ((hour + BELGRADE_UTC_OFFSET_HOURS) % 24);
+            char clock_text[9];
+            format_2digit(hour, &clock_text[0]);
+            clock_text[2] = ':';
+            format_2digit(minute, &clock_text[3]);
+            clock_text[5] = ':';
+            format_2digit(second, &clock_text[6]);
+            clock_text[8] = '\0';
+
+            gt_window_draw_text_args clock_args;
+            clock_args.id = taskbar_id;
+            clock_args.x = 620;
+            clock_args.y = 6;
+            clock_args.fg_color = LABEL_COLOR;
+            clock_args.bg_color = TASKBAR_COLOR;
+            clock_args.text = &clock_text[0];
+            gt_syscall(32, (u64) &clock_args, 0, 0);
+
+            // Real date (kernel/drivers/rtc/rtc.c via syscall 43) - DD.MM.YYYY,
+            // the natural local format, not reformatted for the Belgrade
+            // offset above (a real rollover near midnight would need
+            // carrying the day/month/year forward, real calendar-math
+            // complexity not worth it for this small a feature - a known,
+            // deliberate simplification).
+            u8 day;
+            u8 month;
+            u16 year;
+            gt_get_date(&day, &month, &year);
+            char date_text[11];
+            format_2digit(day, &date_text[0]);
+            date_text[2] = '.';
+            format_2digit(month, &date_text[3]);
+            date_text[5] = '.';
+            format_4digit(year, &date_text[6]);
+            date_text[10] = '\0';
+
+            gt_window_draw_text_args date_args;
+            date_args.id = taskbar_id;
+            date_args.x = 520;
+            date_args.y = 6;
+            date_args.fg_color = LABEL_COLOR;
+            date_args.bg_color = TASKBAR_COLOR;
+            date_args.text = &date_text[0];
+            gt_syscall(32, (u64) &date_args, 0, 0);
 
             last_rendered_ticks = current_ticks;
         }

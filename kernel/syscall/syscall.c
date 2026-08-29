@@ -30,7 +30,12 @@
 // 41 spawn_gui_app (app id, not a raw pointer - 0=terminal/1=file_manager/
 // 2=settings, deliberately separate from syscall 11's own registry: that
 // one is the hello_service/register_service IPC demo, this one is the
-// fixed compiled-in GUI apps desktop_shell.c's MENU dropdown launches).
+// fixed compiled-in GUI apps desktop_shell.c's MENU dropdown launches),
+// 42 sys_time (no args - real wall-clock hour/minute/second packed into
+// the return value, same style as 31 mouse_query/33 window_query, read
+// from the CMOS RTC via kernel/drivers/rtc/rtc.c), 43 sys_date (no args -
+// day/month/year packed into the return value, same style, no century
+// register read - see rtc.h).
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -49,6 +54,7 @@
 #include "../drivers/vbe/vbe.h"
 #include "../gfx/window/window.h"
 #include "../drivers/mouse/mouse.h"
+#include "../drivers/rtc/rtc.h"
 #include "../isr/isr.h"
 
 typedef struct __attribute__((packed)) {
@@ -851,6 +857,22 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         }
         int proc_index = spawn_process(start, end, BUILTIN_LOAD_VADDR, BUILTIN_STACK_VADDR);
         return (u64) proc_index;  // spawn_process's own -1-on-failure convention
+    }
+    if (num == 42) {
+        u8 hour;
+        u8 minute;
+        u8 second;
+        rtc_read_time(&hour, &minute, &second);
+        u64 packed = ((u64) hour << 16) | ((u64) minute << 8) | (u64) second;
+        return packed;
+    }
+    if (num == 43) {
+        u8 day;
+        u8 month;
+        u16 year;
+        rtc_read_date(&day, &month, &year);
+        u64 packed = ((u64) day << 24) | ((u64) month << 16) | (u64) year;
+        return packed;
     }
     return (u64) -1;  // unknown syscall
 }

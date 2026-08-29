@@ -130,9 +130,27 @@ static __attribute__((unused)) int gt_window_create_borderless(i32 x, i32 y, u32
 }
 
 // Raw PIT ticks since boot (isr.c's g_tick_count) - uptime, not wall-clock
-// time. No RTC/CMOS driver exists in this kernel yet.
+// time.
 static __attribute__((unused)) u64 gt_get_ticks(void) {
     return gt_syscall(35, 0, 0, 0);
+}
+
+// Real wall-clock time (always 24-hour), read from the CMOS RTC via
+// syscall 42 - kernel/drivers/rtc/rtc.c.
+static __attribute__((unused)) void gt_get_time(u8* hour, u8* minute, u8* second) {
+    u64 packed = gt_syscall(42, 0, 0, 0);
+    *hour = (u8) ((packed >> 16) & 0xFF);
+    *minute = (u8) ((packed >> 8) & 0xFF);
+    *second = (u8) (packed & 0xFF);
+}
+
+// Real date (day/month/year, year = 2000 + RTC's 2-digit year - no
+// century register read), read via syscall 43 - kernel/drivers/rtc/rtc.c.
+static __attribute__((unused)) void gt_get_date(u8* day, u8* month, u16* year) {
+    u64 packed = gt_syscall(43, 0, 0, 0);
+    *day = (u8) ((packed >> 24) & 0xFF);
+    *month = (u8) ((packed >> 16) & 0xFF);
+    *year = (u16) (packed & 0xFFFF);
 }
 
 static __attribute__((unused)) bool gt_window_close(int id) {
