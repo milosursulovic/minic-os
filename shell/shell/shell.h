@@ -15,4 +15,11 @@ void shell_history_add(const char* line);
 void shell_history_up(void);
 void shell_history_down(void);
 
+// Tab-completion, driven by kernel/isr/isr.c on the Tab scancode (0x0F) -
+// position-based, not command-aware: the first word completes against a
+// fixed command-name table, anything after the first space completes
+// against the current directory's own entries (fs_list_entry, same call
+// cmd_ls already uses).
+void shell_tab_complete(void);
+
 #pragma GCC visibility pop

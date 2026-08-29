@@ -511,6 +511,212 @@ static void cmd_mkfs(void) {
 // navigation (syscalls 37-39) is separate and unaffected.
 static char g_shell_cwd[128] = "";
 
+// Same ~70 command words cmd_help() prints below, minus the <addr>/<dir>/
+// <src>/... placeholder tokens (those aren't real command names) - a
+// third copy of the same list, but cmd_help() already keeps two literal
+// copies (vga_print/serial_print) side by side, so this is consistent
+// with, not a departure from, how this codebase already tolerates that
+// duplication at this size.
+//
+// A static initializer can't fill this array directly - each element is
+// one global (a string literal) address stored as another global's
+// static data, which needs a real ELF64 relocation (R_X86_64_64) this
+// kernel's ELF32 build container can't represent (same constraint
+// kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
+// the same way: assign every pointer at runtime instead (real `lea`/`mov`
+// instructions, which -fPIC handles fine), lazily on first use.
+#define SHELL_COMMAND_COUNT 70
+static const char* g_shell_commands[SHELL_COMMAND_COUNT];
+static bool g_shell_commands_initialized;
+
+static void shell_commands_init(void) {
+    if (g_shell_commands_initialized) {
+        return;
+    }
+    g_shell_commands[0] = "help"; g_shell_commands[1] = "clear"; g_shell_commands[2] = "ticks";
+    g_shell_commands[3] = "alloc"; g_shell_commands[4] = "bigalloc"; g_shell_commands[5] = "free";
+    g_shell_commands[6] = "mem"; g_shell_commands[7] = "reset"; g_shell_commands[8] = "shutdown";
+    g_shell_commands[9] = "reboot"; g_shell_commands[10] = "cursor"; g_shell_commands[11] = "frame";
+    g_shell_commands[12] = "unframe"; g_shell_commands[13] = "frames"; g_shell_commands[14] = "map";
+    g_shell_commands[15] = "tasks"; g_shell_commands[16] = "procs"; g_shell_commands[17] = "ps";
+    g_shell_commands[18] = "objs"; g_shell_commands[19] = "netconns"; g_shell_commands[20] = "chan";
+    g_shell_commands[21] = "send"; g_shell_commands[22] = "disk"; g_shell_commands[23] = "diskwrite";
+    g_shell_commands[24] = "mkfs"; g_shell_commands[25] = "mkfile"; g_shell_commands[26] = "cat";
+    g_shell_commands[27] = "ls"; g_shell_commands[28] = "pwd"; g_shell_commands[29] = "cd";
+    g_shell_commands[30] = "mkdir"; g_shell_commands[31] = "cp"; g_shell_commands[32] = "mv";
+    g_shell_commands[33] = "touch"; g_shell_commands[34] = "edit"; g_shell_commands[35] = "vfscat";
+    g_shell_commands[36] = "vfswrite"; g_shell_commands[37] = "install"; g_shell_commands[38] = "spawn";
+    g_shell_commands[39] = "ring3go"; g_shell_commands[40] = "ring3fault"; g_shell_commands[41] = "ring3nx";
+    g_shell_commands[42] = "ring3reg"; g_shell_commands[43] = "ring3unreg"; g_shell_commands[44] = "ring3async";
+    g_shell_commands[45] = "ring3asyncwrite"; g_shell_commands[46] = "ring3asyncping"; g_shell_commands[47] = "ring3asyncdns";
+    g_shell_commands[48] = "ring3asynctcp"; g_shell_commands[49] = "ring3win"; g_shell_commands[50] = "ring3mouse";
+    g_shell_commands[51] = "ring3text"; g_shell_commands[52] = "ring3button"; g_shell_commands[53] = "pci";
+    g_shell_commands[54] = "nic"; g_shell_commands[55] = "fb"; g_shell_commands[56] = "text";
+    g_shell_commands[57] = "mouse"; g_shell_commands[58] = "win"; g_shell_commands[59] = "winlist";
+    g_shell_commands[60] = "wincontent"; g_shell_commands[61] = "textcontent"; g_shell_commands[62] = "buttoncontent";
+    g_shell_commands[63] = "desktop"; g_shell_commands[64] = "arp"; g_shell_commands[65] = "ping";
+    g_shell_commands[66] = "ipconfig"; g_shell_commands[67] = "dns"; g_shell_commands[68] = "tcp";
+    g_shell_commands[69] = "echo";
+    g_shell_commands_initialized = true;
+}
+
+// Erases exactly `count` characters from the end of the in-progress line
+// (a bounded version of shell_history_redraw()'s own erase loop - that
+// one always clears the whole line, this only clears the word currently
+// being completed) then retypes `text`.
+static void tab_replace_word(int count, const char* text) {
+    while (count > 0) {
+        g_line_len = g_line_len - 1;
+        g_vga_cursor = g_vga_cursor - 1;
+        g_vga[g_vga_cursor].character = ' ';
+        g_vga[g_vga_cursor].color = 0x0F;
+        serial_putc('\b');
+        serial_putc(' ');
+        serial_putc('\b');
+        term_scrollback_backspace();
+        count = count - 1;
+    }
+    vga_update_cursor(g_vga_cursor);
+
+    int i = 0;
+    while (text[i] != '\0' && g_line_len < 127) {
+        char c = text[i];
+        g_line_buffer[g_line_len] = c;
+        g_line_len = g_line_len + 1;
+        vga_putc(c);
+        serial_putc((u8) c);
+        i = i + 1;
+    }
+}
+
+void shell_tab_complete(void) {
+    shell_commands_init();
+
+    // g_line_buffer is only null-terminated at g_line_len on Enter (isr.c) -
+    // mid-typing it can hold stale trailing bytes from a previous, longer
+    // command. Every string op below treats g_line_buffer as a real
+    // C-string, so mark the real end here first (safe: isr.c already
+    // guarantees g_line_len < 127 on every insert).
+    g_line_buffer[g_line_len] = '\0';
+
+    int word_start = 0;
+    int i = g_line_len - 1;
+    while (i >= 0) {
+        if (g_line_buffer[i] == ' ') {
+            word_start = i + 1;
+            break;
+        }
+        i = i - 1;
+    }
+    int word_len = g_line_len - word_start;
+    const char* word = &g_line_buffer[word_start];
+    bool completing_command = (word_start == 0);
+
+    // Collect matches - command names, or the current directory's own
+    // entries for an argument (same fs_list_entry loop cmd_ls already
+    // uses). Names are copied into a local buffer since fs_list_entry
+    // hands back one entry at a time, not a stable pointer.
+    char matches[MINIFS_MAX_FILES][20];
+    int match_count = 0;
+
+    if (completing_command) {
+        int c = 0;
+        while (c < SHELL_COMMAND_COUNT && match_count < MINIFS_MAX_FILES) {
+            if (starts_with(g_shell_commands[c], word) && strlen_(g_shell_commands[c]) >= word_len) {
+                int j = 0;
+                while (g_shell_commands[c][j] != '\0' && j < 19) {
+                    matches[match_count][j] = g_shell_commands[c][j];
+                    j = j + 1;
+                }
+                matches[match_count][j] = '\0';
+                match_count = match_count + 1;
+            }
+            c = c + 1;
+        }
+    } else {
+        int idx = 0;
+        while (idx < MINIFS_MAX_FILES) {
+            char name[20];
+            u32 size;
+            bool is_dir;
+            if (fs_list_entry(g_shell_cwd, idx, name, &size, &is_dir)) {
+                if (starts_with(name, word)) {
+                    int j = 0;
+                    while (name[j] != '\0' && j < 19) {
+                        matches[match_count][j] = name[j];
+                        j = j + 1;
+                    }
+                    matches[match_count][j] = '\0';
+                    match_count = match_count + 1;
+                }
+            }
+            idx = idx + 1;
+        }
+    }
+
+    if (match_count == 0) {
+        return;
+    }
+
+    // Longest common prefix across every match, starting from what's
+    // already typed - completes as far as it unambiguously can even with
+    // several matches (e.g. "ring3a" among the 5 ring3async* commands).
+    int common_len = strlen_(matches[0]);
+    int m = 1;
+    while (m < match_count) {
+        int len = 0;
+        while (len < common_len && matches[m][len] == matches[0][len]) {
+            len = len + 1;
+        }
+        common_len = len;
+        m = m + 1;
+    }
+
+    if (common_len > word_len) {
+        char prefix[20];
+        int j = 0;
+        while (j < common_len) {
+            prefix[j] = matches[0][j];
+            j = j + 1;
+        }
+        prefix[j] = '\0';
+        tab_replace_word(word_len, prefix);
+    }
+
+    if (match_count == 1) {
+        // Ready for the next argument (or Enter) - no special-casing a
+        // directory match with a trailing '/', a deliberate simplification.
+        if (g_line_len < 127) {
+            g_line_buffer[g_line_len] = ' ';
+            g_line_len = g_line_len + 1;
+            vga_putc(' ');
+            serial_putc(' ');
+        }
+        return;
+    }
+
+    // Ambiguous beyond the common prefix - list every candidate, then
+    // reprint the prompt and the in-progress line exactly as it was,
+    // same as a real shell's own ambiguous-Tab behavior.
+    new_line();
+    int k = 0;
+    while (k < match_count) {
+        vga_print(matches[k]);
+        serial_print(matches[k]);
+        vga_print(" ");
+        serial_print(" ");
+        k = k + 1;
+    }
+    new_line();
+    print_prompt();
+    int p = 0;
+    while (p < g_line_len) {
+        vga_putc(g_line_buffer[p]);
+        serial_putc((u8) g_line_buffer[p]);
+        p = p + 1;
+    }
+}
+
 static int g_next_file_index;
 static char g_last_file_name[128];  // full path, not just the bare name - cmd_cat needs no cwd logic of its own
 

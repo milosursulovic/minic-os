@@ -105,9 +105,21 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
                     serial_putc('\b');
                     term_scrollback_backspace();
                 }
+            } else if (scancode == 0x0F) {  // Tab - shell/shell.c owns command/argument completion
+                shell_tab_complete();
             } else {
                 char c = g_scancode_table[scancode];
                 if (c == '\n') {
+                    // A trailing space (e.g. Tab-completing a no-argument
+                    // command, which appends one ready for a next argument
+                    // that never comes) would otherwise break every
+                    // exact-match dispatch check in shell.c (streq(...,
+                    // "help") doesn't match "help ") - trim it here, same
+                    // as any real shell silently ignoring trailing
+                    // whitespace on a submitted line.
+                    while (g_line_len > 0 && g_line_buffer[g_line_len - 1] == ' ') {
+                        g_line_len = g_line_len - 1;
+                    }
                     g_line_buffer[g_line_len] = '\0';
                     new_line();
                     shell_history_add(g_line_buffer);
