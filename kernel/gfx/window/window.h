@@ -8,6 +8,13 @@
 #define TITLEBAR_HEIGHT 20
 #define WINDOW_BACKGROUND_COLOR 0x00202020u
 
+// A maximized window fills the screen minus this much at the bottom, so
+// desktop_shell.c's taskbar (its own separate TASKBAR_HEIGHT, currently
+// also 20 - coincidence, not shared, since the compositor doesn't
+// otherwise know the taskbar exists as a concept) stays reachable while
+// something is maximized.
+#define MAXIMIZE_TASKBAR_RESERVE 20
+
 // Caps a window's body (not counting the titlebar, unless borderless) -
 // and its content buffer, which is sized for the max rather than tracked
 // per-window. Both are the full screen size so a borderless window can
@@ -31,6 +38,16 @@ typedef struct {
     // No titlebar drawn/reserved - the whole height is body. Only
     // window_create_borderless() sets this; window_create() never does.
     bool borderless;
+    // "Shaded" (window-shade minimize) - the titlebar (with its icons)
+    // still draws and is still draggable, only the body is skipped.
+    bool minimized;
+    // Filling the screen (minus the taskbar) - restore_x/y/width/height
+    // hold the pre-maximize bounds, meaningful only while true.
+    bool maximized;
+    i32 restore_x;
+    i32 restore_y;
+    u32 restore_width;
+    u32 restore_height;
 } window;
 
 extern window g_windows[WINDOW_SLOTS];
@@ -49,9 +66,26 @@ int window_create(i32 x, i32 y, u32 width, u32 height, u32 body_color, u32 title
 // TITLEBAR_HEIGHT first. Returns -1 on the same failure conditions.
 int window_create_borderless(i32 x, i32 y, u32 width, u32 height, u32 body_color);
 bool window_move(int id, i32 x, i32 y);
+// Same bounds checks as window_create (content-buffer cap, fits on
+// screen at the window's CURRENT x/y) - refuses if the window is
+// currently maximized (restore it first) or the result would be smaller
+// than a usable minimum. A resized window shows more/less of its
+// existing content buffer - it does not ask the owning app to redraw
+// (see kernel/gfx/window/window.c's compositor_handle_mouse() for why
+// that's a deliberate, documented scope limit, not an oversight).
+bool window_resize(int id, u32 width, u32 height);
 bool window_close(int id);
 // Moves id to the top of the z-order - the compositor draws it last.
 bool window_raise(int id);
+// Drives titlebar-icon clicks (close/minimize/maximize), the bottom-
+// right resize handle, and titlebar-drag-to-move - real mouse
+// interaction, entirely kernel-side (no ring3 syscall involved). Call
+// this unconditionally on every timer tick (kernel/isr/isr.c); it tracks
+// button edges itself. Returns true if any window's on-screen state
+// actually changed this tick (moved/resized/closed/(un)minimized/
+// (un)maximized/raised), so the caller can decide whether a redraw is
+// warranted - same idea as the existing cursor-moved check.
+bool compositor_handle_mouse(void);
 // Draws into id's content buffer, body-local coordinates, clamped to its
 // body size. Once called, the compositor draws this buffer instead of
 // body_color - a window is either a flat placeholder or fully app-drawn.

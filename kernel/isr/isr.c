@@ -49,13 +49,24 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
             serial_putc('.');  // one dot per ~1s at 100Hz, proves the timer keeps firing
         }
 
-        if (g_fb_enabled
-            && g_tick_count - g_cursor_last_redraw_tick >= CURSOR_REDRAW_TICK_INTERVAL
-            && (g_mouse_x != g_cursor_last_drawn_x || g_mouse_y != g_cursor_last_drawn_y)) {
-            g_cursor_last_drawn_x = g_mouse_x;
-            g_cursor_last_drawn_y = g_mouse_y;
-            g_cursor_last_redraw_tick = g_tick_count;
-            compositor_redraw();
+        if (g_fb_enabled) {
+            // compositor_handle_mouse() tracks button-press edges itself,
+            // so it must run every tick regardless of the redraw
+            // throttle below - only the resulting compositor_redraw()
+            // (an 800x600 backbuffer pass) is throttled, same reasoning
+            // as the plain cursor-move check it's now combined with:
+            // firing a full redraw on every single timer tick during an
+            // active drag would be the same redraw-storm bug class
+            // already fixed twice elsewhere this session.
+            bool wm_changed = compositor_handle_mouse();
+            bool cursor_moved = (g_mouse_x != g_cursor_last_drawn_x || g_mouse_y != g_cursor_last_drawn_y);
+            if (g_tick_count - g_cursor_last_redraw_tick >= CURSOR_REDRAW_TICK_INTERVAL
+                && (cursor_moved || wm_changed)) {
+                g_cursor_last_drawn_x = g_mouse_x;
+                g_cursor_last_drawn_y = g_mouse_y;
+                g_cursor_last_redraw_tick = g_tick_count;
+                compositor_redraw();
+            }
         }
 
         outb(0x20, 0x20);  // EOI before yield() might switch away
