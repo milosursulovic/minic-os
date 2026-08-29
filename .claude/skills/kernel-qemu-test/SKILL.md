@@ -83,6 +83,22 @@ treat a mismatch as a real bug, not a rounding/formatting difference.
   commands (each with its own process-spawn latency) does not correspond to
   real elapsed guest time - don't use it to validate a `sleep_ticks()`-style
   duration.
+- **A `screendump` taken only a couple seconds after boot can catch a
+  newly-spawned ring3 window's `_start()` still mid-execution, or catch one
+  redraw function's several *separate* `compositor_redraw()`-triggering
+  syscalls half-applied** (each `window_fill_rect`/`window_draw_text` call
+  independently blits, so a function that clears-then-redraws several text
+  rows can be screendumped between two of those steps) - as the boot
+  sequence has grown (more auto-spawned GUI apps, more round-robin tasks),
+  this has produced apparent "this button's label never renders" or "this
+  whole block is blank" bugs that were actually just "give it more real
+  wall-clock time" (10-15s, not 2-5s) under QEMU/TCG's software emulation
+  with no `-enable-kvm`. Before spending real effort disassembling code to
+  chase a rendering bug, re-screendump after a longer wait first - and
+  separately, try a full `make clean && make kernel.elf` rebuild, since a
+  stale ring3-program build (its multi-step Makefile sub-pipeline appears
+  less airtight against staleness than the main `C_OBJS` `.d`-tracked path)
+  has also produced this exact symptom at least once.
 - **QEMU monitor `mouse_button` (pressing a virtual PS/2 mouse button)
   permanently breaks `sendkey` keyboard delivery for the rest of that QEMU
   session** - confirmed by reproducing it twice: after `mouse_button 1`,
