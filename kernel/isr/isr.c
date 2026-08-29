@@ -8,8 +8,17 @@
 #include "../gfx/window/window.h"
 #include "../lib/strings.h"
 #include "../sched/task.h"
+#include "../../shell/editor/editor.h"
+#include "../../shell/shell/shell.h"
 
 u64 g_tick_count;
+
+// Scancode set 1 sends an extended key (arrows, etc) as two separate IRQ1
+// bytes: a 0xE0 prefix, then the actual code. Set on the prefix byte,
+// consumed (and cleared) on the very next IRQ1 - real key events always
+// arrive as consecutive interrupts, nothing else runs on this task in
+// between (task 0's own scheduling invariant, see CLAUDE.md).
+static bool g_extended_prefix;
 
 // Drives the mouse cursor's on-screen redraw (kernel/gfx/window.c's draw_cursor(),
 // composited last in every compositor_redraw() call) independent of
@@ -60,8 +69,31 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
 
     if (vector == 33) {
         u8 scancode = inb(0x60);
+
+        if (scancode == 0xE0) {  // extended-key prefix - the real code follows on the next IRQ1
+            g_extended_prefix = true;
+            outb(0x20, 0x20);
+            return;
+        }
+        bool extended = g_extended_prefix;
+        g_extended_prefix = false;
+
+        if (extended) {
+            if (!g_editor_active) {  // no arrow-key history recall inside a full-screen edit session
+                if (scancode == 0x48) {  // Up arrow (press - its release is 0xE0 0xC8, ignored below)
+                    shell_history_up();
+                } else if (scancode == 0x50) {  // Down arrow
+                    shell_history_down();
+                }
+            }
+            outb(0x20, 0x20);
+            return;
+        }
+
         if (scancode < 0x80) {  // top bit set = key release, ignore those
-            if (scancode == 0x0E) {  // Backspace
+            if (g_editor_active) {  // shell/editor.c owns every keystroke while a full-screen edit session is open
+                editor_handle_scancode(scancode);
+            } else if (scancode == 0x0E) {  // Backspace
                 if (g_line_len > 0) {
                     g_line_len = g_line_len - 1;
                     g_vga_cursor = g_vga_cursor - 1;
@@ -78,6 +110,7 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
                 if (c == '\n') {
                     g_line_buffer[g_line_len] = '\0';
                     new_line();
+                    shell_history_add(g_line_buffer);
                     g_line_ready = true;
                 } else if (c != '\0' && g_line_len < 127) {
                     g_line_buffer[g_line_len] = c;

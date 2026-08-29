@@ -135,6 +135,22 @@ static __attribute__((unused)) u64 gt_get_ticks(void) {
     return gt_syscall(35, 0, 0, 0);
 }
 
+static __attribute__((unused)) bool gt_window_close(int id) {
+    return gt_syscall(29, (u64) id, 0, 0) != 0;
+}
+
+// Spawns one of the fixed compiled-in GUI apps (0=terminal, 1=file_manager,
+// 2=settings - kernel/syscall/syscall.c's own gui_app_bounds()) instead of
+// kmain.c auto-spawning all of them at boot. Returns the new process index,
+// or -1 on failure (unknown app id, or the process/task table is full).
+static __attribute__((unused)) int gt_spawn_app(int app_id) {
+    u64 result = gt_syscall(41, (u64) app_id, 0, 0);
+    if (result == (u64) -1) {
+        return -1;
+    }
+    return (int) result;
+}
+
 // Copies console-shell output produced since since_pos into out_buf (up
 // to max_len bytes) - the same text every cmd_* already prints via
 // vga_print/serial_print, mirrored kernel-side (kernel/drivers/io.c). Returns

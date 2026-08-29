@@ -14,7 +14,8 @@
 #include "proc/ipc/net_request/net_request.h"
 #include "proc/ipc/net_tcp_request/net_tcp_request.h"
 #include "kernel/fs/vfs/vfs.h"
-#include "shell/shell.h"
+#include "shell/shell/shell.h"
+#include "shell/editor/editor.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -23,12 +24,6 @@ extern u8 g_init_prog_start;
 extern u8 g_init_prog_end;
 extern u8 g_desktop_shell_prog_start;
 extern u8 g_desktop_shell_prog_end;
-extern u8 g_terminal_prog_start;
-extern u8 g_terminal_prog_end;
-extern u8 g_file_manager_prog_start;
-extern u8 g_file_manager_prog_end;
-extern u8 g_settings_prog_start;
-extern u8 g_settings_prog_end;
 #pragma GCC visibility pop
 
 void _start(void) {
@@ -81,21 +76,11 @@ void _start(void) {
     // Desktop shell: wallpaper + taskbar + launcher, runs forever from
     // boot (not shell-triggered like ring3prog.c's demos) - activates the
     // framebuffer/graphics mode unconditionally on every boot from here on.
+    // Terminal/File Manager/Settings are no longer auto-spawned here - the
+    // taskbar's own MENU dropdown launches them on demand via syscall 41
+    // (kernel/syscall/syscall.c's gui_app_bounds()), so only the shell
+    // itself needs to exist at boot.
     spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end, 0x80000000, 0x80020000);
-
-    // Terminal emulator: mirrors the console shell's own output into a
-    // real GUI window (kernel/drivers/io.c's g_term_scrollback, syscall 36) -
-    // the physical keyboard still only ever fills g_line_buffer below,
-    // unchanged.
-    spawn_process(&g_terminal_prog_start, &g_terminal_prog_end, 0x80000000, 0x80020000);
-
-    // File manager: real navigable GUI browser over the hierarchical
-    // MiniFS tree (syscalls 5/37/38/39) - see proc/apps/file_manager.c.
-    spawn_process(&g_file_manager_prog_start, &g_file_manager_prog_end, 0x80000000, 0x80020000);
-
-    // System Settings: Display (persisted wallpaper color) + System Info
-    // (live uptime/memory/disk stats) - see proc/apps/settings.c.
-    spawn_process(&g_settings_prog_start, &g_settings_prog_end, 0x80000000, 0x80020000);
 
     __asm__ volatile("sti");
 
@@ -108,8 +93,16 @@ void _start(void) {
             run_command();
             g_line_ready = false;
             g_line_len = 0;
-            new_line();
-            print_prompt();
+            // A full-screen `edit` session (shell/editor.c) has already
+            // taken over the display by the time cmd_edit() returns here -
+            // reprinting a prompt on top of it would stomp the freshly-
+            // drawn editor screen. editor_save_and_exit() prints the next
+            // real prompt itself once the screen is normal shell output's
+            // to draw on again.
+            if (!g_editor_active) {
+                new_line();
+                print_prompt();
+            }
         }
     }
 }

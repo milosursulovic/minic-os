@@ -26,7 +26,11 @@
 // wraps fs_delete_file), 39 fs_mkdir (raw char* path via a1, wraps
 // fs_create_dir), 40 sys_info (pointer-to-struct - three embedded raw
 // ring3 output pointers for total/free frame counts and disk file count,
-// read directly from mm/frames.h's globals and fs_superblock_info()).
+// read directly from mm/frames.h's globals and fs_superblock_info()),
+// 41 spawn_gui_app (app id, not a raw pointer - 0=terminal/1=file_manager/
+// 2=settings, deliberately separate from syscall 11's own registry: that
+// one is the hello_service/register_service IPC demo, this one is the
+// fixed compiled-in GUI apps desktop_shell.c's MENU dropdown launches).
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -105,6 +109,12 @@ typedef struct __attribute__((packed)) {
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
 extern u8 g_hello_service_prog_end;
+extern u8 g_terminal_prog_start;
+extern u8 g_terminal_prog_end;
+extern u8 g_file_manager_prog_start;
+extern u8 g_file_manager_prog_end;
+extern u8 g_settings_prog_start;
+extern u8 g_settings_prog_end;
 #pragma GCC visibility pop
 
 // Index 0 is the one fixed compile-time entry; indices 1+ map to
@@ -137,6 +147,29 @@ static bool builtin_program_bounds(int index, u8** start_out, u8** end_out) {
 // Safe to reuse across processes - each gets its own cloned address space.
 static const u64 BUILTIN_LOAD_VADDR = 0x80000000;
 static const u64 BUILTIN_STACK_VADDR = 0x80020000;
+
+// Deliberately separate from builtin_program_bounds() above - that one is
+// the hello_service/register_service IPC demo registry, this one is the
+// fixed set of compiled-in GUI apps desktop_shell.c's MENU dropdown can
+// launch on demand instead of kmain.c auto-spawning all of them at boot.
+static bool gui_app_bounds(int app_id, u8** start_out, u8** end_out) {
+    if (app_id == 0) {
+        *start_out = &g_terminal_prog_start;
+        *end_out = &g_terminal_prog_end;
+        return true;
+    }
+    if (app_id == 1) {
+        *start_out = &g_file_manager_prog_start;
+        *end_out = &g_file_manager_prog_end;
+        return true;
+    }
+    if (app_id == 2) {
+        *start_out = &g_settings_prog_start;
+        *end_out = &g_settings_prog_end;
+        return true;
+    }
+    return false;
+}
 
 u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     if (num == 1) {
@@ -809,6 +842,15 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         fs_superblock_info(&file_count);
         *args->disk_file_count_out = file_count;
         return 0;
+    }
+    if (num == 41) {
+        u8* start;
+        u8* end;
+        if (!gui_app_bounds((int) a1, &start, &end)) {
+            return (u64) -1;
+        }
+        int proc_index = spawn_process(start, end, BUILTIN_LOAD_VADDR, BUILTIN_STACK_VADDR);
+        return (u64) proc_index;  // spawn_process's own -1-on-failure convention
     }
     return (u64) -1;  // unknown syscall
 }

@@ -90,6 +90,23 @@ static u32 window_body_screen_y(window* w) {
     return w->borderless ? (u32) w->y : (u32) w->y + TITLEBAR_HEIGHT;
 }
 
+// A freshly created window can land on a REUSED slot (window_close() only
+// marks the slot free, it never touches g_window_content) - without this,
+// a new window whose owner hasn't yet drawn over every single cell of its
+// own content area would show the PREVIOUS occupant's leftover pixels
+// wherever it hasn't (has_content=true makes draw_window_content() paint
+// every cell in the buffer unconditionally, stale ones included). Real
+// bug, found via desktop_shell.c's MENU dropdown: close the popup, spawn
+// Terminal into the same freed slot, see the popup's old button labels
+// baked into the new window.
+static void clear_window_content(int id) {
+    u32 i = 0;
+    while (i < WINDOW_CONTENT_MAX_WIDTH * WINDOW_CONTENT_MAX_HEIGHT) {
+        g_window_content[id][i] = 0;
+        i = i + 1;
+    }
+}
+
 int window_create(i32 x, i32 y, u32 width, u32 height, u32 body_color, u32 title_color) {
     if (height <= TITLEBAR_HEIGHT) {
         return -1;  // no room for a body at all
@@ -128,6 +145,7 @@ int window_create(i32 x, i32 y, u32 width, u32 height, u32 body_color, u32 title
     g_windows[id].title_color = title_color;
     g_windows[id].has_content = false;
     g_windows[id].borderless = false;
+    clear_window_content(id);
 
     g_window_zorder[g_window_zorder_count] = id;
     g_window_zorder_count = g_window_zorder_count + 1;
@@ -162,6 +180,7 @@ int window_create_borderless(i32 x, i32 y, u32 width, u32 height, u32 body_color
     g_windows[id].title_color = 0;
     g_windows[id].has_content = false;
     g_windows[id].borderless = true;
+    clear_window_content(id);
 
     g_window_zorder[g_window_zorder_count] = id;
     g_window_zorder_count = g_window_zorder_count + 1;

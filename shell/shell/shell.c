@@ -1,30 +1,31 @@
 // Interactive shell over keyboard.c's line buffer.
 
 #include "shell.h"
-#include "../kernel/drivers/io/io.h"
-#include "../kernel/drivers/keyboard/keyboard.h"
-#include "../kernel/lib/strings.h"
-#include "../kernel/mm/heap/heap.h"
-#include "../kernel/mm/frames/frames.h"
-#include "../kernel/mm/paging/paging.h"
-#include "../kernel/sched/task.h"
-#include "../proc/ipc/channel/channel.h"
-#include "../kernel/isr/isr.h"
-#include "../kernel/fs/ata/ata.h"
-#include "../kernel/fs/minifs/minifs.h"
-#include "../kernel/fs/vfs/vfs.h"
-#include "../proc/process.h"
-#include "../proc/ipc/object/object.h"
-#include "../kernel/drivers/pci/pci.h"
-#include "../kernel/net/e1000/e1000.h"
-#include "../kernel/net/arp/arp.h"
-#include "../kernel/net/ip/ip.h"
-#include "../kernel/net/icmp/icmp.h"
-#include "../kernel/net/dns/dns.h"
-#include "../kernel/net/tcp/tcp.h"
-#include "../kernel/drivers/vbe/vbe.h"
-#include "../kernel/drivers/mouse/mouse.h"
-#include "../kernel/gfx/window/window.h"
+#include "../editor/editor.h"
+#include "../../kernel/drivers/io/io.h"
+#include "../../kernel/drivers/keyboard/keyboard.h"
+#include "../../kernel/lib/strings.h"
+#include "../../kernel/mm/heap/heap.h"
+#include "../../kernel/mm/frames/frames.h"
+#include "../../kernel/mm/paging/paging.h"
+#include "../../kernel/sched/task.h"
+#include "../../proc/ipc/channel/channel.h"
+#include "../../kernel/isr/isr.h"
+#include "../../kernel/fs/ata/ata.h"
+#include "../../kernel/fs/minifs/minifs.h"
+#include "../../kernel/fs/vfs/vfs.h"
+#include "../../proc/process.h"
+#include "../../proc/ipc/object/object.h"
+#include "../../kernel/drivers/pci/pci.h"
+#include "../../kernel/net/e1000/e1000.h"
+#include "../../kernel/net/arp/arp.h"
+#include "../../kernel/net/ip/ip.h"
+#include "../../kernel/net/icmp/icmp.h"
+#include "../../kernel/net/dns/dns.h"
+#include "../../kernel/net/tcp/tcp.h"
+#include "../../kernel/drivers/vbe/vbe.h"
+#include "../../kernel/drivers/mouse/mouse.h"
+#include "../../kernel/gfx/window/window.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -36,9 +37,78 @@ void print_prompt(void) {
     serial_print("> ");
 }
 
+#define HISTORY_MAX 16
+static char g_history[HISTORY_MAX][128];
+static int g_history_count;          // total real entries recorded, capped at HISTORY_MAX
+static int g_history_next;           // ring buffer write slot
+static int g_history_browse_index = -1;  // -1 = fresh line, 0 = most recent entry, 1 = one before that, ...
+
+void shell_history_add(const char* line) {
+    if (line[0] == '\0') {
+        return;  // don't clutter history with a bare Enter
+    }
+    int i = 0;
+    while (line[i] != '\0' && i < 127) {
+        g_history[g_history_next][i] = line[i];
+        i = i + 1;
+    }
+    g_history[g_history_next][i] = '\0';
+    g_history_next = (g_history_next + 1) % HISTORY_MAX;
+    if (g_history_count < HISTORY_MAX) {
+        g_history_count = g_history_count + 1;
+    }
+    g_history_browse_index = -1;
+}
+
+// Erases the in-progress command line in place (real per-char backspace,
+// same mirroring as isr.c's own Backspace) then retypes whatever
+// g_history_browse_index now points at (or nothing, for -1).
+static void shell_history_redraw(void) {
+    while (g_line_len > 0) {
+        g_line_len = g_line_len - 1;
+        g_vga_cursor = g_vga_cursor - 1;
+        g_vga[g_vga_cursor].character = ' ';
+        g_vga[g_vga_cursor].color = 0x0F;
+        serial_putc('\b');
+        serial_putc(' ');
+        serial_putc('\b');
+        term_scrollback_backspace();
+    }
+    vga_update_cursor(g_vga_cursor);
+
+    if (g_history_browse_index >= 0) {
+        int slot = ((g_history_next - 1 - g_history_browse_index) % HISTORY_MAX + HISTORY_MAX) % HISTORY_MAX;
+        int i = 0;
+        while (g_history[slot][i] != '\0') {
+            char c = g_history[slot][i];
+            g_line_buffer[g_line_len] = c;
+            g_line_len = g_line_len + 1;
+            vga_putc(c);
+            serial_putc((u8) c);
+            i = i + 1;
+        }
+    }
+}
+
+void shell_history_up(void) {
+    if (g_history_browse_index + 1 >= g_history_count) {
+        return;  // already at the oldest entry (or history is empty)
+    }
+    g_history_browse_index = g_history_browse_index + 1;
+    shell_history_redraw();
+}
+
+void shell_history_down(void) {
+    if (g_history_browse_index < 0) {
+        return;  // already on a fresh line, nothing to come back to
+    }
+    g_history_browse_index = g_history_browse_index - 1;
+    shell_history_redraw();
+}
+
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text>");
 }
 
 static void cmd_ticks(void) {
@@ -302,6 +372,7 @@ static void cmd_clear(void) {
     }
     g_vga_cursor = 80;
     vga_update_cursor(g_vga_cursor);
+    term_scrollback_clear();
 }
 
 static void cmd_ps(void) {
@@ -728,6 +799,17 @@ static void cmd_touch(void) {
     serial_print("touched ");
     vga_print(arg);
     serial_print(arg);
+}
+
+// edit <name> - full-screen console text editor, see shell/editor.c. Takes
+// over the whole display until Esc; nothing else runs on this task while
+// g_editor_active is true (kmain.c's main loop skips its own prompt
+// reprint, isr.c routes every keystroke to editor_handle_scancode()).
+static void cmd_edit(void) {
+    char* arg = &g_line_buffer[5];  // past "edit "
+    char path[128];
+    join_path(path, g_shell_cwd, arg);
+    editor_start(path);
 }
 
 // cat <name> - reads an explicit path relative to the current directory,
@@ -1657,6 +1739,8 @@ void run_command(void) {
         cmd_mv();
     } else if (starts_with(g_line_buffer, "touch ")) {
         cmd_touch();
+    } else if (starts_with(g_line_buffer, "edit ")) {
+        cmd_edit();
     } else if (starts_with(g_line_buffer, "vfscat ")) {
         cmd_vfs_cat();
     } else if (streq(g_line_buffer, "vfswrite")) {

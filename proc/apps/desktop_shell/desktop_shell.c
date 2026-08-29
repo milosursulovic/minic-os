@@ -21,6 +21,20 @@
 #define LAUNCHER_PRESSED_COLOR 0x0000AA00u
 #define LABEL_COLOR 0x00FFFFFFu
 
+// MENU dropdown - a small popup window with one row per launchable app,
+// created fresh each time it's opened and closed again on any selection
+// (or on re-clicking MENU) - no "click elsewhere to dismiss" here, a
+// small explicitly-scoped dropdown, not a full window-manager menu.
+#define POPUP_WIDTH 100
+#define POPUP_ITEM_HEIGHT 18
+#define POPUP_ITEM_COUNT 3
+#define POPUP_HEIGHT (POPUP_ITEM_HEIGHT * POPUP_ITEM_COUNT)
+#define POPUP_X 4
+#define POPUP_Y (SCREEN_HEIGHT - TASKBAR_HEIGHT - POPUP_HEIGHT)
+#define POPUP_BG_COLOR 0x00404040u
+#define POPUP_ITEM_NORMAL_COLOR 0x00505050u
+#define POPUP_ITEM_PRESSED_COLOR 0x0000AA00u
+
 // How many raw ticks must pass before the uptime label redraws again -
 // NOT "redraw on any change". CLAUDE.md's own documented gotcha is that
 // QEMU/TCG's PIT timer runs far faster than the nominal 100Hz, so
@@ -67,18 +81,78 @@ void _start(void) {
     button_init(&launcher, taskbar_id, 4, 2, 60, 16, "MENU",  // font is uppercase-only
                 LAUNCHER_NORMAL_COLOR, LAUNCHER_PRESSED_COLOR, LABEL_COLOR);
 
+    int popup_id = -1;  // -1 = dropdown closed
+    button popup_terminal, popup_files, popup_settings;
+    // Single-instance guards - no window-focus/bring-to-front concept
+    // exists yet, so re-selecting an already-running app is a harmless
+    // no-op instead of spawning a second window for it.
+    bool terminal_open = false;
+    bool files_open = false;
+    bool settings_open = false;
+
     // Sentinel: no real tick count is ever this value on a fresh boot, so
     // the first loop iteration always draws the label once.
     u64 last_rendered_ticks = (u64) -1;
 
     for (;;) {
-        bool clicked = button_poll(&launcher);
-        if (clicked) {
-            // Proves the launcher genuinely launches something visible,
-            // not just a color change - one fixed demo app window per
-            // click (a real app menu is future work, see the roadmap
-            // memory's documented limitation for this milestone).
-            gt_window_create(250, 150, 200, 150, 0x00444444u, 0x00888888u);
+        if (button_poll(&launcher)) {
+            if (popup_id < 0) {
+                popup_id = gt_window_create_borderless(POPUP_X, POPUP_Y, POPUP_WIDTH, POPUP_HEIGHT, POPUP_BG_COLOR);
+                // Explicit full-rect fill first - once anything is drawn
+                // into a window's content buffer, its flat body_color
+                // stops applying to undrawn cells (same gotcha the
+                // taskbar's own background hit above).
+                gt_window_fill_rect_args popup_bg;
+                popup_bg.id = popup_id;
+                popup_bg.x = 0;
+                popup_bg.y = 0;
+                popup_bg.width = POPUP_WIDTH;
+                popup_bg.height = POPUP_HEIGHT;
+                popup_bg.color = POPUP_BG_COLOR;
+                gt_syscall(30, (u64) &popup_bg, 0, 0);
+
+                button_init(&popup_terminal, popup_id, 4, 0 * POPUP_ITEM_HEIGHT + 1,
+                            POPUP_WIDTH - 8, POPUP_ITEM_HEIGHT - 2, "TERMINAL",
+                            POPUP_ITEM_NORMAL_COLOR, POPUP_ITEM_PRESSED_COLOR, LABEL_COLOR);
+                button_init(&popup_files, popup_id, 4, 1 * POPUP_ITEM_HEIGHT + 1,
+                            POPUP_WIDTH - 8, POPUP_ITEM_HEIGHT - 2, "FILES",
+                            POPUP_ITEM_NORMAL_COLOR, POPUP_ITEM_PRESSED_COLOR, LABEL_COLOR);
+                button_init(&popup_settings, popup_id, 4, 2 * POPUP_ITEM_HEIGHT + 1,
+                            POPUP_WIDTH - 8, POPUP_ITEM_HEIGHT - 2, "SETTINGS",
+                            POPUP_ITEM_NORMAL_COLOR, POPUP_ITEM_PRESSED_COLOR, LABEL_COLOR);
+            } else {
+                gt_window_close(popup_id);
+                popup_id = -1;
+            }
+        }
+
+        if (popup_id >= 0) {
+            bool clicked_terminal = button_poll(&popup_terminal);
+            bool clicked_files = !clicked_terminal && button_poll(&popup_files);
+            bool clicked_settings = !clicked_terminal && !clicked_files && button_poll(&popup_settings);
+
+            if (clicked_terminal) {
+                if (!terminal_open) {
+                    gt_spawn_app(0);
+                    terminal_open = true;
+                }
+                gt_window_close(popup_id);
+                popup_id = -1;
+            } else if (clicked_files) {
+                if (!files_open) {
+                    gt_spawn_app(1);
+                    files_open = true;
+                }
+                gt_window_close(popup_id);
+                popup_id = -1;
+            } else if (clicked_settings) {
+                if (!settings_open) {
+                    gt_spawn_app(2);
+                    settings_open = true;
+                }
+                gt_window_close(popup_id);
+                popup_id = -1;
+            }
         }
 
         // See UPTIME_REDRAW_TICK_INTERVAL above - unthrottled, this was

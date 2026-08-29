@@ -7,7 +7,7 @@ description: Boot minic-os's kernel.elf in QEMU and drive its interactive shell 
 
 This kernel's shell only accepts real PS/2 keyboard input - there is no
 serial-input path (`grep`ping for a serial-read/getc function in
-`drivers/keyboard.c`/`shell/shell.c` confirms this). That means the serial
+`kernel/drivers/keyboard/keyboard.c`/`shell/shell/shell.c` confirms this). That means the serial
 port is output-only, and driving the shell non-interactively requires QEMU
 to actually deliver key events, not just receiving piped text on a pty.
 
@@ -62,7 +62,7 @@ survives being typed elsewhere.
 
 ## 4. Read the assertion, don't just check "it printed something"
 
-Every shell test command in `shell/shell.c` (`cmd_fb`, `cmd_win`,
+Every shell test command in `shell/shell/shell.c` (`cmd_fb`, `cmd_win`,
 `cmd_text`, `cmd_wincontent`, `cmd_textcontent`, etc.) prints named
 hex-labeled values specifically so they can be compared against a
 hand-computed expected value - e.g. a specific framebuffer pixel that must
@@ -118,6 +118,19 @@ treat a mismatch as a real bug, not a rounding/formatting difference.
 - **Command batching (many `sendkey`/monitor round trips issued too fast)
   can occasionally hang** - keep the `sleep 0.1` between keystrokes and a
   `sleep 1`+ pause after the final `ret` before reading `serial.log`.
+- **`mouse_move dx dy` deltas are relative, not absolute pixels on an
+  0-32767 tablet scale** - they map ~1:1 to real screen pixels in this
+  kernel's driver (confirmed: `mouse_move 100 0` shifted the on-screen
+  cursor by ~100px). The cursor starts at a fixed `(400,300)` every fresh
+  boot (`kernel/drivers/mouse/mouse.c`'s init values). Empirically, a
+  *positive* `dy` argument moves the cursor *down* the screen (increases
+  `g_mouse_y`) - net effect confirmed by observation, not re-derived from
+  `mouse.c`'s own `g_mouse_y = g_mouse_y - dy` line, so don't assume the
+  opposite from reading the source alone. Before committing to a
+  `mouse_button` click, do one `screendump` first to confirm the cursor
+  actually landed on the target - a few-pixel miscalculation (e.g. landing
+  1px above a popup's top edge) misses silently, with no error, costing a
+  retry cycle.
 
 ## 6. Visual verification via `screendump` (no guest keyboard needed)
 

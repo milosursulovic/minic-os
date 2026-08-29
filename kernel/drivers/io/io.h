@@ -52,5 +52,10 @@ extern u64 g_term_write_pos;
 // interpret as "erase the previous mirrored character", same idea as a
 // real terminal's backspace-is-just-another-byte-in-the-stream model.
 void term_scrollback_backspace(void);
+// A real terminal clear is just another byte in the mirrored stream, same
+// idea as the backspace marker above - '\f' (0x0C) is never otherwise
+// produced by any shell command's output, so it's free to use as a
+// dedicated "wipe the mirrored view" signal for terminal.c's terminal_feed().
+void term_scrollback_clear(void);
 
 #pragma GCC visibility pop

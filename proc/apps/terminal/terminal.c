@@ -63,6 +63,20 @@ static void terminal_scroll_up(void) {
 }
 
 static void terminal_feed(char c) {
+    if (c == '\f') {
+        // Real "clear" (kernel/drivers/io.c's term_scrollback_clear()) is
+        // just another byte in the mirrored stream - wipe this window's
+        // own local copy and force a full blank repaint of every row.
+        int row = 0;
+        while (row < ROWS) {
+            g_lines[row][0] = '\0';
+            row = row + 1;
+        }
+        g_cur_row = 0;
+        g_cur_col = 0;
+        g_scrolled_this_batch = true;
+        return;
+    }
     if (c == '\n') {
         g_lines[g_cur_row][g_cur_col] = '\0';
         g_cur_row = g_cur_row + 1;

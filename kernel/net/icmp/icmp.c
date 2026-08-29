@@ -14,11 +14,21 @@ static const u8 IP_PROTOCOL_ICMP = 1;
 // Resolves target_ip's MAC, sends an echo request, and polls (tick-bounded)
 // for a reply matching EtherType/protocol/source IP/type/identifier/sequence.
 bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
+    ip_init();  // must run before reading g_gateway_ip below, not after
+
+    // Real routing, not a direct ARP for target_ip: that only ever worked
+    // for QEMU SLIRP's own fake local hosts (10.0.2.2/10.0.2.3, which
+    // answer ARP themselves) - any real destination (an actual internet
+    // host, e.g. whatever DNS resolved google.com to) never answers an
+    // ARP request on this virtual segment at all, so the ping would
+    // silently never even get sent. Same fix kernel/net/tcp/tcp.c's
+    // tcp_fetch_conn() already established: always resolve the gateway's
+    // MAC as the frame's next hop, keep the IP header's destination as
+    // the real target_ip - the gateway (SLIRP) does the actual routing.
     u8 dest_mac[6];
-    if (!arp_resolve(target_ip, &dest_mac[0])) {
+    if (!arp_resolve(&g_gateway_ip[0], &dest_mac[0])) {
         return false;
     }
-    ip_init();
     u8 src_mac[6];
     e1000_get_mac(&src_mac[0]);
 
