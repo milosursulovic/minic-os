@@ -33,7 +33,19 @@
 
 __attribute__((section(".text.start")))
 void _start(void) {
-    gt_window_create_borderless(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WALLPAPER_COLOR);
+    // Settings (proc/settings.c) persists a chosen wallpaper color to
+    // /system/settings.cfg as a raw 4-byte color value - read it here at
+    // boot, same "reads its own config once at startup" convention as
+    // every other setting this kernel has. No settings.cfg (every disk
+    // image predating Settings, or one that's never had a color chosen)
+    // falls back to today's hardcoded default - fully backward-compatible.
+    u32 wallpaper_color = WALLPAPER_COLOR;
+    u32 saved_color;
+    if (gt_vfs_read("/system/settings.cfg", (u8*) &saved_color, sizeof(saved_color)) == (int) sizeof(saved_color)) {
+        wallpaper_color = saved_color;
+    }
+
+    gt_window_create_borderless(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, wallpaper_color);
     int taskbar_id = gt_window_create_borderless(0, SCREEN_HEIGHT - TASKBAR_HEIGHT,
                                                   SCREEN_WIDTH, TASKBAR_HEIGHT, TASKBAR_COLOR);
 

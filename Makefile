@@ -62,7 +62,7 @@ DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 ASM_SRCS := boot/boot.s boot/interrupts.s sched/switch.s syscall/usermode.s
 ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './proc/desktop_shell.c' -not -path './proc/terminal.c' -not -path './proc/file_manager.c' -not -path './.claude/*'))
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/ring3prog.c' -not -path './proc/init.c' -not -path './proc/hello_service.c' -not -path './proc/desktop_shell.c' -not -path './proc/terminal.c' -not -path './proc/file_manager.c' -not -path './proc/settings.c' -not -path './.claude/*'))
 C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
 .PHONY: all run iso disk clean
@@ -170,6 +170,18 @@ proc/file_manager.bin: proc/file_manager.c proc/gui_toolkit.h proc/ring3.ld disk
 
 -include $(BUILD_DIR)/proc/file_manager.d
 
+# System Settings - same shape again, auto-spawned by kmain.c alongside
+# desktop_shell/terminal/file_manager/init.
+proc/settings.bin: proc/settings.c proc/gui_toolkit.h proc/ring3.ld
+	@mkdir -p $(BUILD_DIR)/proc
+	$(CC) $(CFLAGS) -MMD -MP -MT proc/settings.bin -MF $(BUILD_DIR)/proc/settings.d -S -o $(BUILD_DIR)/proc/settings.gen.s proc/settings.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/settings.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/settings_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/settings_linked.elf $(BUILD_DIR)/proc/settings_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(BUILD_DIR)/proc/settings_linked.elf proc/settings.bin
+
+-include $(BUILD_DIR)/proc/settings.d
+
 # `.incbin` in each *_blob.s resolves relative to the assembler's own
 # working directory, not the .s file's location - `cd proc` first,
 # matching the MiniC-era build's own convention. `../$@` still lands the
@@ -198,8 +210,12 @@ $(BUILD_DIR)/proc/file_manager_blob.o: proc/file_manager_blob.s proc/file_manage
 	@mkdir -p $(BUILD_DIR)/proc
 	cd proc && $(AS) --32 file_manager_blob.s -o ../$@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o $(BUILD_DIR)/proc/terminal_blob.o $(BUILD_DIR)/proc/file_manager_blob.o
-	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o $(BUILD_DIR)/proc/terminal_blob.o $(BUILD_DIR)/proc/file_manager_blob.o
+$(BUILD_DIR)/proc/settings_blob.o: proc/settings_blob.s proc/settings.bin
+	@mkdir -p $(BUILD_DIR)/proc
+	cd proc && $(AS) --32 settings_blob.s -o ../$@
+
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o $(BUILD_DIR)/proc/terminal_blob.o $(BUILD_DIR)/proc/file_manager_blob.o $(BUILD_DIR)/proc/settings_blob.o
+	$(LD) -m elf_i386 -T boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/ring3blob.o $(BUILD_DIR)/proc/init_blob.o $(BUILD_DIR)/proc/hello_service_blob.o $(BUILD_DIR)/proc/desktop_shell_blob.o $(BUILD_DIR)/proc/terminal_blob.o $(BUILD_DIR)/proc/file_manager_blob.o $(BUILD_DIR)/proc/settings_blob.o
 	@echo "built kernel.elf"
 
 disk.img:
@@ -231,3 +247,4 @@ clean:
 	rm -f proc/desktop_shell.bin proc/desktop_shell_linked.elf
 	rm -f proc/terminal.bin proc/terminal_linked.elf
 	rm -f proc/file_manager.bin proc/file_manager_linked.elf
+	rm -f proc/settings.bin proc/settings_linked.elf

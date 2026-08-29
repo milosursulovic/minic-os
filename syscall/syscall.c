@@ -24,7 +24,9 @@
 // dir_path/index in, name_out/size_out/is_dir_out embedded raw ring3
 // pointers, wraps fs_list_entry), 38 fs_delete (raw char* path via a1,
 // wraps fs_delete_file), 39 fs_mkdir (raw char* path via a1, wraps
-// fs_create_dir).
+// fs_create_dir), 40 sys_info (pointer-to-struct - three embedded raw
+// ring3 output pointers for total/free frame counts and disk file count,
+// read directly from mm/frames.h's globals and fs_superblock_info()).
 
 #include "syscall.h"
 #include "../drivers/io.h"
@@ -93,6 +95,12 @@ typedef struct __attribute__((packed)) {
     u32* size_out;
     bool* is_dir_out;
 } fs_list_args;
+
+typedef struct __attribute__((packed)) {
+    u32* total_frames_out;
+    u32* free_frames_out;
+    u32* disk_file_count_out;
+} sys_info_args;
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -792,6 +800,15 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         char* path = (char*) a1;
         bool ok = fs_create_dir(path);
         return (u64) ok;
+    }
+    if (num == 40) {
+        sys_info_args* args = (sys_info_args*) a1;
+        *args->total_frames_out = g_total_frames;
+        *args->free_frames_out = g_free_frame_count;
+        u32 file_count;
+        fs_superblock_info(&file_count);
+        *args->disk_file_count_out = file_count;
+        return 0;
     }
     return (u64) -1;  // unknown syscall
 }

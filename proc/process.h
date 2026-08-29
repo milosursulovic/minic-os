@@ -4,10 +4,11 @@
 
 #pragma GCC visibility push(hidden)
 
-// 5 processes are already spawned at boot (test_prog, init, desktop_shell,
-// terminal, file_manager - see kmain.c), so this needs at least 5 plus
-// headroom for the shell's own "spawn"/"install" demo commands.
-#define MAX_PROCESSES 6
+// 6 processes are already spawned at boot (test_prog, init, desktop_shell,
+// terminal, file_manager, settings - see kmain.c), so this needs at least
+// 6 plus real headroom (not another exact-fit) for the shell's own
+// "spawn"/"install" demo commands.
+#define MAX_PROCESSES 8
 
 typedef struct {
     bool used;

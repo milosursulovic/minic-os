@@ -27,6 +27,8 @@ extern u8 g_terminal_prog_start;
 extern u8 g_terminal_prog_end;
 extern u8 g_file_manager_prog_start;
 extern u8 g_file_manager_prog_end;
+extern u8 g_settings_prog_start;
+extern u8 g_settings_prog_end;
 #pragma GCC visibility pop
 
 void _start(void) {
@@ -90,6 +92,10 @@ void _start(void) {
     // File manager: real navigable GUI browser over the hierarchical
     // MiniFS tree (syscalls 5/37/38/39) - see proc/file_manager.c.
     spawn_process(&g_file_manager_prog_start, &g_file_manager_prog_end, 0x80000000, 0x80020000);
+
+    // System Settings: Display (persisted wallpaper color) + System Info
+    // (live uptime/memory/disk stats) - see proc/settings.c.
+    spawn_process(&g_settings_prog_start, &g_settings_prog_end, 0x80000000, 0x80020000);
 
     __asm__ volatile("sti");
 

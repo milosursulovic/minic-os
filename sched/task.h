@@ -4,6 +4,13 @@
 
 #pragma GCC visibility push(hidden)
 
+// 17 tasks are already needed at boot after the Settings app (11 fixed
+// kernel tasks + 6 spawn_process boot processes - test_prog/init/
+// desktop_shell/terminal/file_manager/settings) - real headroom beyond
+// that, not another exact-fit, so the shell's own spawn/ring3* demo
+// commands still have room.
+#define MAX_TASKS 24
+
 typedef struct {
     u64 saved_rsp;
     bool used;
@@ -17,7 +24,7 @@ typedef struct {
     u64 kernel_stack_top;    // this task's own TSS.RSP0 target - see set_tss_rsp0's comment
 } task;
 
-extern task g_tasks[16];
+extern task g_tasks[MAX_TASKS];
 extern int g_task_count;
 extern int g_current_task;
 

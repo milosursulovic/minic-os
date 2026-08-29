@@ -17,7 +17,7 @@
 extern void switch_context(u64* old_rsp_out, u64 new_rsp);
 #pragma GCC visibility pop
 
-task g_tasks[16];
+task g_tasks[MAX_TASKS];
 int g_task_count;
 int g_current_task;
 
@@ -45,7 +45,7 @@ int create_task_with_cr3(void (*entry)(void), u64 cr3) {
     if (index >= 0) {
         stack_top = g_tasks[index].kernel_stack_top;
     } else {
-        if (g_task_count >= 16) {
+        if (g_task_count >= MAX_TASKS) {
             return -1;
         }
         u8* stack_mem = (u8*) kalloc(16384);

@@ -181,13 +181,42 @@ static __attribute__((unused)) bool gt_vfs_write(char* path, u8* data, u32 len) 
     return gt_syscall(5, (u64) path, (u64) data, (u64) len) != (u64) -1;
 }
 
+// Wraps syscall 4 (vfs_read) - same raw (path, buf, max_len) shape as
+// ring3prog.c's own direct do_syscall(4, ...) call. Returns bytes read,
+// -1 (not found) or -2 (too big for max_len).
+static __attribute__((unused)) int gt_vfs_read(char* path, u8* buf, u32 max_len) {
+    return (int) gt_syscall(4, (u64) path, (u64) buf, (u64) max_len);
+}
+
+typedef struct __attribute__((packed)) {
+    u32* total_frames_out;
+    u32* free_frames_out;
+    u32* disk_file_count_out;
+} gt_sys_info_args;
+
+// Wraps syscall 40 - live kernel stats (frame allocator + MiniFS
+// superblock), read straight from kernel globals, no caching.
+static __attribute__((unused)) bool gt_sys_info(u32* total_frames_out, u32* free_frames_out, u32* disk_file_count_out) {
+    gt_sys_info_args args;
+    args.total_frames_out = total_frames_out;
+    args.free_frames_out = free_frames_out;
+    args.disk_file_count_out = disk_file_count_out;
+    return gt_syscall(40, (u64) &args, 0, 0) == 0;
+}
+
 // Minimal, self-contained hex formatter - lib/strings.c's format_hex()
 // isn't linked into ring3 programs (each is its own standalone-linked
 // blob, see proc/ring3.ld). Null-terminates, unlike format_hex(), since
 // window_draw_text's syscall dereferences a null-terminated string on
 // the kernel side. Returns the digit count, not counting the terminator.
+// Uppercase A-F, not lowercase - the font (gfx/font.h) has no lowercase
+// glyphs at all, so a lowercase hex digit used to render as an invisible
+// gap (found via Settings' memory stats, the first caller whose values
+// routinely land above 0xF - desktop_shell's tick counts and File
+// Manager's sizes happened to stay in the 0-9 range in every case tested
+// so far, masking this until now).
 static __attribute__((unused)) int gt_format_hex(u64 value, char* out) {
-    const char* digits = "0123456789abcdef";
+    const char* digits = "0123456789ABCDEF";
     if (value == 0) {
         out[0] = '0';
         out[1] = '\0';
