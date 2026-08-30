@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(socat - unix-connect:*)",
+      "Bash(qemu-system-x86_64 -kernel kernel.elf *)",
+      "Bash(npm test *)",
+      "Bash(npm run lint *)",
+      "Bash(objdump *)"
+    ]
+  }
+}
