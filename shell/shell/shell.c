@@ -121,8 +121,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix");
 }
 
 static void cmd_ticks(void) {
@@ -571,7 +571,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 73
+#define SHELL_COMMAND_COUNT 74
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -604,6 +604,7 @@ static void shell_commands_init(void) {
     g_shell_commands[66] = "ipconfig"; g_shell_commands[67] = "dns"; g_shell_commands[68] = "tcp";
     g_shell_commands[69] = "echo"; g_shell_commands[70] = "pngtest";
     g_shell_commands[71] = "ring3fileobj"; g_shell_commands[72] = "ring3perms";
+    g_shell_commands[73] = "ring3posix";
     g_shell_commands_initialized = true;
 }
 
@@ -1433,6 +1434,20 @@ static void cmd_ring3_perms(void) {
     serial_print("sent ring3 permissions trigger");
 }
 
+// Exercises the real POSIX shim (proc/posix/posix.h) - open/read/write/
+// close/lseek over the same File-object syscalls as ring3fileobj, see
+// ring3prog.c trigger 17.
+static void cmd_ring3_posix(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0x11);
+    if (!ok) {
+        vga_print("ring3posix failed - channel full");
+        serial_print("ring3posix failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 posix trigger");
+    serial_print("sent ring3 posix trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -2220,6 +2235,8 @@ void run_command(void) {
         cmd_ring3_file_object();
     } else if (streq(g_line_buffer, "ring3perms")) {
         cmd_ring3_perms();
+    } else if (streq(g_line_buffer, "ring3posix")) {
+        cmd_ring3_posix();
     } else if (streq(g_line_buffer, "ring3button")) {
         cmd_ring3_button();
     } else if (streq(g_line_buffer, "pci")) {

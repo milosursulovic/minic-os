@@ -8,6 +8,7 @@
 
 #include "../../../types.h"
 #include "../../gui_toolkit.h"
+#include "../../posix/posix.h"
 
 #define RIGHT_QUERY 1
 
@@ -608,6 +609,32 @@ void _start(void) {
         int root_read = gt_file_open("/system/permtest.mfs", 0);
         do_syscall(1, (u64) "(uid=0, root) read handle=0x", (u64) root_read, 0);
         gt_file_close(root_read);
+    } else if (trigger_value == 17) {
+        // trigger 17 (ring3posix): a real POSIX shim (proc/posix/posix.h)
+        // - open/read/write/close/lseek, over the exact same syscalls
+        // 44-48 as gui_toolkit.h's gt_file_* wrappers.
+        int wfd = open("/system/posixtest.mfs", O_WRONLY);
+        int wn = write(wfd, "posix works", 11);
+        do_syscall(1, (u64) "open(O_WRONLY) fd=0x", (u64) wfd, 0);
+        do_syscall(1, (u64) "write() n=0x", (u64) wn, 0);
+        close(wfd);
+
+        int rfd = open("/system/posixtest.mfs", O_RDONLY);
+        u8 posix_buf[32];
+        int rn = read(rfd, posix_buf, 31);
+        posix_buf[rn] = 0;
+        do_syscall(1, (u64) "read() n=0x", (u64) rn, 0);
+        do_syscall(1, (u64) &posix_buf[0], 0, 0);
+
+        int seek_result = lseek(rfd, 0, SEEK_SET);
+        int rn2 = read(rfd, posix_buf, 31);
+        posix_buf[rn2] = 0;
+        do_syscall(1, (u64) "lseek() result=0x", (u64) seek_result, 0);
+        do_syscall(1, (u64) &posix_buf[0], 0, 0);
+        close(rfd);
+
+        int missing_fd = open("/system/does_not_exist.mfs", O_RDONLY);
+        do_syscall(1, (u64) "open(nonexistent) fd=0x", (u64) missing_fd, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";
