@@ -19,6 +19,7 @@
 #include "../../proc/ipc/object/object.h"
 #include "../../kernel/drivers/pci/pci.h"
 #include "../../kernel/drivers/device_manager/device_manager.h"
+#include "../../kernel/services/service_manager.h"
 #include "../../kernel/net/e1000/e1000.h"
 #include "../../kernel/net/arp/arp.h"
 #include "../../kernel/net/ip/ip.h"
@@ -123,8 +124,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name>");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name>");
 }
 
 static void cmd_ticks(void) {
@@ -604,7 +605,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 79
+#define SHELL_COMMAND_COUNT 80
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -641,6 +642,7 @@ static void shell_commands_init(void) {
     g_shell_commands[74] = "ring3pipe"; g_shell_commands[75] = "ring3shm";
     g_shell_commands[76] = "devices"; g_shell_commands[77] = "exit";
     g_shell_commands[78] = "ring3tcpserver";
+    g_shell_commands[79] = "service";
     g_shell_commands_initialized = true;
 }
 
@@ -1613,6 +1615,52 @@ static void cmd_devices(void) {
     }
 }
 
+// service <start|stop|restart|status> <name> - real generic Service
+// Manager surface (kernel/services/service_manager.h). "stop" means "don't
+// respawn the next time it exits" (see that header's own comment) - this
+// kernel has no way to forcibly kill another process.
+static void cmd_service(void) {
+    char subcmd[32];
+    char* name;
+    if (!split_two_args(&g_line_buffer[8], subcmd, &name)) {  // past "service "
+        return;
+    }
+    if (streq(subcmd, "start")) {
+        bool ok = service_start(name);
+        vga_print(ok ? "service started" : "service start failed (unknown name?)");
+        serial_print(ok ? "service started" : "service start failed (unknown name?)");
+    } else if (streq(subcmd, "stop")) {
+        bool ok = service_stop(name);
+        vga_print(ok ? "service stopped (will not auto-restart)" : "service stop failed (unknown name?)");
+        serial_print(ok ? "service stopped (will not auto-restart)" : "service stop failed (unknown name?)");
+    } else if (streq(subcmd, "restart")) {
+        bool ok = service_restart(name);
+        vga_print(ok ? "service restarted" : "service restart failed (unknown name?)");
+        serial_print(ok ? "service restarted" : "service restart failed (unknown name?)");
+    } else if (streq(subcmd, "status")) {
+        bool running;
+        u32 restart_count;
+        int process_index;
+        if (!service_get_status(name, &running, &restart_count, &process_index)) {
+            vga_print("service status failed (unknown name?)");
+            serial_print("service status failed (unknown name?)");
+            return;
+        }
+        vga_print("running=0x");
+        serial_print("running=0x");
+        print_hex((u64) running);
+        vga_print(" restart_count=0x");
+        serial_print(" restart_count=0x");
+        print_hex((u64) restart_count);
+        vga_print(" process_index=0x");
+        serial_print(" process_index=0x");
+        print_hex((u64) (process_index < 0 ? 0xFFFFFFFF : (u32) process_index));
+    } else {
+        vga_print("usage: service <start|stop|restart|status> <name>");
+        serial_print("usage: service <start|stop|restart|status> <name>");
+    }
+}
+
 static void cmd_nic(void) {
     bool ok = e1000_init();
     if (!ok) {
@@ -2248,6 +2296,8 @@ void run_command(void) {
         cmd_exit();
     } else if (streq(g_line_buffer, "ring3tcpserver")) {
         cmd_ring3_tcp_server();
+    } else if (starts_with(g_line_buffer, "service ")) {
+        cmd_service();
     } else if (streq(g_line_buffer, "shutdown")) {
         cmd_shutdown();
     } else if (streq(g_line_buffer, "reboot")) {

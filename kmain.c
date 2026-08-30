@@ -15,6 +15,7 @@
 #include "proc/ipc/io_request/io_request.h"
 #include "proc/ipc/net_request/net_request.h"
 #include "proc/ipc/net_tcp_request/net_tcp_request.h"
+#include "kernel/services/service_manager.h"
 #include "kernel/fs/vfs/vfs.h"
 #include "shell/shell/shell.h"
 #include "shell/editor/editor.h"
@@ -26,6 +27,8 @@ extern u8 g_init_prog_start;
 extern u8 g_init_prog_end;
 extern u8 g_desktop_shell_prog_start;
 extern u8 g_desktop_shell_prog_end;
+extern u8 g_hello_service_prog_start;
+extern u8 g_hello_service_prog_end;
 #pragma GCC visibility pop
 
 void _start(void) {
@@ -68,6 +71,7 @@ void _start(void) {
     create_task(&io_worker_entry);
     create_task(&net_worker_entry);
     create_task(&tcp_worker_entry);
+    create_task(&service_manager_worker_entry);
     // Creation order fixes each channel's index (0, 1) - must stay in this order.
     g_channel_demo = create_channel();
     g_ring3_channel_demo = create_channel();
@@ -79,6 +83,11 @@ void _start(void) {
     vfs_mount("/system", BACKEND_MINIFS);
     vfs_mount("/devices", BACKEND_DEVICE);
     vfs_mount("/processes", BACKEND_PROCFS);
+
+    // Registered (available to "service start hello_service"), not
+    // auto-started - real service-manager semantics, matches init.c's own
+    // separate hardcoded demo below staying untouched.
+    service_register("helloservice", &g_hello_service_prog_start, &g_hello_service_prog_end, true);
 
     // init process: spawns proc/demo/hello_service.c via spawn_builtin once running.
     spawn_process(&g_init_prog_start, &g_init_prog_end, 0x80000000, 0x80020000);
