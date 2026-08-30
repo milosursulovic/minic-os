@@ -124,8 +124,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent slidercontent listcontent");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent slidercontent listcontent");
 }
 
 static void cmd_ticks(void) {
@@ -293,6 +293,43 @@ static void cmd_progresscontent(void) {
     vga_print(" x80pct=0x");
     serial_print(" x80pct=0x");
     print_hex((u64) fb_get_pixel(500, 466));
+}
+
+// Reads back the slider's default handle position (body-local (10,120)
+// size 150x12, track screen (410,480)-(560,492)). With min=0/max=100/
+// initial=50 (see ring3prog.c trigger 21), usable_width=150-6=144,
+// handle_offset=50*144/100=72 -> handle screen x=482-488. (485,486) sits
+// inside that range - reads 0x0000ff00 (handle_color) by default. After
+// a real drag this same point may or may not still show the handle
+// (expected - the point is only a fixed baseline check); verify a real
+// drag via screendump instead (keyboard dies after the first
+// mouse_button of that boot anyway, so a second sendkey-based readback
+// isn't possible in the same test run regardless).
+static void cmd_slidercontent(void) {
+    vga_print("slidercontent handle_at_default=0x");
+    serial_print("slidercontent handle_at_default=0x");
+    print_hex((u64) fb_get_pixel(485, 486));
+}
+
+// Reads back one pixel inside each of ring3widgets's 3 list rows
+// (body-local (10,140) width 150 row_height 14 -> screen (410,500)-
+// (560,542); row0 y500-514, row1 y514-528, row2 y528-542). x=550 - well
+// past any real label's text width (labels here are 5-6 chars, ~36px)
+// so this always reads the row's flat background fill, never a glyph's
+// foreground pixel. Before any click all three read 0x00101010
+// (row_color, none selected); after a real click on a row, that row's
+// sample point reads 0x00405070 (selected_color) and the others stay
+// row_color.
+static void cmd_listcontent(void) {
+    vga_print("listcontent row0=0x");
+    serial_print("listcontent row0=0x");
+    print_hex((u64) fb_get_pixel(550, 505));
+    vga_print(" row1=0x");
+    serial_print(" row1=0x");
+    print_hex((u64) fb_get_pixel(550, 519));
+    vga_print(" row2=0x");
+    serial_print(" row2=0x");
+    print_hex((u64) fb_get_pixel(550, 533));
 }
 
 static void cmd_shutdown(void) {
@@ -670,7 +707,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 84
+#define SHELL_COMMAND_COUNT 86
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -710,6 +747,7 @@ static void shell_commands_init(void) {
     g_shell_commands[79] = "service";
     g_shell_commands[80] = "ring3widgets"; g_shell_commands[81] = "checkboxcontent";
     g_shell_commands[82] = "radiocontent"; g_shell_commands[83] = "progresscontent";
+    g_shell_commands[84] = "slidercontent"; g_shell_commands[85] = "listcontent";
     g_shell_commands_initialized = true;
 }
 
@@ -2371,6 +2409,10 @@ void run_command(void) {
         cmd_radiocontent();
     } else if (streq(g_line_buffer, "progresscontent")) {
         cmd_progresscontent();
+    } else if (streq(g_line_buffer, "slidercontent")) {
+        cmd_slidercontent();
+    } else if (streq(g_line_buffer, "listcontent")) {
+        cmd_listcontent();
     } else if (starts_with(g_line_buffer, "service ")) {
         cmd_service();
     } else if (streq(g_line_buffer, "shutdown")) {

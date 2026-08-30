@@ -722,17 +722,22 @@ void _start(void) {
         }
     } else if (trigger_value == 21) {
         // trigger 21 (ring3widgets): real lowercase font glyphs
-        // (kernel/gfx/font.c) plus four new gui_toolkit.h widgets - Label
+        // (kernel/gfx/font.c) plus six new gui_toolkit.h widgets - Label
         // (consolidates the draw_static_label/draw_row_text duplication
         // already in settings.c/device_manager.c), Checkbox (a real
         // persistent-toggle interaction model, unlike Button's momentary
         // press), RadioButton (exclusive-selection variant of Checkbox),
-        // and ProgressBar (non-interactive). Window at a fixed screen
-        // position so cmd_checkboxcontent/cmd_radiocontent/
-        // cmd_progresscontent (shell.c) can read back known pixels, same
+        // ProgressBar (non-interactive), Slider (real continuous
+        // click-and-drag-to-scrub, not click-edge-detection), and
+        // ListView (extracted from file_manager.c/service_manager.c's own
+        // independently-duplicated row-select-with-highlight pattern -
+        // demoed here only, neither app retrofitted to use it yet). Window
+        // at a fixed screen position so cmd_checkboxcontent/
+        // cmd_radiocontent/cmd_progresscontent/cmd_slidercontent/
+        // cmd_listcontent (shell.c) can read back known pixels, same
         // technique buttoncontent already uses for trigger 14.
         window w;
-        bool created_w = window_create(&w, 400, 340, 200, 150, 0x00444444, 0x00222222);
+        bool created_w = window_create(&w, 400, 340, 200, 220, 0x00444444, 0x00222222);
         do_syscall(1, (u64) "window_create(w) ok=0x", (u64) created_w, 0);
 
         label lbl;
@@ -750,6 +755,14 @@ void _start(void) {
 
         progress_bar pbar;
         progress_bar_init(&pbar, w.id, 10, 100, 150, 12, 0x00222222, 0x0000AAFF, 30);
+
+        slider sld;
+        slider_init(&sld, w.id, 10, 120, 150, 12, 0x00222222, 0x0000FF00, 0, 100, 50);
+
+        list_view lst;
+        list_view_init(&lst, w.id, 10, 140, 150, 14, 0x00101010, 0x00405070, 0x00FFFFFF, 0x00444444);
+        char* fruit_labels[3] = {"apple", "banana", "cherry"};
+        list_view_set_rows(&lst, fruit_labels, 3);
 
         // Polls forever, same shape as every real interactive GUI app in
         // this codebase (desktop_shell.c/settings.c/service_manager.c's
@@ -783,6 +796,13 @@ void _start(void) {
                 // 80%, radio0 back to 30% - proves progress_bar_set_percent
                 // genuinely redraws (real value, not a one-shot init only).
                 progress_bar_set_percent(&pbar, radio_selected == 1 ? 80 : 30);
+            }
+            if (slider_poll(&sld)) {
+                do_syscall(1, (u64) "slider_poll() value=0x", (u64) sld.value, 0);
+            }
+            int clicked_row = list_view_poll(&lst);
+            if (clicked_row >= 0) {
+                do_syscall(1, (u64) "list_view_poll() clicked_row=0x", (u64) clicked_row, 0);
             }
         }
     } else {
