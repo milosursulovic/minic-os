@@ -81,6 +81,18 @@
 // 62 socket_receive (handle via a1, buffer pointer via a2, max_len via
 // a3 - same fixed-timeout convention as accept). 63 socket_close (handle
 // via a1) - real FIN/ACK exchange, then frees the socket+object+handle.
+// 64 device_list (pointer-to-struct - index in, name_out/category_out/
+// info_out embedded raw ring3 pointers, wraps kernel/drivers/
+// device_manager/device_manager.h's device_manager_get - first ring3/GUI
+// exposure of the Device Manager registry, previously console-shell-only).
+// 65 service_list (pointer-to-struct - index in, name_out/flags_out/
+// restart_count_out embedded raw ring3 pointers, wraps kernel/services/
+// service_manager.h's new by-index service_list_entry; flags_out packs
+// used(bit0)/running(bit1)/auto_restart(bit2)). 66/67/68 service_start/
+// service_stop/service_restart (raw char* name via a1, same "bare path
+// via a1" convention as syscall 38 fs_delete - direct wraps of the
+// already-real service_start/stop/restart, first ring3/GUI exposure of
+// Milestone 7's crash-restart supervision, previously console-shell-only).
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -105,6 +117,8 @@
 #include "../drivers/mouse/mouse.h"
 #include "../drivers/rtc/rtc.h"
 #include "../isr/isr.h"
+#include "../drivers/device_manager/device_manager.h"
+#include "../services/service_manager.h"
 
 typedef struct __attribute__((packed)) {
     i32 x;
@@ -161,6 +175,20 @@ typedef struct __attribute__((packed)) {
     u32* disk_file_count_out;
 } sys_info_args;
 
+typedef struct __attribute__((packed)) {
+    int index;
+    char* name_out;
+    int* category_out;
+    u32* info_out;
+} device_list_args;
+
+typedef struct __attribute__((packed)) {
+    int index;
+    char* name_out;
+    u32* flags_out;
+    u32* restart_count_out;
+} service_list_args;
+
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
 extern u8 g_hello_service_prog_end;
@@ -170,6 +198,10 @@ extern u8 g_file_manager_prog_start;
 extern u8 g_file_manager_prog_end;
 extern u8 g_settings_prog_start;
 extern u8 g_settings_prog_end;
+extern u8 g_device_manager_prog_start;
+extern u8 g_device_manager_prog_end;
+extern u8 g_service_manager_prog_start;
+extern u8 g_service_manager_prog_end;
 #pragma GCC visibility pop
 
 // Index 0 is the one fixed compile-time entry; indices 1+ map to
@@ -221,6 +253,16 @@ static bool gui_app_bounds(int app_id, u8** start_out, u8** end_out) {
     if (app_id == 2) {
         *start_out = &g_settings_prog_start;
         *end_out = &g_settings_prog_end;
+        return true;
+    }
+    if (app_id == 3) {
+        *start_out = &g_device_manager_prog_start;
+        *end_out = &g_device_manager_prog_end;
+        return true;
+    }
+    if (app_id == 4) {
+        *start_out = &g_service_manager_prog_start;
+        *end_out = &g_service_manager_prog_end;
         return true;
     }
     return false;
@@ -1344,6 +1386,31 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         free_object(obj_index);
         free_handle(caller_process, handle_idx);
         return 0;
+    }
+    if (num == 64) {
+        device_list_args* args = (device_list_args*) a1;
+        bool ok = device_manager_get(args->index, args->name_out, args->category_out, args->info_out);
+        return (u64) ok;
+    }
+    if (num == 65) {
+        service_list_args* args = (service_list_args*) a1;
+        bool ok = service_list_entry(args->index, args->name_out, args->flags_out, args->restart_count_out);
+        return (u64) ok;
+    }
+    if (num == 66) {
+        char* name = (char*) a1;
+        bool ok = service_start(name);
+        return (u64) ok;
+    }
+    if (num == 67) {
+        char* name = (char*) a1;
+        bool ok = service_stop(name);
+        return (u64) ok;
+    }
+    if (num == 68) {
+        char* name = (char*) a1;
+        bool ok = service_restart(name);
+        return (u64) ok;
     }
     return (u64) -1;  // unknown syscall
 }

@@ -63,7 +63,7 @@ DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 ASM_SRCS := kernel/boot/boot.s kernel/isr/interrupts.s kernel/sched/switch.s kernel/syscall/usermode.s
 ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/ring3prog.c' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './.claude/*'))
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/ring3prog.c' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './.claude/*'))
 C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
 .PHONY: all run iso disk clean
@@ -183,6 +183,29 @@ $(BUILD_DIR)/proc/apps/settings/settings.bin: proc/apps/settings/settings.c proc
 
 -include $(BUILD_DIR)/proc/apps/settings/settings.d
 
+# Device Manager / Service Manager GUI apps - same shape again, launched
+# on demand via syscall 41 (desktop_shell.c's MENU dropdown), not
+# auto-spawned at boot.
+$(BUILD_DIR)/proc/apps/device_manager/device_manager.bin: proc/apps/device_manager/device_manager.c proc/gui_toolkit.h proc/ring3.ld kernel/drivers/device_manager/device_manager.h
+	@mkdir -p $(BUILD_DIR)/proc/apps/device_manager
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/apps/device_manager/device_manager.bin -MF $(BUILD_DIR)/proc/apps/device_manager/device_manager.d -S -o $(BUILD_DIR)/proc/apps/device_manager/device_manager.gen.s proc/apps/device_manager/device_manager.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/apps/device_manager/device_manager.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/apps/device_manager/device_manager_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/apps/device_manager/device_manager_linked.elf $(BUILD_DIR)/proc/apps/device_manager/device_manager_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(BUILD_DIR)/proc/apps/device_manager/device_manager_linked.elf $(BUILD_DIR)/proc/apps/device_manager/device_manager.bin
+
+-include $(BUILD_DIR)/proc/apps/device_manager/device_manager.d
+
+$(BUILD_DIR)/proc/apps/service_manager/service_manager.bin: proc/apps/service_manager/service_manager.c proc/gui_toolkit.h proc/ring3.ld kernel/services/service_manager.h
+	@mkdir -p $(BUILD_DIR)/proc/apps/service_manager
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/apps/service_manager/service_manager.bin -MF $(BUILD_DIR)/proc/apps/service_manager/service_manager.d -S -o $(BUILD_DIR)/proc/apps/service_manager/service_manager.gen.s proc/apps/service_manager/service_manager.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/apps/service_manager/service_manager.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/apps/service_manager/service_manager_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/apps/service_manager/service_manager_linked.elf $(BUILD_DIR)/proc/apps/service_manager/service_manager_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(BUILD_DIR)/proc/apps/service_manager/service_manager_linked.elf $(BUILD_DIR)/proc/apps/service_manager/service_manager.bin
+
+-include $(BUILD_DIR)/proc/apps/service_manager/service_manager.d
+
 # `.incbin` in each *_blob.s resolves relative to the assembler's own
 # working directory, not the .s file's location - `cd` into that
 # program's own leaf folder first, matching the MiniC-era build's own
@@ -217,6 +240,14 @@ $(BUILD_DIR)/proc/apps/settings/settings_blob.o: proc/apps/settings/settings_blo
 	@mkdir -p $(BUILD_DIR)/proc/apps/settings
 	cd proc/apps/settings && $(AS) --32 settings_blob.s -o ../../../$@
 
+$(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o: proc/apps/device_manager/device_manager_blob.s $(BUILD_DIR)/proc/apps/device_manager/device_manager.bin
+	@mkdir -p $(BUILD_DIR)/proc/apps/device_manager
+	cd proc/apps/device_manager && $(AS) --32 device_manager_blob.s -o ../../../$@
+
+$(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o: proc/apps/service_manager/service_manager_blob.s $(BUILD_DIR)/proc/apps/service_manager/service_manager.bin
+	@mkdir -p $(BUILD_DIR)/proc/apps/service_manager
+	cd proc/apps/service_manager && $(AS) --32 service_manager_blob.s -o ../../../$@
+
 # These three `.incbin` a real, committed binary asset directly (assets/*.png)
 # instead of a build/-generated .bin - the source is the PNG file itself, not
 # something the ring3-program sub-pipeline produces, so the prerequisite is
@@ -235,8 +266,8 @@ $(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o: kernel/gfx/png/png_test_huf
 
 PNG_ASSET_BLOBS := $(BUILD_DIR)/kernel/gfx/png/cursor_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_stored_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(PNG_ASSET_BLOBS)
-	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(PNG_ASSET_BLOBS)
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
+	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
 	@echo "built kernel.elf"
 
 disk.img:

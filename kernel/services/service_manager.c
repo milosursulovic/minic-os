@@ -109,6 +109,24 @@ bool service_get_status(const char* name, bool* running_out, u32* restart_count_
     return true;
 }
 
+bool service_list_entry(int index, char* name_out, u32* flags_out, u32* restart_count_out) {
+    if (index < 0 || index >= SERVICE_SLOTS || !g_services[index].used) {
+        return false;
+    }
+    copy_bounded(name_out, g_services[index].name, 32);
+    bool actually_alive = g_services[index].running && g_processes[g_services[index].process_index].used;
+    u32 flags = 1;  // used
+    if (actually_alive) {
+        flags = flags | 2;
+    }
+    if (g_services[index].auto_restart) {
+        flags = flags | 4;
+    }
+    *flags_out = flags;
+    *restart_count_out = g_services[index].restart_count;
+    return true;
+}
+
 void service_manager_worker_entry(void) {
     for (;;) {
         int i = 0;

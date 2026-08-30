@@ -78,6 +78,17 @@ treat a mismatch as a real bug, not a rounding/formatting difference.
   the whole invocation** - the cause wasn't confirmed, but the workaround
   is reliable: run the kill as its own isolated command, never chained with
   build/launch/inspect steps in the same call.
+- **A `mouse_button 1`/`mouse_button 0` monitor command can silently fail
+  to register a transition at all** (confirmed via a temporary in-app
+  debug print on every real click-down edge: some attempts produced zero
+  output even though the cursor was verified on-target by `screendump`
+  and the identical command had worked moments earlier) - piping through
+  `socat` occasionally drops or no-ops the command with no error. When a
+  click "does nothing," re-issue the same `mouse_button`/`mouse_button`
+  pair once before concluding it's a coordinate or logic bug - several
+  real apparent "this button doesn't respond" investigations turned out
+  to be exactly this, costing real re-derivation time before the pattern
+  was recognized.
 - **QEMU/TCG's timer runs far faster than the nominal 100Hz PIT rate.**
   Comparing tick counts or wall-clock-style timing across *separate* shell
   commands (each with its own process-spawn latency) does not correspond to

@@ -27,7 +27,7 @@
 // small explicitly-scoped dropdown, not a full window-manager menu.
 #define POPUP_WIDTH 100
 #define POPUP_ITEM_HEIGHT 18
-#define POPUP_ITEM_COUNT 3
+#define POPUP_ITEM_COUNT 5
 #define POPUP_HEIGHT (POPUP_ITEM_HEIGHT * POPUP_ITEM_COUNT)
 #define POPUP_X 4
 #define POPUP_Y (SCREEN_HEIGHT - TASKBAR_HEIGHT - POPUP_HEIGHT)
@@ -109,13 +109,15 @@ void _start(void) {
                 LAUNCHER_NORMAL_COLOR, LAUNCHER_PRESSED_COLOR, LABEL_COLOR);
 
     int popup_id = -1;  // -1 = dropdown closed
-    button popup_terminal, popup_files, popup_settings;
+    button popup_terminal, popup_files, popup_settings, popup_devices, popup_services;
     // Single-instance guards - no window-focus/bring-to-front concept
     // exists yet, so re-selecting an already-running app is a harmless
     // no-op instead of spawning a second window for it.
     bool terminal_open = false;
     bool files_open = false;
     bool settings_open = false;
+    bool devices_open = false;
+    bool services_open = false;
 
     // Sentinel: no real tick count is ever this value on a fresh boot, so
     // the first loop iteration always draws the label once.
@@ -147,6 +149,12 @@ void _start(void) {
                 button_init(&popup_settings, popup_id, 4, 2 * POPUP_ITEM_HEIGHT + 1,
                             POPUP_WIDTH - 8, POPUP_ITEM_HEIGHT - 2, "SETTINGS",
                             POPUP_ITEM_NORMAL_COLOR, POPUP_ITEM_PRESSED_COLOR, LABEL_COLOR);
+                button_init(&popup_devices, popup_id, 4, 3 * POPUP_ITEM_HEIGHT + 1,
+                            POPUP_WIDTH - 8, POPUP_ITEM_HEIGHT - 2, "DEVICES",
+                            POPUP_ITEM_NORMAL_COLOR, POPUP_ITEM_PRESSED_COLOR, LABEL_COLOR);
+                button_init(&popup_services, popup_id, 4, 4 * POPUP_ITEM_HEIGHT + 1,
+                            POPUP_WIDTH - 8, POPUP_ITEM_HEIGHT - 2, "SERVICES",
+                            POPUP_ITEM_NORMAL_COLOR, POPUP_ITEM_PRESSED_COLOR, LABEL_COLOR);
             } else {
                 gt_window_close(popup_id);
                 popup_id = -1;
@@ -157,6 +165,8 @@ void _start(void) {
             bool clicked_terminal = button_poll(&popup_terminal);
             bool clicked_files = !clicked_terminal && button_poll(&popup_files);
             bool clicked_settings = !clicked_terminal && !clicked_files && button_poll(&popup_settings);
+            bool clicked_devices = !clicked_terminal && !clicked_files && !clicked_settings && button_poll(&popup_devices);
+            bool clicked_services = !clicked_terminal && !clicked_files && !clicked_settings && !clicked_devices && button_poll(&popup_services);
 
             if (clicked_terminal) {
                 if (!terminal_open) {
@@ -176,6 +186,20 @@ void _start(void) {
                 if (!settings_open) {
                     gt_spawn_app(2);
                     settings_open = true;
+                }
+                gt_window_close(popup_id);
+                popup_id = -1;
+            } else if (clicked_devices) {
+                if (!devices_open) {
+                    gt_spawn_app(3);
+                    devices_open = true;
+                }
+                gt_window_close(popup_id);
+                popup_id = -1;
+            } else if (clicked_services) {
+                if (!services_open) {
+                    gt_spawn_app(4);
+                    services_open = true;
                 }
                 gt_window_close(popup_id);
                 popup_id = -1;
