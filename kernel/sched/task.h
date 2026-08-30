@@ -43,6 +43,10 @@ extern int g_channel_demo;
 extern bool g_receiver_got_message;
 extern u64 g_receiver_value;
 extern int g_ring3_channel_demo;
+// Boot-time well-known Pipe index - same "creation order fixes the
+// index" convention as g_channel_demo/g_ring3_channel_demo above, see
+// kmain.c.
+extern int g_ring3_pipe_demo;
 
 void scheduler_init(void);
 int create_task_with_cr3(void (*entry)(void), u64 cr3);

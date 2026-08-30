@@ -9,6 +9,7 @@
 #include "kernel/mm/paging/paging.h"
 #include "kernel/sched/task.h"
 #include "proc/ipc/channel/channel.h"
+#include "proc/ipc/pipe/pipe.h"
 #include "proc/process.h"
 #include "proc/ipc/io_request/io_request.h"
 #include "proc/ipc/net_request/net_request.h"
@@ -63,6 +64,7 @@ void _start(void) {
     // Creation order fixes each channel's index (0, 1) - must stay in this order.
     g_channel_demo = create_channel();
     g_ring3_channel_demo = create_channel();
+    g_ring3_pipe_demo = alloc_pipe();  // same well-known-index convention, its own separate namespace
     // stack_vaddr leaves 128KB past load_vaddr; the loaded image now spans more than
     // one page, so a smaller gap would collide the image and the stack.
     spawn_process(&g_test_prog_start, &g_test_prog_end, 0x80000000, 0x80020000);

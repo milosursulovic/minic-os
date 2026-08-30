@@ -209,6 +209,48 @@ static __attribute__((unused)) bool gt_fs_set_mode(const char* path, u8 mode) {
     return gt_syscall(51, (u64) path, (u64) mode, 0) != (u64) -1;
 }
 
+// Real byte-stream Pipe (proc/ipc/pipe/pipe.h) - unlike a Channel's
+// single-value mailbox, a real FIFO with partial-read/partial-write
+// semantics. mode 0=receive/1=send, same shape as gt_file_open's mode.
+static __attribute__((unused)) int gt_pipe_open(int raw_index, int mode) {
+    u64 result = gt_syscall(52, (u64) raw_index, (u64) mode, 0);
+    if (result == (u64) -1) {
+        return -1;
+    }
+    return (int) result;
+}
+
+static __attribute__((unused)) int gt_pipe_write(int handle, const u8* data, u32 len) {
+    return (int) gt_syscall(53, (u64) handle, (u64) data, (u64) len);
+}
+
+static __attribute__((unused)) int gt_pipe_read(int handle, u8* buf, u32 max_len) {
+    return (int) gt_syscall(54, (u64) handle, (u64) buf, (u64) max_len);
+}
+
+// Real frame-backed SharedMemory (proc/ipc/shared_memory/shared_memory.h)
+// - RIGHT_MAP, the roadmap's own literal "Handle<File> READ/WRITE/MAP".
+static __attribute__((unused)) int gt_shm_create(u32 size) {
+    u64 result = gt_syscall(55, (u64) size, 0, 0);
+    if (result == (u64) -1) {
+        return -1;
+    }
+    return (int) result;
+}
+
+// Maps into the CALLER's own address space at vaddr.
+static __attribute__((unused)) bool gt_shm_map(int handle, u64 vaddr) {
+    return gt_syscall(56, (u64) handle, vaddr, 0) != (u64) -1;
+}
+
+// Maps into a DIFFERENT process's address space (e.g. a child just
+// spawned via gt_syscall(6, ...)/process_spawn, which hands back its
+// real task_index) - deliberately permissive, no ownership check on the
+// target.
+static __attribute__((unused)) bool gt_shm_map_into(int handle, u64 target_task_index, u64 vaddr) {
+    return gt_syscall(57, (u64) handle, target_task_index, vaddr) != (u64) -1;
+}
+
 // Spawns one of the fixed compiled-in GUI apps (0=terminal, 1=file_manager,
 // 2=settings - kernel/syscall/syscall.c's own gui_app_bounds()) instead of
 // kmain.c auto-spawning all of them at boot. Returns the new process index,

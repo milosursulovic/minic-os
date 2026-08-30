@@ -10,6 +10,7 @@
 #include "../../kernel/mm/paging/paging.h"
 #include "../../kernel/sched/task.h"
 #include "../../proc/ipc/channel/channel.h"
+#include "../../proc/ipc/pipe/pipe.h"
 #include "../../kernel/isr/isr.h"
 #include "../../kernel/fs/ata/ata.h"
 #include "../../kernel/fs/minifs/minifs.h"
@@ -121,8 +122,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm");
 }
 
 static void cmd_ticks(void) {
@@ -571,7 +572,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 74
+#define SHELL_COMMAND_COUNT 76
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -605,6 +606,7 @@ static void shell_commands_init(void) {
     g_shell_commands[69] = "echo"; g_shell_commands[70] = "pngtest";
     g_shell_commands[71] = "ring3fileobj"; g_shell_commands[72] = "ring3perms";
     g_shell_commands[73] = "ring3posix";
+    g_shell_commands[74] = "ring3pipe"; g_shell_commands[75] = "ring3shm";
     g_shell_commands_initialized = true;
 }
 
@@ -1448,6 +1450,36 @@ static void cmd_ring3_posix(void) {
     serial_print("sent ring3 posix trigger");
 }
 
+// Writes two separate short strings directly into the well-known boot-
+// time pipe (kernel-side pipe_write - no syscall needed, shell.c is
+// ring0) before sending the trigger, so ring3prog.c's trigger 18 has to
+// really reassemble multiple writes out of one ring buffer, not just
+// echo back one clean write.
+static void cmd_ring3_pipe(void) {
+    pipe_write(g_ring3_pipe_demo, (const u8*) "hello ", 6);
+    pipe_write(g_ring3_pipe_demo, (const u8*) "from the pipe!", 14);
+    bool ok = channel_send(g_ring3_channel_demo, 0x12);
+    if (!ok) {
+        vga_print("ring3pipe failed - channel full");
+        serial_print("ring3pipe failed - channel full");
+        return;
+    }
+    vga_print("wrote to pipe, sent ring3 pipe trigger");
+    serial_print("wrote to pipe, sent ring3 pipe trigger");
+}
+
+// Real frame-backed SharedMemory (see ring3prog.c trigger 19).
+static void cmd_ring3_shm(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0x13);
+    if (!ok) {
+        vga_print("ring3shm failed - channel full");
+        serial_print("ring3shm failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 shared-memory trigger");
+    serial_print("sent ring3 shared-memory trigger");
+}
+
 static void print_mac(u8* mac) {
     int i = 0;
     while (i < 6) {
@@ -2237,6 +2269,10 @@ void run_command(void) {
         cmd_ring3_perms();
     } else if (streq(g_line_buffer, "ring3posix")) {
         cmd_ring3_posix();
+    } else if (streq(g_line_buffer, "ring3pipe")) {
+        cmd_ring3_pipe();
+    } else if (streq(g_line_buffer, "ring3shm")) {
+        cmd_ring3_shm();
     } else if (streq(g_line_buffer, "ring3button")) {
         cmd_ring3_button();
     } else if (streq(g_line_buffer, "pci")) {

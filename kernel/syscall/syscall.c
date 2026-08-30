@@ -53,6 +53,19 @@
 // mode bits via a2 - kernel/fs/minifs/minifs.h's MODE_OWNER_ONLY_READ/
 // WRITE). Real UID-based file ownership enforcement itself happens in
 // syscall 44/proc/ipc/file/file.c's file_object_open(), not here.
+// 52 pipe_open (raw pipe index via a1, mode via a2: 0=receive/1=send,
+// same shape as file_open's mode - proc/ipc/pipe/pipe.h's real byte-
+// stream FIFO, unlike channel's single-value mailbox), 53/54 pipe_write/
+// pipe_read (handle via a1, buffer pointer via a2, length via a3 - real
+// partial-write/partial-read ring-buffer semantics). 55 shm_create (size
+// via a1 - proc/ipc/shared_memory/shared_memory.h, grants RIGHT_MAP), 56
+// shm_map (handle via a1, vaddr via a2 - maps into the CALLER's own
+// address space), 57 shm_map_into (handle via a1, target task_index via
+// a2, vaddr via a3 - maps into a DIFFERENT process's address space, e.g.
+// a child the caller just spawned; deliberately permissive, no
+// ownership check on the target, same tone as syscall 49's sys_setuid).
+// No new "close" syscalls - syscall 13 (handle_close) is already generic
+// over every object type via free_object/free_handle.
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -65,6 +78,8 @@
 #include "../../proc/ipc/net_request/net_request.h"
 #include "../../proc/ipc/net_tcp_request/net_tcp_request.h"
 #include "../../proc/ipc/file/file.h"
+#include "../../proc/ipc/pipe/pipe.h"
+#include "../../proc/ipc/shared_memory/shared_memory.h"
 #include "../fs/vfs/vfs.h"
 #include "../fs/minifs/minifs.h"
 #include "../mm/paging/paging.h"
@@ -1041,6 +1056,143 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     if (num == 51) {
         char* path = (char*) a1;
         bool ok = fs_set_mode(path, (u8) a2);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 52) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int raw_index = (int) a1;
+        bool want_send = a2 != 0;
+        int obj_index = alloc_object(OBJ_PIPE, raw_index);
+        if (obj_index < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, want_send ? RIGHT_SEND : RIGHT_RECEIVE);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 53) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_SEND) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_PIPE) {
+            return (u64) -1;
+        }
+        int pipe_index = g_objects[obj_index].data_index;
+        u8* data = (u8*) a2;
+        u32 n = pipe_write(pipe_index, data, (u32) a3);
+        return (u64) n;
+    }
+    if (num == 54) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_RECEIVE) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_PIPE) {
+            return (u64) -1;
+        }
+        int pipe_index = g_objects[obj_index].data_index;
+        u8* buf = (u8*) a2;
+        u32 n = pipe_read(pipe_index, buf, (u32) a3);
+        return (u64) n;
+    }
+    if (num == 55) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int slot = alloc_shared_memory((u32) a1);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_SHARED_MEMORY, slot);
+        if (obj_index < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, RIGHT_MAP);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 56) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_MAP) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_SHARED_MEMORY) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        bool ok = shared_memory_map(slot, g_processes[caller_process].cr3, a2);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 57) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_MAP) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_SHARED_MEMORY) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        int target_task_index = (int) a2;
+        int target_process = g_tasks[target_task_index].process_index;
+        if (target_process < 0) {
+            return (u64) -1;
+        }
+        bool ok = shared_memory_map(slot, g_processes[target_process].cr3, a3);
         return ok ? 0 : (u64) -1;
     }
     return (u64) -1;  // unknown syscall

@@ -11,6 +11,8 @@
 #define OBJ_NET_PING_REQUEST 4
 #define OBJ_NET_TCP_REQUEST 5
 #define OBJ_FILE 6
+#define OBJ_PIPE 7
+#define OBJ_SHARED_MEMORY 8
 
 typedef struct {
     bool used;
@@ -33,6 +35,9 @@ extern int g_object_count;
 #define RIGHT_RECEIVE 4
 #define RIGHT_READ 8
 #define RIGHT_WRITE 16
+// The roadmap's own point 5 text ("Handle<File> READ/WRITE/MAP") - real
+// now, for SharedMemory (proc/ipc/shared_memory/shared_memory.h).
+#define RIGHT_MAP 32
 
 typedef struct {
     bool used;

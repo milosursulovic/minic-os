@@ -635,6 +635,61 @@ void _start(void) {
 
         int missing_fd = open("/system/does_not_exist.mfs", O_RDONLY);
         do_syscall(1, (u64) "open(nonexistent) fd=0x", (u64) missing_fd, 0);
+    } else if (trigger_value == 18) {
+        // trigger 18 (ring3pipe): real byte-stream Pipe (proc/ipc/pipe/
+        // pipe.h) - the shell command that sends this trigger already
+        // wrote several separate short strings directly into the
+        // well-known boot-time pipe (kernel-side, no syscall needed)
+        // before sending it, so a genuine multi-write reassembly is
+        // being read back here, not just one clean write echoed back.
+        int pipe_handle = gt_pipe_open(0, 0);  // raw index 0 = g_ring3_pipe_demo, receive-only
+        do_syscall(1, (u64) "pipe_open(receive) handle=0x", (u64) pipe_handle, 0);
+
+        u8 chunk1[6];
+        int n1 = gt_pipe_read(pipe_handle, chunk1, 6);
+        chunk1[n1] = 0;
+        do_syscall(1, (u64) "read #1 n=0x", (u64) n1, 0);
+        do_syscall(1, (u64) &chunk1[0], 0, 0);
+
+        u8 chunk2[32];
+        int n2 = gt_pipe_read(pipe_handle, chunk2, 32);
+        chunk2[n2] = 0;
+        do_syscall(1, (u64) "read #2 n=0x", (u64) n2, 0);
+        do_syscall(1, (u64) &chunk2[0], 0, 0);
+    } else if (trigger_value == 19) {
+        // trigger 19 (ring3shm): real frame-backed SharedMemory
+        // (proc/ipc/shared_memory/shared_memory.h) - the same physical
+        // frames mapped at two different virtual addresses in this
+        // process, plus (structurally) into a freshly-spawned child's
+        // address space.
+        int shm_handle = gt_shm_create(8192);
+        do_syscall(1, (u64) "shm_create() handle=0x", (u64) shm_handle, 0);
+
+        u64 vaddr1 = 0x80300000;
+        u64 vaddr2 = 0x80400000;
+        bool mapped1 = gt_shm_map(shm_handle, vaddr1);
+        do_syscall(1, (u64) "shm_map(vaddr1) ok=0x", (u64) mapped1, 0);
+
+        u8* through1 = (u8*) vaddr1;
+        const char* pattern = "shared memory works";
+        int i = 0;
+        while (pattern[i] != '\0') {
+            through1[i] = (u8) pattern[i];
+            i = i + 1;
+        }
+        through1[i] = 0;
+
+        bool mapped2 = gt_shm_map(shm_handle, vaddr2);
+        do_syscall(1, (u64) "shm_map(vaddr2) ok=0x", (u64) mapped2, 0);
+        u8* through2 = (u8*) vaddr2;
+        do_syscall(1, (u64) "read through vaddr2: ", 0, 0);
+        do_syscall(1, (u64) through2, 0, 0);
+
+        process child_image;
+        child_image.path = "/system/testprog.bin";
+        u64 child_task_index = process_spawn(&child_image, 0x80000000, 0x80020000);
+        bool mapped_into_child = gt_shm_map_into(shm_handle, child_task_index, vaddr1);
+        do_syscall(1, (u64) "shm_map_into(child) ok=0x", (u64) mapped_into_child, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

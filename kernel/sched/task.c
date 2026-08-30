@@ -258,6 +258,7 @@ bool g_receiver_got_message;
 u64 g_receiver_value;
 
 int g_ring3_channel_demo;
+int g_ring3_pipe_demo;
 
 void proc_receiver_entry(void) {
     u64 value = channel_receive(g_channel_demo);
