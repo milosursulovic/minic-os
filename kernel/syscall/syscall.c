@@ -70,6 +70,17 @@
 // proc/apps/terminal/terminal.c tell the kernel which window is "the"
 // terminal, so the console shell's `exit` command (shell/shell/shell.c)
 // can close it without fragile dimension-matching against g_windows[].
+// 59 socket_listen (port via a1 - proc/ipc/socket/socket.h's real
+// generic Socket object, wrapping kernel/net/tcp/tcp.c's real
+// listen/accept), grants RIGHT_SEND|RIGHT_RECEIVE (bidirectional,
+// unlike a Pipe handle's one-direction-per-handle convention). 60
+// socket_accept (handle via a1) - a fixed internal timeout (matches
+// tcp_fetch's own 3000-tick convention, keeps this within the 3-argument
+// syscall convention), returns a NEW handle for the accepted connection.
+// 61 socket_send (handle via a1, buffer pointer via a2, length via a3).
+// 62 socket_receive (handle via a1, buffer pointer via a2, max_len via
+// a3 - same fixed-timeout convention as accept). 63 socket_close (handle
+// via a1) - real FIN/ACK exchange, then frees the socket+object+handle.
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -84,6 +95,7 @@
 #include "../../proc/ipc/file/file.h"
 #include "../../proc/ipc/pipe/pipe.h"
 #include "../../proc/ipc/shared_memory/shared_memory.h"
+#include "../../proc/ipc/socket/socket.h"
 #include "../fs/vfs/vfs.h"
 #include "../fs/minifs/minifs.h"
 #include "../mm/paging/paging.h"
@@ -1204,6 +1216,133 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         // convenience, same permissive tone as syscall 49's sys_setuid:
         // no check that the caller actually owns/created that window id.
         g_terminal_window_id = (int) a1;
+        return 0;
+    }
+    if (num == 59) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int slot = socket_create_listener((u16) a1);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_SOCKET, slot);
+        if (obj_index < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, RIGHT_SEND | RIGHT_RECEIVE);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 60) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_RECEIVE) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_SOCKET) {
+            return (u64) -1;
+        }
+        int socket_slot = g_objects[obj_index].data_index;
+        u8 remote_ip[4];
+        u16 remote_port;
+        int accepted_slot = socket_accept(socket_slot, 3000, &remote_ip[0], &remote_port);
+        if (accepted_slot < 0) {
+            return (u64) -1;
+        }
+        int accepted_obj = alloc_object(OBJ_SOCKET, accepted_slot);
+        if (accepted_obj < 0) {
+            return (u64) -1;
+        }
+        int accepted_handle = alloc_handle(caller_process, accepted_obj, RIGHT_SEND | RIGHT_RECEIVE);
+        if (accepted_handle < 0) {
+            free_object(accepted_obj);
+            return (u64) -1;
+        }
+        return (u64) accepted_handle;
+    }
+    if (num == 61) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_SEND) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_SOCKET) {
+            return (u64) -1;
+        }
+        int socket_slot = g_objects[obj_index].data_index;
+        u8* data = (u8*) a2;
+        u32 n = socket_send(socket_slot, data, (u16) a3);
+        return (u64) n;
+    }
+    if (num == 62) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_RECEIVE) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_SOCKET) {
+            return (u64) -1;
+        }
+        int socket_slot = g_objects[obj_index].data_index;
+        u8* buf = (u8*) a2;
+        u32 n = socket_receive(socket_slot, buf, (u32) a3, 3000);
+        return (u64) n;
+    }
+    if (num == 63) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_SOCKET) {
+            return (u64) -1;
+        }
+        int socket_slot = g_objects[obj_index].data_index;
+        socket_close(socket_slot);
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
         return 0;
     }
     return (u64) -1;  // unknown syscall

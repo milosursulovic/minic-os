@@ -257,6 +257,38 @@ static __attribute__((unused)) void gt_register_terminal_window(int window_id) {
     gt_syscall(58, (u64) window_id, 0, 0);
 }
 
+// Real generic Socket object (proc/ipc/socket/socket.h) - wraps
+// kernel/net/tcp/tcp.c's real listen/accept, not just a client fetch.
+static __attribute__((unused)) int gt_socket_listen(u16 port) {
+    u64 result = gt_syscall(59, (u64) port, 0, 0);
+    if (result == (u64) -1) {
+        return -1;
+    }
+    return (int) result;
+}
+
+// Fixed internal accept timeout (kernel/syscall/syscall.c, matches
+// gt_pipe/gt_file's own shapes - 3 syscall args only).
+static __attribute__((unused)) int gt_socket_accept(int handle) {
+    u64 result = gt_syscall(60, (u64) handle, 0, 0);
+    if (result == (u64) -1) {
+        return -1;
+    }
+    return (int) result;
+}
+
+static __attribute__((unused)) int gt_socket_send(int handle, const u8* data, u16 len) {
+    return (int) gt_syscall(61, (u64) handle, (u64) data, (u64) len);
+}
+
+static __attribute__((unused)) int gt_socket_receive(int handle, u8* buf, u32 max_len) {
+    return (int) gt_syscall(62, (u64) handle, (u64) buf, (u64) max_len);
+}
+
+static __attribute__((unused)) bool gt_socket_close(int handle) {
+    return gt_syscall(63, (u64) handle, 0, 0) != (u64) -1;
+}
+
 // Spawns one of the fixed compiled-in GUI apps (0=terminal, 1=file_manager,
 // 2=settings - kernel/syscall/syscall.c's own gui_app_bounds()) instead of
 // kmain.c auto-spawning all of them at boot. Returns the new process index,

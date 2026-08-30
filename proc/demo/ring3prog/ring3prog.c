@@ -690,6 +690,36 @@ void _start(void) {
         u64 child_task_index = process_spawn(&child_image, 0x80000000, 0x80020000);
         bool mapped_into_child = gt_shm_map_into(shm_handle, child_task_index, vaddr1);
         do_syscall(1, (u64) "shm_map_into(child) ok=0x", (u64) mapped_into_child, 0);
+    } else if (trigger_value == 20) {
+        // trigger 20 (ring3tcpserver): a real generic Socket object
+        // (proc/ipc/socket/socket.h) - genuine TCP server listen/accept
+        // over kernel/net/tcp/tcp.c's real server-side handshake, echoed
+        // back to whatever real external client connects (see the
+        // kernel-qemu-test hostfwd verification for this trigger).
+        int listen_handle = gt_socket_listen(9000);
+        do_syscall(1, (u64) "socket_listen(9000) handle=0x", (u64) listen_handle, 0);
+
+        int conn_handle = gt_socket_accept(listen_handle);
+        do_syscall(1, (u64) "socket_accept() handle=0x", (u64) conn_handle, 0);
+
+        if (conn_handle >= 0) {
+            int round = 0;
+            while (round < 3) {
+                u8 buf[128];
+                int n = gt_socket_receive(conn_handle, buf, 127);
+                if (n <= 0) {
+                    do_syscall(1, (u64) "socket_receive() n=0x", (u64) n, 0);
+                    round = 3;  // stop - client done or timed out
+                } else {
+                    buf[n] = 0;
+                    do_syscall(1, (u64) "socket_receive() n=0x", (u64) n, 0);
+                    do_syscall(1, (u64) &buf[0], 0, 0);
+                    gt_socket_send(conn_handle, buf, (u16) n);  // echo back
+                    round = round + 1;
+                }
+            }
+            gt_socket_close(conn_handle);
+        }
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

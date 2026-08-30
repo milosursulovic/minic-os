@@ -20,7 +20,7 @@ static u32 g_arp_cache_count;
 static bool g_arp_nic_ready;
 
 // Lazily brings the NIC up exactly once.
-static bool arp_init(void) {
+bool arp_init(void) {
     if (g_arp_nic_ready) {
         return true;
     }

@@ -301,3 +301,233 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
     tcp_conn_close(slot);
     return ok;
 }
+
+// --- Real server side: listen/accept ---
+
+tcp_listener g_tcp_listeners[TCP_LISTENER_SLOTS];
+
+int tcp_listen(u16 port) {
+    // The client path gets this for free via arp_resolve()'s own internal
+    // call to arp_init() - a server has no IP to resolve before it can
+    // listen, so this calls the same lazy NIC-bring-up directly. Real bug
+    // found during this milestone's own QEMU verification: without this,
+    // e1000_receive() was being polled before the NIC/rings existed at
+    // all, so tcp_accept() always timed out with zero data ever seen.
+    if (!arp_init()) {
+        return -1;
+    }
+    int i = 0;
+    while (i < TCP_LISTENER_SLOTS) {
+        if (!g_tcp_listeners[i].used) {
+            g_tcp_listeners[i].used = true;
+            g_tcp_listeners[i].port = port;
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Same tick-bounded polling shape as tcp_wait_segment(), but the remote
+// is unknown until a real SYN to local_port actually arrives - no
+// src_ip/src_port filter, and the incoming frame's own source MAC
+// (Ethernet header bytes 6-11) is captured so the reply can be addressed
+// directly, no ARP round-trip needed.
+static bool tcp_wait_syn(u16 local_port, u64 timeout_ticks, u8* buf, u16 buf_len,
+                          u8* remote_mac_out, u8* remote_ip_out, u16* remote_port_out,
+                          tcp_segment_info* info_out) {
+    u64 start_tick = g_tick_count;
+    while (g_tick_count - start_tick < timeout_ticks) {
+        yield();
+        u16 len = e1000_receive(buf, buf_len);
+        if (len == 0) {
+            continue;
+        }
+        bool is_ip = buf[12] == 0x08 && buf[13] == 0x00;
+        if (!is_ip) {
+            continue;
+        }
+        u8 proto = buf[14 + 9];
+        if (proto != IP_PROTOCOL_TCP) {
+            continue;
+        }
+        u16 dst_port = (((u16) buf[36]) << 8) | ((u16) buf[37]);
+        if (dst_port != local_port) {
+            continue;
+        }
+        u8 flags = buf[47];
+        if ((flags & TCP_FLAG_SYN) == 0) {
+            continue;  // not a connection attempt
+        }
+
+        int i = 0;
+        while (i < 6) {
+            remote_mac_out[i] = buf[6 + i];
+            i = i + 1;
+        }
+        i = 0;
+        while (i < 4) {
+            remote_ip_out[i] = buf[14 + 12 + i];
+            i = i + 1;
+        }
+        *remote_port_out = (((u16) buf[34]) << 8) | ((u16) buf[35]);
+
+        u16 ip_total_len = (((u16) buf[16]) << 8) | ((u16) buf[17]);
+        u32 seq = (((u32) buf[38]) << 24) | (((u32) buf[39]) << 16) | (((u32) buf[40]) << 8) | ((u32) buf[41]);
+        u16 tcp_header_len = (u16) ((buf[46] >> 4) * 4);
+        info_out->seq = seq;
+        info_out->flags = flags;
+        info_out->payload_len = (u16) (ip_total_len - 20 - tcp_header_len);
+        info_out->payload_offset = (u16) (34 + tcp_header_len);
+        return true;
+    }
+    return false;
+}
+
+static int tcp_conn_alloc_server(u16 local_port, u8* remote_ip, u16 remote_port, u8* remote_mac) {
+    int i = 0;
+    while (i < TCP_CONNECTION_SLOTS) {
+        if (!g_tcp_connections[i].used) {
+            g_tcp_connections[i].used = true;
+            g_tcp_connections[i].local_port = local_port;
+            int j = 0;
+            while (j < 4) {
+                g_tcp_connections[i].remote_ip[j] = remote_ip[j];
+                j = j + 1;
+            }
+            g_tcp_connections[i].remote_port = remote_port;
+            j = 0;
+            while (j < 6) {
+                g_tcp_connections[i].remote_mac[j] = remote_mac[j];
+                j = j + 1;
+            }
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+int tcp_accept(int listener_slot, u64 timeout_ticks, u8* remote_ip_out, u16* remote_port_out) {
+    u16 local_port = g_tcp_listeners[listener_slot].port;
+
+    u8 remote_mac[6];
+    u8 remote_ip[4];
+    u16 remote_port;
+    u8 recv_buf[1500];
+    tcp_segment_info syn_info;
+    if (!tcp_wait_syn(local_port, timeout_ticks, &recv_buf[0], 1500, &remote_mac[0], &remote_ip[0],
+                       &remote_port, &syn_info)) {
+        return -1;
+    }
+
+    int slot = tcp_conn_alloc_server(local_port, &remote_ip[0], remote_port, &remote_mac[0]);
+    if (slot < 0) {
+        return -1;
+    }
+
+    u32 my_seq = 0x20000 + (u32) g_tick_count;
+    u32 peer_seq = syn_info.seq + 1;
+    if (!tcp_send_segment(&remote_mac[0], &remote_ip[0], remote_port, local_port, my_seq, peer_seq,
+                           TCP_FLAG_SYN | TCP_FLAG_ACK, NULL, 0)) {
+        tcp_conn_close(slot);
+        return -1;
+    }
+
+    tcp_segment_info ack_info;
+    if (!tcp_wait_segment(&remote_ip[0], remote_port, local_port, timeout_ticks, &recv_buf[0], 1500, &ack_info)) {
+        tcp_conn_close(slot);
+        return -1;
+    }
+    if ((ack_info.flags & TCP_FLAG_ACK) == 0 || ack_info.ack != my_seq + 1) {
+        tcp_conn_close(slot);
+        return -1;
+    }
+    my_seq = my_seq + 1;
+
+    g_tcp_connections[slot].my_seq = my_seq;
+    g_tcp_connections[slot].peer_seq = peer_seq;
+
+    int i = 0;
+    while (i < 4) {
+        remote_ip_out[i] = remote_ip[i];
+        i = i + 1;
+    }
+    *remote_port_out = remote_port;
+    return slot;
+}
+
+u32 tcp_server_send(int conn_slot, const u8* data, u16 len) {
+    tcp_connection* c = &g_tcp_connections[conn_slot];
+    bool ok = tcp_send_segment(&c->remote_mac[0], &c->remote_ip[0], c->remote_port, c->local_port,
+                                c->my_seq, c->peer_seq, TCP_FLAG_PSH | TCP_FLAG_ACK, (u8*) data, len);
+    if (!ok) {
+        return 0;
+    }
+    c->my_seq = c->my_seq + len;
+    return len;
+}
+
+u32 tcp_server_receive(int conn_slot, u8* buf, u32 max_len, u64 timeout_ticks) {
+    tcp_connection* c = &g_tcp_connections[conn_slot];
+    u8 recv_buf[1500];
+    tcp_segment_info seg;
+    u64 deadline = g_tick_count + timeout_ticks;
+
+    // A real bare ACK (payload_len==0, e.g. the client's own automatic
+    // ACK of our last echo) genuinely arrives on the wire and matches
+    // tcp_wait_segment()'s filter - it must be skipped, not mistaken for
+    // "the next message" the way a single unconditional wait would (a
+    // real bug found via this milestone's own QEMU verification: round 2
+    // of a 3-round echo test returned n=0 almost instantly instead of
+    // genuinely waiting, because the client's ACK of round 1's echo was
+    // consumed as if it were round 2's data). tcp_fetch_conn's own
+    // client-side receive loop already has an equivalent skip (its
+    // `if (seg.payload_len > 0)` guard, inside a loop that keeps waiting
+    // otherwise) - this mirrors that for the single-call server API.
+    while (g_tick_count < deadline) {
+        if (!tcp_wait_segment(&c->remote_ip[0], c->remote_port, c->local_port, deadline - g_tick_count,
+                               &recv_buf[0], 1500, &seg)) {
+            return 0;
+        }
+        if (seg.payload_len == 0 && (seg.flags & TCP_FLAG_FIN) == 0) {
+            continue;  // bare ACK - not real data, keep waiting
+        }
+
+        u32 copy_len = seg.payload_len;
+        if (copy_len > max_len) {
+            copy_len = max_len;
+        }
+        u32 i = 0;
+        while (i < copy_len) {
+            buf[i] = recv_buf[seg.payload_offset + i];
+            i = i + 1;
+        }
+        c->peer_seq = c->peer_seq + seg.payload_len;
+        // ACK what was just received, keeping seq state honest for later calls.
+        tcp_send_segment(&c->remote_mac[0], &c->remote_ip[0], c->remote_port, c->local_port,
+                          c->my_seq, c->peer_seq, TCP_FLAG_ACK, NULL, 0);
+        if ((seg.flags & TCP_FLAG_FIN) != 0) {
+            c->peer_seq = c->peer_seq + 1;
+        }
+        return copy_len;
+    }
+    return 0;
+}
+
+void tcp_server_close(int conn_slot) {
+    tcp_connection* c = &g_tcp_connections[conn_slot];
+    u8 recv_buf[1500];
+    tcp_segment_info seg;
+    tcp_send_segment(&c->remote_mac[0], &c->remote_ip[0], c->remote_port, c->local_port,
+                      c->my_seq, c->peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
+    // Best-effort final exchange, same tone as tcp_fetch_conn's own close.
+    if (tcp_wait_segment(&c->remote_ip[0], c->remote_port, c->local_port, 500, &recv_buf[0], 1500, &seg)) {
+        if ((seg.flags & TCP_FLAG_FIN) != 0) {
+            c->peer_seq = seg.seq + 1;
+            tcp_send_segment(&c->remote_mac[0], &c->remote_ip[0], c->remote_port, c->local_port,
+                              c->my_seq + 1, c->peer_seq, TCP_FLAG_ACK, NULL, 0);
+        }
+    }
+    tcp_conn_close(conn_slot);
+}

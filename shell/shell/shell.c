@@ -123,8 +123,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver");
 }
 
 static void cmd_ticks(void) {
@@ -216,6 +216,20 @@ static void cmd_exit(void) {
     g_terminal_window_id = -1;
     vga_print("closed terminal window");
     serial_print("closed terminal window");
+}
+
+// Real generic Socket object over kernel/net/tcp/tcp.c's real TCP server
+// listen/accept (see ring3prog.c trigger 20) - echoes back whatever a
+// real external client sends, 3 rounds.
+static void cmd_ring3_tcp_server(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0x14);
+    if (!ok) {
+        vga_print("ring3tcpserver failed - channel full");
+        serial_print("ring3tcpserver failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 tcp-server trigger - listening on port 9000");
+    serial_print("sent ring3 tcp-server trigger - listening on port 9000");
 }
 
 static void cmd_shutdown(void) {
@@ -590,7 +604,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 78
+#define SHELL_COMMAND_COUNT 79
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -626,6 +640,7 @@ static void shell_commands_init(void) {
     g_shell_commands[73] = "ring3posix";
     g_shell_commands[74] = "ring3pipe"; g_shell_commands[75] = "ring3shm";
     g_shell_commands[76] = "devices"; g_shell_commands[77] = "exit";
+    g_shell_commands[78] = "ring3tcpserver";
     g_shell_commands_initialized = true;
 }
 
@@ -2231,6 +2246,8 @@ void run_command(void) {
         cmd_reset();
     } else if (streq(g_line_buffer, "exit")) {
         cmd_exit();
+    } else if (streq(g_line_buffer, "ring3tcpserver")) {
+        cmd_ring3_tcp_server();
     } else if (streq(g_line_buffer, "shutdown")) {
         cmd_shutdown();
     } else if (streq(g_line_buffer, "reboot")) {

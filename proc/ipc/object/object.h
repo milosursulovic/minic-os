@@ -13,6 +13,7 @@
 #define OBJ_FILE 6
 #define OBJ_PIPE 7
 #define OBJ_SHARED_MEMORY 8
+#define OBJ_SOCKET 9
 
 typedef struct {
     bool used;
