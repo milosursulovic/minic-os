@@ -18,6 +18,7 @@
 #include "../../proc/process.h"
 #include "../../proc/ipc/object/object.h"
 #include "../../kernel/drivers/pci/pci.h"
+#include "../../kernel/drivers/device_manager/device_manager.h"
 #include "../../kernel/net/e1000/e1000.h"
 #include "../../kernel/net/arp/arp.h"
 #include "../../kernel/net/ip/ip.h"
@@ -122,8 +123,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices");
 }
 
 static void cmd_ticks(void) {
@@ -572,7 +573,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 76
+#define SHELL_COMMAND_COUNT 77
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -607,6 +608,7 @@ static void shell_commands_init(void) {
     g_shell_commands[71] = "ring3fileobj"; g_shell_commands[72] = "ring3perms";
     g_shell_commands[73] = "ring3posix";
     g_shell_commands[74] = "ring3pipe"; g_shell_commands[75] = "ring3shm";
+    g_shell_commands[76] = "devices";
     g_shell_commands_initialized = true;
 }
 
@@ -1540,6 +1542,45 @@ static void cmd_pci(void) {
     }
 }
 
+// Real Device Manager registry (kernel/drivers/device_manager/) - a
+// device appears here the moment its driver actually initializes, not
+// before, since every driver in this kernel is lazily initialized on
+// demand from a shell command (mouse/pci/fb/nic), not eagerly at boot.
+static void cmd_devices(void) {
+    int i = 0;
+    int shown = 0;
+    while (i < MAX_DEVICES) {
+        char name[32];
+        int category;
+        u32 info;
+        if (device_manager_get(i, name, &category, &info)) {
+            vga_print(name);
+            serial_print(name);
+            if (category == DEVICE_CATEGORY_PCI) {
+                vga_print(" [PCI]");
+                serial_print(" [PCI]");
+            } else if (category == DEVICE_CATEGORY_PLATFORM) {
+                vga_print(" [PLATFORM]");
+                serial_print(" [PLATFORM]");
+            } else if (category == DEVICE_CATEGORY_INPUT) {
+                vga_print(" [INPUT]");
+                serial_print(" [INPUT]");
+            }
+            vga_print(" info=0x");
+            serial_print(" info=0x");
+            print_hex((u64) info);
+            vga_print("  ");
+            serial_print("  ");
+            shown = shown + 1;
+        }
+        i = i + 1;
+    }
+    if (shown == 0) {
+        vga_print("(no devices registered yet)");
+        serial_print("(no devices registered yet)");
+    }
+}
+
 static void cmd_nic(void) {
     bool ok = e1000_init();
     if (!ok) {
@@ -2277,6 +2318,8 @@ void run_command(void) {
         cmd_ring3_button();
     } else if (streq(g_line_buffer, "pci")) {
         cmd_pci();
+    } else if (streq(g_line_buffer, "devices")) {
+        cmd_devices();
     } else if (streq(g_line_buffer, "nic")) {
         cmd_nic();
     } else if (streq(g_line_buffer, "fb")) {

@@ -5,6 +5,7 @@
 
 #include "mouse.h"
 #include "../io/io.h"
+#include "../device_manager/device_manager.h"
 #include "../../sched/task.h"
 
 static const u16 PS2_DATA = 0x60;
@@ -76,6 +77,7 @@ void mouse_init(void) {
         return;
     }
     g_mouse_initialized = true;
+    device_manager_register("PS/2 Mouse", DEVICE_CATEGORY_INPUT, 12);
 
     ctrl_write(0xA8);  // enable the auxiliary (mouse) port
 

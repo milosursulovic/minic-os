@@ -8,6 +8,7 @@
 #include "vbe.h"
 #include "../io/io.h"
 #include "../pci/pci.h"
+#include "../device_manager/device_manager.h"
 #include "../../mm/paging/paging.h"
 #include "../../gfx/font/font.h"
 
@@ -106,6 +107,7 @@ bool vbe_init(u32 width, u32 height) {
     g_fb_height = height;
     g_fb_pitch = pitch;
     g_fb_enabled = true;
+    device_manager_register("Bochs VBE Framebuffer", DEVICE_CATEGORY_PLATFORM, 0);
     return true;
 }
 

@@ -3,6 +3,7 @@
 
 #include "pci.h"
 #include "../io/io.h"
+#include "../device_manager/device_manager.h"
 
 static const u16 PCI_CONFIG_ADDRESS = 0xCF8;
 static const u16 PCI_CONFIG_DATA = 0xCFC;
@@ -50,6 +51,18 @@ u32 pci_read_bar0(u8 bus, u8 device, u8 function) {
 pci_device g_pci_devices[16];
 int g_pci_device_count;
 
+// Small local decimal-digit formatter (bus/device/function are always
+// small, at most 2 digits) - no shared string-building helper exists in
+// lib/strings.c for this (print_decimal writes straight to vga/serial,
+// not into a caller buffer).
+static void append_decimal(char* buf, int* pos, u32 value) {
+    if (value >= 10) {
+        append_decimal(buf, pos, value / 10);
+    }
+    buf[*pos] = (char) ('0' + (value % 10));
+    *pos = *pos + 1;
+}
+
 static void pci_record_device(u8 bus, u8 device, u8 function) {
     if (g_pci_device_count >= 16) {
         return;
@@ -72,6 +85,21 @@ static void pci_record_device(u8 bus, u8 device, u8 function) {
     g_pci_devices[i].prog_if = prog_if;
     g_pci_devices[i].header_type = header_type;
     g_pci_device_count = g_pci_device_count + 1;
+
+    // "PCI <device>.<function>" (bus is always 0 - this driver's own
+    // scope) - a real, distinguishing name so multiple different real
+    // devices never collide under one generic "PCI Device" upsert key.
+    // vendor_id/device_id (the real hardware identity) rides in info
+    // instead, not the display name.
+    char name[16];
+    name[0] = 'P'; name[1] = 'C'; name[2] = 'I'; name[3] = ' ';
+    int pos = 4;
+    append_decimal(name, &pos, device);
+    name[pos] = '.';
+    pos = pos + 1;
+    append_decimal(name, &pos, function);
+    name[pos] = '\0';
+    device_manager_register(name, DEVICE_CATEGORY_PCI, ((u32) vendor_id << 16) | device_id);
 }
 
 // No separate "present" bit - vendor ID 0xFFFF means no device.

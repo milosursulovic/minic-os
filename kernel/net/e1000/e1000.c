@@ -4,6 +4,7 @@
 
 #include "e1000.h"
 #include "../../drivers/pci/pci.h"
+#include "../../drivers/device_manager/device_manager.h"
 #include "../../mm/paging/paging.h"
 #include "../../mm/frames/frames.h"
 
@@ -64,6 +65,11 @@ bool e1000_init(void) {
         page = page + 1;
     }
     g_e1000_mmio_base = E1000_MMIO_VADDR;
+    // A separate entry from PCI's own generic "PCI N.M" slot entry for
+    // this same physical card - one says "a PCI slot has something in
+    // it", this says "a driver actually recognized and claimed it",
+    // matching the roadmap's own nested PCI/NIC diagram.
+    device_manager_register("Intel e1000 NIC", DEVICE_CATEGORY_PCI, 0);
     return true;
 }
 

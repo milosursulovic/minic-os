@@ -5,6 +5,7 @@
 #include "kernel/drivers/io/io.h"
 #include "kernel/drivers/interrupts_init/interrupts_init.h"
 #include "kernel/drivers/keyboard/keyboard.h"
+#include "kernel/drivers/device_manager/device_manager.h"
 #include "kernel/mm/frames/frames.h"
 #include "kernel/mm/paging/paging.h"
 #include "kernel/sched/task.h"
@@ -43,6 +44,12 @@ void _start(void) {
     vga_enable_cursor();
     vga_update_cursor(g_vga_cursor);
     init_scancode_table();
+    device_manager_register("PS/2 Keyboard", DEVICE_CATEGORY_INPUT, 1);
+    // RTC has no init function at all (kernel/drivers/rtc/rtc.c only ever
+    // reads on demand) - registered as an assumed-always-present
+    // platform device, matching how that driver itself never actually
+    // probes for its own presence.
+    device_manager_register("CMOS RTC", DEVICE_CATEGORY_PLATFORM, 0);
 
     idt_init();
     pic_remap();
