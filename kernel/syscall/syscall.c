@@ -119,6 +119,7 @@
 #include "../isr/isr.h"
 #include "../drivers/device_manager/device_manager.h"
 #include "../services/service_manager.h"
+#include "../lib/rand.h"
 
 typedef struct __attribute__((packed)) {
     i32 x;
@@ -231,9 +232,9 @@ static bool builtin_program_bounds(int index, u8** start_out, u8** end_out) {
     return false;
 }
 
-// Safe to reuse across processes - each gets its own cloned address space.
-static const u64 BUILTIN_LOAD_VADDR = 0x80000000;
-static const u64 BUILTIN_STACK_VADDR = 0x80020000;
+// Base for a real per-spawn ASLR load address (kernel/lib/rand.h) - safe
+// to reuse across processes, each gets its own cloned address space.
+static const u64 BUILTIN_LOAD_BASE = 0x80000000;
 
 // Deliberately separate from builtin_program_bounds() above - that one is
 // the hello_service/register_service IPC demo registry, this one is the
@@ -436,7 +437,8 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         if (!builtin_program_bounds((int) a1, &start, &end)) {
             return (u64) -1;
         }
-        int proc_index = spawn_process(start, end, BUILTIN_LOAD_VADDR, BUILTIN_STACK_VADDR);
+        u64 load_vaddr = randomize_load_vaddr(BUILTIN_LOAD_BASE);
+        int proc_index = spawn_process(start, end, load_vaddr, load_vaddr + 0x20000);
         if (proc_index < 0) {
             return (u64) -1;
         }
@@ -962,7 +964,8 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         if (!gui_app_bounds((int) a1, &start, &end)) {
             return (u64) -1;
         }
-        int proc_index = spawn_process(start, end, BUILTIN_LOAD_VADDR, BUILTIN_STACK_VADDR);
+        u64 load_vaddr = randomize_load_vaddr(BUILTIN_LOAD_BASE);
+        int proc_index = spawn_process(start, end, load_vaddr, load_vaddr + 0x20000);
         return (u64) proc_index;  // spawn_process's own -1-on-failure convention
     }
     if (num == 42) {

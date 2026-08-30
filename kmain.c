@@ -16,6 +16,7 @@
 #include "proc/ipc/net_request/net_request.h"
 #include "proc/ipc/net_tcp_request/net_tcp_request.h"
 #include "kernel/services/service_manager.h"
+#include "kernel/lib/rand.h"
 #include "kernel/fs/vfs/vfs.h"
 #include "shell/shell/shell.h"
 #include "shell/editor/editor.h"
@@ -76,8 +77,18 @@ void _start(void) {
     g_channel_demo = create_channel();
     g_ring3_channel_demo = create_channel();
     g_ring3_pipe_demo = alloc_pipe();  // same well-known-index convention, its own separate namespace
-    // stack_vaddr leaves 128KB past load_vaddr; the loaded image now spans more than
-    // one page, so a smaller gap would collide the image and the stack.
+    // Deliberately NOT randomized (real ASLR - kernel/lib/rand.h - covers
+    // every other spawn site below): ring3prog.c is a fixed-address-
+    // anchored test harness, not an ordinary program - several of its own
+    // triggers hardcode absolute addresses relative to this exact base
+    // (ring3nx's 0x80020000 stack-execution target, ring3shm's
+    // 0x80300000/0x80400000 mapping test, its own child-spawn's
+    // 0x80000000/0x80020000 via syscall 6) - randomizing this spawn was
+    // tried and found to break ring3nx for real (its hardcoded stack
+    // address stopped being its actual stack, turning a real NX fault
+    // - error_code=0x15 - into a not-present fault - error_code=0x6 -
+    // silently testing the wrong thing). stack_vaddr keeps the same
+    // 128KB gap every call site here already relied on.
     spawn_process(&g_test_prog_start, &g_test_prog_end, 0x80000000, 0x80020000);
     create_isolated_task(&proc_receiver_entry);
     vfs_mount("/system", BACKEND_MINIFS);
@@ -90,7 +101,8 @@ void _start(void) {
     service_register("helloservice", &g_hello_service_prog_start, &g_hello_service_prog_end, true);
 
     // init process: spawns proc/demo/hello_service.c via spawn_builtin once running.
-    spawn_process(&g_init_prog_start, &g_init_prog_end, 0x80000000, 0x80020000);
+    u64 init_load_vaddr = randomize_load_vaddr(0x80000000);
+    spawn_process(&g_init_prog_start, &g_init_prog_end, init_load_vaddr, init_load_vaddr + 0x20000);
 
     // Desktop shell: wallpaper + taskbar + launcher, runs forever from
     // boot (not shell-triggered like ring3prog.c's demos) - activates the
@@ -99,7 +111,9 @@ void _start(void) {
     // taskbar's own MENU dropdown launches them on demand via syscall 41
     // (kernel/syscall/syscall.c's gui_app_bounds()), so only the shell
     // itself needs to exist at boot.
-    spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end, 0x80000000, 0x80020000);
+    u64 desktop_shell_load_vaddr = randomize_load_vaddr(0x80000000);
+    spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end,
+                  desktop_shell_load_vaddr, desktop_shell_load_vaddr + 0x20000);
 
     __asm__ volatile("sti");
 

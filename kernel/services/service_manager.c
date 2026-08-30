@@ -2,15 +2,15 @@
 #include "../../proc/process.h"
 #include "../sched/task.h"
 #include "../lib/strings.h"
+#include "../lib/rand.h"
 
 service_entry g_services[SERVICE_SLOTS];
 
-// Same fixed load/stack vaddrs every other builtin-style program already
-// uses (kernel/syscall/syscall.c's BUILTIN_LOAD_VADDR/BUILTIN_STACK_VADDR,
-// proc/demo/init.c's own spawn calls, etc) - safe to reuse across
-// processes, each gets its own cloned address space.
-static const u64 SERVICE_LOAD_VADDR = 0x80000000;
-static const u64 SERVICE_STACK_VADDR = 0x80020000;
+// Real ASLR (kernel/lib/rand.h) - same base every other builtin-style
+// program uses (kernel/syscall/syscall.c's BUILTIN_LOAD_BASE, kmain.c's
+// own spawn calls, etc), but load_vaddr is randomized per spawn/respawn,
+// not the same fixed address every time.
+static const u64 SERVICE_LOAD_BASE = 0x80000000;
 
 static void copy_bounded(char* dst, const char* src, int cap) {
     int i = 0;
@@ -63,8 +63,9 @@ bool service_start(const char* name) {
     if (g_services[slot].running) {
         return true;  // already running - starting again is a no-op success
     }
+    u64 load_vaddr = randomize_load_vaddr(SERVICE_LOAD_BASE);
     int proc_index = spawn_process(g_services[slot].image_start, g_services[slot].image_end,
-                                    SERVICE_LOAD_VADDR, SERVICE_STACK_VADDR);
+                                    load_vaddr, load_vaddr + 0x20000);
     if (proc_index < 0) {
         return false;
     }
@@ -137,8 +138,9 @@ void service_manager_worker_entry(void) {
                     // proc/demo/init/init.c already proved works, just
                     // generalized to any registered service and checked
                     // directly (kernel-side) instead of via syscall query.
+                    u64 load_vaddr = randomize_load_vaddr(SERVICE_LOAD_BASE);
                     int proc_index = spawn_process(g_services[i].image_start, g_services[i].image_end,
-                                                    SERVICE_LOAD_VADDR, SERVICE_STACK_VADDR);
+                                                    load_vaddr, load_vaddr + 0x20000);
                     if (proc_index >= 0) {
                         g_services[i].process_index = proc_index;
                         g_services[i].restart_count = g_services[i].restart_count + 1;

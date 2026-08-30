@@ -533,13 +533,17 @@ static __attribute__((unused)) bool button_poll(button* self) {
     // TEMPORARY diagnostic guard - see gt_debug_print's own comment above
     // and [[project_button_poll_crash_bug]]. A real button is always a
     // static/local variable's address within this program's own private
-    // region (BUILTIN_LOAD_VADDR=0x80000000 + a few KB at most, every
-    // ring3 program here is tiny) - anything outside a generous margin of
-    // that range means `self` itself got corrupted somewhere between
-    // being computed at the call site and landing here, not a bug in
-    // *this* function. Logs and bails out instead of dereferencing
-    // garbage, so the kernel survives long enough to read the log.
-    if ((u64) self < 0x80000000 || (u64) self > 0x80100000) {
+    // region - real ASLR (kernel/lib/rand.h) now randomizes load_vaddr
+    // within [0x80000000, 0x80000000 + ASLR_SLOTS*4096), so the upper
+    // bound here is derived, not a guess: max load_vaddr
+    // (0x80000000 + 511*4096 = 0x801FF000) + the 0x20000 stack gap every
+    // spawn call site uses (0x8021F000) + one 4096-byte stack page
+    // (0x80220000) - anything outside that range means `self` itself got
+    // corrupted somewhere between being computed at the call site and
+    // landing here, not a bug in *this* function. Logs and bails out
+    // instead of dereferencing garbage, so the kernel survives long
+    // enough to read the log.
+    if ((u64) self < 0x80000000 || (u64) self > 0x80220000) {
         gt_debug_print("button_poll: BAD self ptr 0x", (u64) self);
         return false;
     }
