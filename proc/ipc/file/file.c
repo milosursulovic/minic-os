@@ -39,7 +39,24 @@ static int find_free_slot(void) {
     return -1;
 }
 
-int file_object_open(const char* path, bool write_mode) {
+int file_object_open(const char* path, bool write_mode, u8 caller_uid) {
+    if (in_system_mount(path)) {
+        char stripped[128];
+        strip_system_prefix(stripped, path);
+        u8 owner_uid;
+        u8 mode;
+        if (fs_get_owner_mode(stripped, &owner_uid, &mode)) {
+            u8 restriction = write_mode ? MODE_OWNER_ONLY_WRITE : MODE_OWNER_ONLY_READ;
+            if ((mode & restriction) != 0 && caller_uid != owner_uid && caller_uid != 0) {
+                return -1;
+            }
+        }
+        // fs_get_owner_mode() returning false means the path doesn't
+        // exist yet - nothing to check permissions against (a write-mode
+        // open is about to create it; a read-mode open will fail below
+        // exactly as it always has).
+    }
+
     int slot = find_free_slot();
     if (slot < 0) {
         return -1;
@@ -55,6 +72,7 @@ int file_object_open(const char* path, bool write_mode) {
 
     f->write_mode = write_mode;
     f->cursor = 0;
+    f->owner_uid = caller_uid;
     if (write_mode) {
         f->length = 0;
     } else {
@@ -110,12 +128,18 @@ bool file_object_close(int slot) {
     open_file* f = &g_open_files[slot];
     bool ok = true;
     if (f->write_mode) {
-        if (in_system_mount(f->path)) {
-            char stripped[128];
+        bool is_system = in_system_mount(f->path);
+        char stripped[128];
+        if (is_system) {
             strip_system_prefix(stripped, f->path);
             fs_delete_file(stripped);  // overwrite semantics - ok if it didn't exist yet
         }
         ok = vfs_write(f->path, f->buffer, f->length);
+        if (ok && is_system) {
+            // Real Unix "creator becomes owner" - applied for real once
+            // the file genuinely exists on disk, not at open() time.
+            fs_set_owner(stripped, f->owner_uid);
+        }
     }
     f->used = false;
     return ok;

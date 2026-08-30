@@ -94,6 +94,7 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
     g_processes[proc_index].used = true;
     g_processes[proc_index].cr3 = cr3;
     g_processes[proc_index].task_index = task_index;
+    g_processes[proc_index].uid = 0;
     g_tasks[task_index].process_index = proc_index;
 
     // handle 0 = myself, free for every process. (A reused slot's handle

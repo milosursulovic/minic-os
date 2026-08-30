@@ -45,6 +45,14 @@
 // file_close (handle via a1 - write-mode commits the accumulated buffer
 // to real MiniFS storage, delete-then-write, same pattern as syscall 13's
 // handle_close but with a real commit step first).
+// 49 sys_setuid (new uid via a1 - sets the caller's own process.uid,
+// unconditionally; a real but deliberately unhardened test/demo
+// primitive, not yet a security boundary), 50 fs_set_owner (bare
+// MiniFS-relative path via a1, uid via a2 - same "not VFS-absolute"
+// convention syscalls 38/39 already use), 51 fs_set_mode (same shape,
+// mode bits via a2 - kernel/fs/minifs/minifs.h's MODE_OWNER_ONLY_READ/
+// WRITE). Real UID-based file ownership enforcement itself happens in
+// syscall 44/proc/ipc/file/file.c's file_object_open(), not here.
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -907,7 +915,7 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         }
         char* path = (char*) a1;
         bool write_mode = a2 != 0;
-        int slot = file_object_open(path, write_mode);
+        int slot = file_object_open(path, write_mode, g_processes[caller_process].uid);
         if (slot < 0) {
             return (u64) -1;
         }
@@ -1015,6 +1023,24 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         bool ok = file_object_close(slot);
         free_object(obj_index);
         free_handle(caller_process, handle_idx);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 49) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        g_processes[caller_process].uid = (u8) a1;
+        return 0;
+    }
+    if (num == 50) {
+        char* path = (char*) a1;
+        bool ok = fs_set_owner(path, (u8) a2);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 51) {
+        char* path = (char*) a1;
+        bool ok = fs_set_mode(path, (u8) a2);
         return ok ? 0 : (u64) -1;
     }
     return (u64) -1;  // unknown syscall

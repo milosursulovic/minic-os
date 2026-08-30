@@ -187,6 +187,28 @@ static __attribute__((unused)) bool gt_file_close(int handle) {
     return gt_syscall(48, (u64) handle, 0, 0) != (u64) -1;
 }
 
+// Real UID-based file ownership/permission bits - values must match
+// kernel/fs/minifs/minifs.h's MODE_OWNER_ONLY_READ/WRITE exactly (same
+// kernel-constant-mirrored-in-ring3 duplication this file's own
+// RIGHT_QUERY-style constants already use elsewhere - ring3 code can't
+// include a kernel-internal header). Enforcement itself happens in
+// proc/ipc/file/file.c's file_object_open().
+#define MODE_OWNER_ONLY_READ 1
+#define MODE_OWNER_ONLY_WRITE 2
+static __attribute__((unused)) bool gt_setuid(u8 uid) {
+    return gt_syscall(49, (u64) uid, 0, 0) != (u64) -1;
+}
+
+// path is bare MiniFS-relative (e.g. "permtest.mfs"), not VFS-absolute -
+// same convention gt_fs_mkdir/gt_fs_delete already use.
+static __attribute__((unused)) bool gt_fs_set_owner(const char* path, u8 uid) {
+    return gt_syscall(50, (u64) path, (u64) uid, 0) != (u64) -1;
+}
+
+static __attribute__((unused)) bool gt_fs_set_mode(const char* path, u8 mode) {
+    return gt_syscall(51, (u64) path, (u64) mode, 0) != (u64) -1;
+}
+
 // Spawns one of the fixed compiled-in GUI apps (0=terminal, 1=file_manager,
 // 2=settings - kernel/syscall/syscall.c's own gui_app_bounds()) instead of
 // kmain.c auto-spawning all of them at boot. Returns the new process index,

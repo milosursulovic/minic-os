@@ -14,6 +14,11 @@ typedef struct {
     bool used;
     u64 cr3;
     int task_index;
+    // Defaults to 0 (root) for every process - see kernel/syscall/syscall.c
+    // syscall 49 (sys_setuid), a real but deliberately unhardened test/demo
+    // primitive for now (any process can change its own uid arbitrarily).
+    // Real per-file enforcement lives in proc/ipc/file/file.c.
+    u8 uid;
 } process;
 
 extern process g_processes[MAX_PROCESSES];

@@ -583,6 +583,31 @@ void _start(void) {
         do_syscall(1, (u64) "readback n=0x", (u64) n3, 0);
         do_syscall(1, (u64) &readback[0], 0, 0);
         gt_file_close(readback_handle);
+    } else if (trigger_value == 16) {
+        // trigger 16 (ring3perms): real UID-based file ownership +
+        // permission enforcement (kernel/fs/minifs/minifs.h's
+        // MODE_OWNER_ONLY_READ, proc/ipc/file/file.c's real check).
+        gt_setuid(1);  // become a non-root test user
+        int owner_handle = gt_file_open("/system/permtest.mfs", 1);
+        do_syscall(1, (u64) "(uid=1) create permtest.mfs handle=0x", (u64) owner_handle, 0);
+        const char* secret = "owner-only content";
+        gt_file_write(owner_handle, (const u8*) secret, 19);
+        gt_file_close(owner_handle);  // real Unix "creator becomes owner" - now really owned by uid 1
+
+        gt_fs_set_mode("permtest.mfs", MODE_OWNER_ONLY_READ);
+
+        int owner_read = gt_file_open("/system/permtest.mfs", 0);
+        do_syscall(1, (u64) "(uid=1, owner) read handle=0x", (u64) owner_read, 0);
+        gt_file_close(owner_read);
+
+        gt_setuid(5);  // an arbitrary unrelated non-root uid
+        int stranger_read = gt_file_open("/system/permtest.mfs", 0);
+        do_syscall(1, (u64) "(uid=5, non-owner, non-root) read handle=0x", (u64) stranger_read, 0);
+
+        gt_setuid(0);  // root
+        int root_read = gt_file_open("/system/permtest.mfs", 0);
+        do_syscall(1, (u64) "(uid=0, root) read handle=0x", (u64) root_read, 0);
+        gt_file_close(root_read);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

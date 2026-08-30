@@ -27,14 +27,24 @@ typedef struct {
     u8 buffer[FILE_MAX_SIZE];
     u32 length;  // read-mode: real file size at open time. write-mode: bytes accumulated so far.
     u32 cursor;  // read-mode only.
+    // Recorded from open()'s caller_uid - real Unix "creator becomes
+    // owner" semantics, applied for real at close() time (see
+    // file_object_close()).
+    u8 owner_uid;
 } open_file;
 
 extern open_file g_open_files[FILE_OBJECT_SLOTS];
 
 // Read-mode: reads the whole file via vfs_read at open time. Write-mode:
-// starts empty (nothing touches disk until close()). Returns a slot
-// index, or -1 (out of slots, or the path doesn't exist for read-mode).
-int file_object_open(const char* path, bool write_mode);
+// starts empty (nothing touches disk until close()). caller_uid is the
+// opening process's uid (proc/process.h) - for a path under /system with
+// a real owner_uid/mode already set (kernel/fs/minifs/minifs.h), refuses
+// (-1) if the relevant MODE_OWNER_ONLY_* bit is set and caller_uid is
+// neither the owner nor root (uid 0, which always bypasses - real UNIX
+// semantics). A not-yet-existing path (about to be created by a
+// write-mode open) has no real owner yet, so this check is skipped.
+// Returns a slot index, or -1.
+int file_object_open(const char* path, bool write_mode, u8 caller_uid);
 // Copies min(max_len, length-cursor) bytes from the cursor, advances it.
 // Returns the byte count (0 at real EOF).
 int file_object_read(int slot, u8* out, u32 max_len);

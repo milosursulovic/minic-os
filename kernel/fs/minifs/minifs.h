@@ -30,6 +30,20 @@ bool fs_superblock_info(u32* file_count_out);
 // false for an unused slot or an unresolvable dir_path.
 bool fs_list_entry(const char* dir_path, int index, char* name_out, u32* size_out, bool* is_dir_out);
 
+// Real UID-based ownership/permission bits, in the dir_entry's own
+// on-disk bytes (see minifs.c - fits exactly, no format migration).
+// mode is a RESTRICTION mask, not a grant - mode==0 (every file that
+// predates this feature) means no restriction, matching the real
+// already-shipped "anyone can touch anything" behavior exactly. Not
+// permission-gated themselves in this milestone - any process can
+// currently retarget any file's owner/mode (a real, separate, stated
+// limitation).
+#define MODE_OWNER_ONLY_READ 1
+#define MODE_OWNER_ONLY_WRITE 2
+bool fs_get_owner_mode(const char* path, u8* owner_uid_out, u8* mode_out);
+bool fs_set_owner(const char* path, u8 uid);
+bool fs_set_mode(const char* path, u8 mode);
+
 #define MINIFS_MAX_FILES 16
 
 #pragma GCC visibility pop

@@ -27,15 +27,24 @@ typedef struct {
     u32 next_free_lba;
 } superblock;
 
-// Padded to 32 bytes so 16 entries exactly fill one 512-byte sector -
-// is_dir fits in padding that was already there (name+start_lba+
-// size_bytes+used = 29 bytes, rounds up to 32 regardless).
+// Exactly 32 bytes so 16 entries exactly fill one 512-byte sector:
+// name(20)+start_lba(4)+size_bytes(4)+used(1)+is_dir(1)+owner_uid(1)+
+// mode(1) = 32, no padding either way. owner_uid/mode were added for
+// real UID-based permissions (kernel-qemu-test milestone "File ownership
+// + permission enforcement") - every file that predates this feature has
+// both fields at 0 (mkfs zeroes the whole directory sector, and nothing
+// ever wrote these two specific bytes before), and mode==0 means "no
+// restriction" (see MODE_* below) specifically so every already-real
+// file on disk stays exactly as freely accessible as it always was - a
+// real backward-compatibility constraint, not just a default.
 typedef struct {
     char name[20];
     u32 start_lba;    // file: first data sector. directory: its own directory sector.
     u32 size_bytes;    // file: byte length. directory: unused (0).
     bool used;
     bool is_dir;
+    u8 owner_uid;
+    u8 mode;
 } dir_entry;
 
 static u32 sectors_for(u32 bytes) {
@@ -250,6 +259,8 @@ bool fs_write_file(const char* path, u8* data, u32 len) {
     entries[free_slot].size_bytes = len;
     entries[free_slot].used = true;
     entries[free_slot].is_dir = false;
+    entries[free_slot].owner_uid = 0;
+    entries[free_slot].mode = 0;
     if (!ata_write_sector(parent_lba, dir_buf)) {
         return false;
     }
@@ -302,6 +313,8 @@ bool fs_create_dir(const char* path) {
     entries[free_slot].size_bytes = 0;
     entries[free_slot].used = true;
     entries[free_slot].is_dir = true;
+    entries[free_slot].owner_uid = 0;
+    entries[free_slot].mode = 0;
     if (!ata_write_sector(parent_lba, dir_buf)) {
         return false;
     }
@@ -402,4 +415,62 @@ int fs_read_file(const char* path, u8* out_buffer, u32 max_len) {
         s = s + 1;
     }
     return (int) size;
+}
+
+bool fs_get_owner_mode(const char* path, u8* owner_uid_out, u8* mode_out) {
+    u32 parent_lba;
+    char name[20];
+    if (!resolve_parent_dir(path, &parent_lba, name)) {
+        return false;
+    }
+    u8 dir_buf[512];
+    if (!ata_read_sector(parent_lba, dir_buf)) {
+        return false;
+    }
+    dir_entry* entries = (dir_entry*) &dir_buf[0];
+    int slot = find_entry(entries, name);
+    if (slot < 0) {
+        return false;
+    }
+    *owner_uid_out = entries[slot].owner_uid;
+    *mode_out = entries[slot].mode;
+    return true;
+}
+
+bool fs_set_owner(const char* path, u8 uid) {
+    u32 parent_lba;
+    char name[20];
+    if (!resolve_parent_dir(path, &parent_lba, name)) {
+        return false;
+    }
+    u8 dir_buf[512];
+    if (!ata_read_sector(parent_lba, dir_buf)) {
+        return false;
+    }
+    dir_entry* entries = (dir_entry*) &dir_buf[0];
+    int slot = find_entry(entries, name);
+    if (slot < 0) {
+        return false;
+    }
+    entries[slot].owner_uid = uid;
+    return ata_write_sector(parent_lba, dir_buf);
+}
+
+bool fs_set_mode(const char* path, u8 mode) {
+    u32 parent_lba;
+    char name[20];
+    if (!resolve_parent_dir(path, &parent_lba, name)) {
+        return false;
+    }
+    u8 dir_buf[512];
+    if (!ata_read_sector(parent_lba, dir_buf)) {
+        return false;
+    }
+    dir_entry* entries = (dir_entry*) &dir_buf[0];
+    int slot = find_entry(entries, name);
+    if (slot < 0) {
+        return false;
+    }
+    entries[slot].mode = mode;
+    return ata_write_sector(parent_lba, dir_buf);
 }
