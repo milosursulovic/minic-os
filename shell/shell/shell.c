@@ -123,8 +123,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit");
 }
 
 static void cmd_ticks(void) {
@@ -201,6 +201,23 @@ static void cmd_reset(void) {
 // - no real ACPI table parsing exists in this kernel, this is a
 // QEMU/Bochs-specific shortcut, not real-hardware ACPI. Never returns on
 // QEMU; on real hardware (or a different virtual chipset) it's a no-op.
+// Closes the GUI Terminal window (proc/apps/terminal/terminal.c
+// registers its own window id via syscall 58 the moment it creates it -
+// see kernel/gfx/window/window.h's g_terminal_window_id) - a real "exit"
+// like typing exit in a real terminal closes it, not a console-shell
+// exit (there's nowhere for the console itself to exit to).
+static void cmd_exit(void) {
+    if (g_terminal_window_id < 0) {
+        vga_print("exit: no terminal window open");
+        serial_print("exit: no terminal window open");
+        return;
+    }
+    window_close(g_terminal_window_id);
+    g_terminal_window_id = -1;
+    vga_print("closed terminal window");
+    serial_print("closed terminal window");
+}
+
 static void cmd_shutdown(void) {
     vga_print("shutting down (QEMU/Bochs ACPI trick - no-op on real hardware)");
     serial_print("shutting down (QEMU/Bochs ACPI trick - no-op on real hardware)");
@@ -573,7 +590,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 77
+#define SHELL_COMMAND_COUNT 78
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -608,7 +625,7 @@ static void shell_commands_init(void) {
     g_shell_commands[71] = "ring3fileobj"; g_shell_commands[72] = "ring3perms";
     g_shell_commands[73] = "ring3posix";
     g_shell_commands[74] = "ring3pipe"; g_shell_commands[75] = "ring3shm";
-    g_shell_commands[76] = "devices";
+    g_shell_commands[76] = "devices"; g_shell_commands[77] = "exit";
     g_shell_commands_initialized = true;
 }
 
@@ -2212,6 +2229,8 @@ void run_command(void) {
         cmd_mem();
     } else if (streq(g_line_buffer, "reset")) {
         cmd_reset();
+    } else if (streq(g_line_buffer, "exit")) {
+        cmd_exit();
     } else if (streq(g_line_buffer, "shutdown")) {
         cmd_shutdown();
     } else if (streq(g_line_buffer, "reboot")) {

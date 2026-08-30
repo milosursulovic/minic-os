@@ -159,6 +159,7 @@ __attribute__((section(".text.start")))
 void _start(void) {
     int window_id = gt_window_create(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT,
                                       BODY_COLOR, TITLE_COLOR);
+    gt_register_terminal_window(window_id);
 
     u64 last_pos = 0;
     char buf[READ_CHUNK];

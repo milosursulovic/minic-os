@@ -66,6 +66,10 @@
 // ownership check on the target, same tone as syscall 49's sys_setuid).
 // No new "close" syscalls - syscall 13 (handle_close) is already generic
 // over every object type via free_object/free_handle.
+// 58 register_terminal_window (window id via a1) - lets
+// proc/apps/terminal/terminal.c tell the kernel which window is "the"
+// terminal, so the console shell's `exit` command (shell/shell/shell.c)
+// can close it without fragile dimension-matching against g_windows[].
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -1194,6 +1198,13 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         }
         bool ok = shared_memory_map(slot, g_processes[target_process].cr3, a3);
         return ok ? 0 : (u64) -1;
+    }
+    if (num == 58) {
+        // register_terminal_window (window id via a1) - self-registration
+        // convenience, same permissive tone as syscall 49's sys_setuid:
+        // no check that the caller actually owns/created that window id.
+        g_terminal_window_id = (int) a1;
+        return 0;
     }
     return (u64) -1;  // unknown syscall
 }

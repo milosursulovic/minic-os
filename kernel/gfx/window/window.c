@@ -11,6 +11,8 @@
 #include "../image/image.h"
 #include "../cursor_image/cursor_image.h"
 
+int g_terminal_window_id = -1;
+
 window g_windows[WINDOW_SLOTS];
 int g_window_zorder[WINDOW_SLOTS];
 int g_window_zorder_count;

@@ -50,6 +50,13 @@ typedef struct {
     u32 restore_height;
 } window;
 
+// Set by syscall (register_terminal_window) the moment
+// proc/apps/terminal/terminal.c creates its own window - lets the kernel
+// console shell's `exit` command (shell/shell/shell.c) close it without
+// fragile dimension-matching against g_windows[]. -1 = no terminal
+// window currently open.
+extern int g_terminal_window_id;
+
 extern window g_windows[WINDOW_SLOTS];
 extern int g_window_zorder[WINDOW_SLOTS];
 extern int g_window_zorder_count;

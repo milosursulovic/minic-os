@@ -251,6 +251,12 @@ static __attribute__((unused)) bool gt_shm_map_into(int handle, u64 target_task_
     return gt_syscall(57, (u64) handle, target_task_index, vaddr) != (u64) -1;
 }
 
+// Tells the kernel "this window id is the terminal" so the console
+// shell's `exit` command can close it later.
+static __attribute__((unused)) void gt_register_terminal_window(int window_id) {
+    gt_syscall(58, (u64) window_id, 0, 0);
+}
+
 // Spawns one of the fixed compiled-in GUI apps (0=terminal, 1=file_manager,
 // 2=settings - kernel/syscall/syscall.c's own gui_app_bounds()) instead of
 // kmain.c auto-spawning all of them at boot. Returns the new process index,
