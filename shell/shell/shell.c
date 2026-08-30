@@ -124,8 +124,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name>");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name>");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent");
 }
 
 static void cmd_ticks(void) {
@@ -231,6 +231,34 @@ static void cmd_ring3_tcp_server(void) {
     }
     vga_print("sent ring3 tcp-server trigger - listening on port 9000");
     serial_print("sent ring3 tcp-server trigger - listening on port 9000");
+}
+
+// Real lowercase font glyphs + gui_toolkit.h's new Label/Checkbox widgets
+// (see ring3prog.c trigger 21).
+static void cmd_ring3_widgets(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0x15);
+    if (!ok) {
+        vga_print("ring3widgets failed - channel full");
+        serial_print("ring3widgets failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 widgets trigger");
+    serial_print("sent ring3 widgets trigger");
+}
+
+// Reads back a pixel inside ring3widgets's checkbox inner fill (see
+// ring3prog.c trigger 21). Window w is at screen (400,340), body starts
+// at (400,360); checkbox drawn at body-local (10,40) size 16, 2px inset
+// -> inner fill screen (412,402)-(423,413). (413,404) - near the top-left
+// corner of that range, away from where the cursor tip typically rests
+// after a click landed on this box from above - reads 0x00444444
+// (unchecked, bg_color) or 0x0000FF00 (checked, check_color), live and
+// controllable via QEMU monitor mouse_move/mouse_button, same technique
+// cmd_buttoncontent already uses.
+static void cmd_checkboxcontent(void) {
+    vga_print("checkboxcontent fill=0x");
+    serial_print("checkboxcontent fill=0x");
+    print_hex((u64) fb_get_pixel(413, 404));
 }
 
 static void cmd_shutdown(void) {
@@ -608,7 +636,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 80
+#define SHELL_COMMAND_COUNT 82
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -646,6 +674,7 @@ static void shell_commands_init(void) {
     g_shell_commands[76] = "devices"; g_shell_commands[77] = "exit";
     g_shell_commands[78] = "ring3tcpserver";
     g_shell_commands[79] = "service";
+    g_shell_commands[80] = "ring3widgets"; g_shell_commands[81] = "checkboxcontent";
     g_shell_commands_initialized = true;
 }
 
@@ -2299,6 +2328,10 @@ void run_command(void) {
         cmd_exit();
     } else if (streq(g_line_buffer, "ring3tcpserver")) {
         cmd_ring3_tcp_server();
+    } else if (streq(g_line_buffer, "ring3widgets")) {
+        cmd_ring3_widgets();
+    } else if (streq(g_line_buffer, "checkboxcontent")) {
+        cmd_checkboxcontent();
     } else if (starts_with(g_line_buffer, "service ")) {
         cmd_service();
     } else if (streq(g_line_buffer, "shutdown")) {

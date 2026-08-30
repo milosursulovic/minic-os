@@ -1,6 +1,11 @@
-// Hand-authored 5x7 bitmap font - A-Z, 0-9, space, and . , ! ? : - > only.
-// Every other character (lowercase, other punctuation) is a known gap,
-// closed in a later milestone; font_get_glyph() returns false for them.
+// Hand-authored 5x7 bitmap font - A-Z, a-z, 0-9, space, and . , ! ? : - > /
+// only. Lowercase letters are drawn within the same fixed 5x7 box the
+// uppercase set uses - a real, stated simplification: there are no spare
+// rows below the baseline, so g/j/p/q/y have no true descender (their
+// "tail" stays inside the box rather than dropping below it), same
+// "shallow but real, not silently wrong" tone as this codebase's other
+// documented gaps. Every other character (other punctuation) is still a
+// known gap; font_get_glyph() returns false for them.
 
 #include "font.h"
 
@@ -55,6 +60,34 @@ static const glyph_entry GLYPHS[] = {
     {'-', {0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000}},
     {'>', {0b10000, 0b01000, 0b00100, 0b00010, 0b00100, 0b01000, 0b10000}},
     {'/', {0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000}},
+    // Lowercase - drawn within the same 5x7 box, no true descender (see
+    // file-level comment above).
+    {'a', {0b00000, 0b01110, 0b00001, 0b01111, 0b10001, 0b10011, 0b01101}},
+    {'b', {0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b11110}},
+    {'c', {0b00000, 0b00000, 0b01111, 0b10000, 0b10000, 0b10000, 0b01111}},
+    {'d', {0b00001, 0b00001, 0b01111, 0b10001, 0b10001, 0b10001, 0b01111}},
+    {'e', {0b00000, 0b01110, 0b10001, 0b11111, 0b10000, 0b10000, 0b01111}},
+    {'f', {0b00011, 0b00100, 0b01111, 0b00100, 0b00100, 0b00100, 0b00100}},
+    {'g', {0b00000, 0b01111, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110}},
+    {'h', {0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b10001}},
+    {'i', {0b00100, 0b00000, 0b01100, 0b00100, 0b00100, 0b00100, 0b01110}},
+    {'j', {0b00010, 0b00000, 0b00110, 0b00010, 0b00010, 0b10010, 0b01100}},
+    {'k', {0b10000, 0b10000, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010}},
+    {'l', {0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110}},
+    {'m', {0b00000, 0b00000, 0b11010, 0b10101, 0b10101, 0b10101, 0b10101}},
+    {'n', {0b00000, 0b00000, 0b10110, 0b11001, 0b10001, 0b10001, 0b10001}},
+    {'o', {0b00000, 0b00000, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110}},
+    {'p', {0b00000, 0b00000, 0b11110, 0b10001, 0b10001, 0b11110, 0b10000}},
+    {'q', {0b00000, 0b00000, 0b01111, 0b10001, 0b10001, 0b01111, 0b00001}},
+    {'r', {0b00000, 0b00000, 0b10110, 0b11001, 0b10000, 0b10000, 0b10000}},
+    {'s', {0b00000, 0b00000, 0b01111, 0b10000, 0b01110, 0b00001, 0b11110}},
+    {'t', {0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00100, 0b00011}},
+    {'u', {0b00000, 0b00000, 0b10001, 0b10001, 0b10001, 0b10011, 0b01101}},
+    {'v', {0b00000, 0b00000, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100}},
+    {'w', {0b00000, 0b00000, 0b10001, 0b10001, 0b10101, 0b10101, 0b01010}},
+    {'x', {0b00000, 0b00000, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001}},
+    {'y', {0b00000, 0b00000, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110}},
+    {'z', {0b00000, 0b00000, 0b11111, 0b00010, 0b00100, 0b01000, 0b11111}},
 };
 
 #define GLYPH_COUNT (int) (sizeof(GLYPHS) / sizeof(GLYPHS[0]))

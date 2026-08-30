@@ -720,6 +720,39 @@ void _start(void) {
             }
             gt_socket_close(conn_handle);
         }
+    } else if (trigger_value == 21) {
+        // trigger 21 (ring3widgets): real lowercase font glyphs
+        // (kernel/gfx/font.c) plus two new gui_toolkit.h widgets - Label
+        // (consolidates the draw_static_label/draw_row_text duplication
+        // already in settings.c/device_manager.c) and Checkbox (a real
+        // persistent-toggle interaction model, unlike Button's momentary
+        // press). Window at a fixed screen position so cmd_checkboxcontent
+        // (shell.c) can read back a known pixel, same technique
+        // buttoncontent already uses for trigger 14.
+        window w;
+        bool created_w = window_create(&w, 400, 340, 200, 150, 0x00444444, 0x00222222);
+        do_syscall(1, (u64) "window_create(w) ok=0x", (u64) created_w, 0);
+
+        label lbl;
+        label_init(&lbl, w.id, 10, 10, "hello world 123", 0x00FFFFFF, 0x00444444);
+
+        checkbox cb;
+        checkbox_init(&cb, w.id, 10, 40, 16, 0x00888888, 0x0000FF00, 0x00444444, false);
+
+        // Polls forever, same shape as every real interactive GUI app in
+        // this codebase (desktop_shell.c/settings.c/service_manager.c's
+        // own for(;;) toolbars) - NOT a fixed small-count loop, which
+        // completes almost instantly under QEMU/TCG and leaves no real
+        // wall-clock window to click during (memory documents trigger
+        // 14/ring3button's own positive click path was never actually
+        // verified for exactly this reason). Only prints on a real
+        // click, not every poll, so the log stays readable across a
+        // long real-world test.
+        for (;;) {
+            if (checkbox_poll(&cb)) {
+                do_syscall(1, (u64) "checkbox_poll() clicked, checked=0x", (u64) cb.checked, 0);
+            }
+        }
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";
