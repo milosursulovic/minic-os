@@ -124,8 +124,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent");
 }
 
 static void cmd_ticks(void) {
@@ -259,6 +259,40 @@ static void cmd_checkboxcontent(void) {
     vga_print("checkboxcontent fill=0x");
     serial_print("checkboxcontent fill=0x");
     print_hex((u64) fb_get_pixel(413, 404));
+}
+
+// Reads back a pixel inside each of ring3widgets's two radio buttons (see
+// ring3prog.c trigger 21). radio0 at body-local (10,70) size 14 -> screen
+// (410,430), inner fill (412,432)-(421,441); radio1 at body-local (40,70)
+// -> screen (440,430), inner fill (442,432)-(451,441). (413,433)/(443,433)
+// - near the top-left corner of each inner range, same "away from the
+// cursor's own resting point" reasoning cmd_checkboxcontent already
+// documents - read 0x00444444 (unselected, bg_color) or 0x0000FF00
+// (selected, dot_color).
+static void cmd_radiocontent(void) {
+    vga_print("radiocontent r0=0x");
+    serial_print("radiocontent r0=0x");
+    print_hex((u64) fb_get_pixel(413, 433));
+    vga_print(" r1=0x");
+    serial_print(" r1=0x");
+    print_hex((u64) fb_get_pixel(443, 433));
+}
+
+// Reads back two pixels inside ring3widgets's progress bar (body-local
+// (10,100) size 150x12 -> screen (410,460)-(560,472)). x=430 sits inside
+// the bar's first 30% (410-455) - always fill_color once the demo's
+// initial progress_bar_init(..., 30) has run. x=500 sits inside 80%
+// (410-530) but past 30% - fill_color only after selecting radio1 sets
+// it to 80% (see ring3prog.c trigger 21) - reading both proves the fill
+// width genuinely scales with a real progress_bar_set_percent() call,
+// not just an on/off flag.
+static void cmd_progresscontent(void) {
+    vga_print("progresscontent x30pct=0x");
+    serial_print("progresscontent x30pct=0x");
+    print_hex((u64) fb_get_pixel(430, 466));
+    vga_print(" x80pct=0x");
+    serial_print(" x80pct=0x");
+    print_hex((u64) fb_get_pixel(500, 466));
 }
 
 static void cmd_shutdown(void) {
@@ -636,7 +670,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 82
+#define SHELL_COMMAND_COUNT 84
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -675,6 +709,7 @@ static void shell_commands_init(void) {
     g_shell_commands[78] = "ring3tcpserver";
     g_shell_commands[79] = "service";
     g_shell_commands[80] = "ring3widgets"; g_shell_commands[81] = "checkboxcontent";
+    g_shell_commands[82] = "radiocontent"; g_shell_commands[83] = "progresscontent";
     g_shell_commands_initialized = true;
 }
 
@@ -2332,6 +2367,10 @@ void run_command(void) {
         cmd_ring3_widgets();
     } else if (streq(g_line_buffer, "checkboxcontent")) {
         cmd_checkboxcontent();
+    } else if (streq(g_line_buffer, "radiocontent")) {
+        cmd_radiocontent();
+    } else if (streq(g_line_buffer, "progresscontent")) {
+        cmd_progresscontent();
     } else if (starts_with(g_line_buffer, "service ")) {
         cmd_service();
     } else if (streq(g_line_buffer, "shutdown")) {

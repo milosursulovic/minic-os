@@ -722,13 +722,15 @@ void _start(void) {
         }
     } else if (trigger_value == 21) {
         // trigger 21 (ring3widgets): real lowercase font glyphs
-        // (kernel/gfx/font.c) plus two new gui_toolkit.h widgets - Label
+        // (kernel/gfx/font.c) plus four new gui_toolkit.h widgets - Label
         // (consolidates the draw_static_label/draw_row_text duplication
-        // already in settings.c/device_manager.c) and Checkbox (a real
+        // already in settings.c/device_manager.c), Checkbox (a real
         // persistent-toggle interaction model, unlike Button's momentary
-        // press). Window at a fixed screen position so cmd_checkboxcontent
-        // (shell.c) can read back a known pixel, same technique
-        // buttoncontent already uses for trigger 14.
+        // press), RadioButton (exclusive-selection variant of Checkbox),
+        // and ProgressBar (non-interactive). Window at a fixed screen
+        // position so cmd_checkboxcontent/cmd_radiocontent/
+        // cmd_progresscontent (shell.c) can read back known pixels, same
+        // technique buttoncontent already uses for trigger 14.
         window w;
         bool created_w = window_create(&w, 400, 340, 200, 150, 0x00444444, 0x00222222);
         do_syscall(1, (u64) "window_create(w) ok=0x", (u64) created_w, 0);
@@ -738,6 +740,16 @@ void _start(void) {
 
         checkbox cb;
         checkbox_init(&cb, w.id, 10, 40, 16, 0x00888888, 0x0000FF00, 0x00444444, false);
+
+        // RadioButton group: radio0 starts selected (matches a real form's
+        // "one option pre-selected" convention), radio1 starts unselected.
+        int radio_selected = 0;
+        radio_button radio0, radio1;
+        radio_button_init(&radio0, w.id, 10, 70, 14, 0x00888888, 0x0000FF00, 0x00444444, 0, &radio_selected);
+        radio_button_init(&radio1, w.id, 40, 70, 14, 0x00888888, 0x0000FF00, 0x00444444, 1, &radio_selected);
+
+        progress_bar pbar;
+        progress_bar_init(&pbar, w.id, 10, 100, 150, 12, 0x00222222, 0x0000AAFF, 30);
 
         // Polls forever, same shape as every real interactive GUI app in
         // this codebase (desktop_shell.c/settings.c/service_manager.c's
@@ -751,6 +763,26 @@ void _start(void) {
         for (;;) {
             if (checkbox_poll(&cb)) {
                 do_syscall(1, (u64) "checkbox_poll() clicked, checked=0x", (u64) cb.checked, 0);
+            }
+            int prev_selected = radio_selected;
+            if (radio_button_poll(&radio0) || radio_button_poll(&radio1)) {
+                // A real click already redrew whichever radio was clicked
+                // (sets its own dot_color fill) - the toolkit's own stated
+                // convention is the app redraws the REST of the group,
+                // since there is no observer/event system here.
+                if (prev_selected != radio_selected) {
+                    if (prev_selected == 0) {
+                        radio_button_draw(&radio0);
+                    } else if (prev_selected == 1) {
+                        radio_button_draw(&radio1);
+                    }
+                }
+                do_syscall(1, (u64) "radio clicked, selected=0x", (u64) radio_selected, 0);
+                // A real, hand-picked visible effect tying two widgets
+                // together: selecting radio1 fills the progress bar to
+                // 80%, radio0 back to 30% - proves progress_bar_set_percent
+                // genuinely redraws (real value, not a one-shot init only).
+                progress_bar_set_percent(&pbar, radio_selected == 1 ? 80 : 30);
             }
         }
     } else {
