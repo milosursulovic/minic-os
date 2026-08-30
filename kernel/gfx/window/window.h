@@ -57,6 +57,28 @@ typedef struct {
 // window currently open.
 extern int g_terminal_window_id;
 
+// Real window focus (Faza II point 18) - -1 means the console shell/
+// full-screen editor owns the keyboard, exactly this kernel's only
+// behavior before this existed. Set by a real mouse click (a non-
+// borderless window's title+body, via compositor_handle_mouse()) or a
+// window requesting its own focus (window_focus(), syscall 69) - a
+// click on a borderless window (the wallpaper/taskbar - the only two
+// that exist) clears this back to -1.
+extern int g_focused_window_id;
+bool window_focus(int id);
+
+// A single shared keystroke queue for whichever window currently has
+// focus - one queue, not per-window, since only one window can ever be
+// focused at a time. Populated by kernel/isr/isr.c's keyboard IRQ
+// handler only while g_focused_window_id >= 0 (the console/editor path
+// is completely unchanged otherwise). window_pop_key() refuses to
+// return anything to a caller whose window_id isn't the currently
+// focused one - a window can only ever read keys typed while IT was
+// focused, never another window's or the console's.
+#define WINDOW_KEY_QUEUE_SIZE 16
+bool window_push_key(char c);
+int window_pop_key(int window_id);  // returns the char, or -1 if not focused/empty
+
 extern window g_windows[WINDOW_SLOTS];
 extern int g_window_zorder[WINDOW_SLOTS];
 extern int g_window_zorder_count;

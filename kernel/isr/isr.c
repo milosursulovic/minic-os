@@ -89,6 +89,33 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
         bool extended = g_extended_prefix;
         g_extended_prefix = false;
 
+        // Real keyboard-to-window routing (Faza II point 18) - a GUI
+        // window has focus, so real keystrokes go to its own key queue
+        // instead of the console shell/editor below, which stays 100%
+        // unchanged when nothing is focused (g_focused_window_id == -1,
+        // the default, and everything this project tested before this
+        // existed). Deliberately minimal: extended keys (arrows/Delete)
+        // are ignored here - no GUI widget needs them yet - and only a
+        // real key-press scancode (top bit clear) is translated, same
+        // g_scancode_table every console keystroke already uses, plus a
+        // real Backspace (0x0E has no g_scancode_table entry - the
+        // console handles it via its own dedicated branch below, so a
+        // focused window needs the same explicit case).
+        if (g_focused_window_id >= 0) {
+            if (!extended && scancode < 0x80) {
+                if (scancode == 0x0E) {
+                    window_push_key((char) 0x08);
+                } else {
+                    char c = g_scancode_table[scancode];
+                    if (c != '\0') {
+                        window_push_key(c);
+                    }
+                }
+            }
+            outb(0x20, 0x20);
+            return;
+        }
+
         if (extended) {
             if (!g_editor_active) {  // no arrow-key history recall/cursor movement inside a full-screen edit session
                 if (scancode == 0x48) {  // Up arrow (press - its release is 0xE0 0xC8, ignored below)

@@ -805,6 +805,47 @@ void _start(void) {
                 do_syscall(1, (u64) "list_view_poll() clicked_row=0x", (u64) clicked_row, 0);
             }
         }
+    } else if (trigger_value == 22) {
+        // trigger 22 (ring3focus): real window focus + keyboard-to-window
+        // routing (kernel/gfx/window/window.h/.c, syscalls 69/70). A
+        // SEPARATE window/trigger from ring3widgets (21) - deliberately:
+        // grabbing focus here would divert the keyboard away from the
+        // console shell, breaking every *content command (checkboxcontent/
+        // radiocontent/etc) trigger 21's own verification relies on typing
+        // via sendkey while that window polls in the background.
+        window fw;
+        bool created_fw = window_create(&fw, 400, 60, 300, 100, 0x00303030, 0x00222222);
+        do_syscall(1, (u64) "window_create(fw) ok=0x", (u64) created_fw, 0);
+
+        bool focused_ok = gt_focus_window(fw.id);
+        do_syscall(1, (u64) "gt_focus_window(fw) ok=0x", (u64) focused_ok, 0);
+
+        char typed_text[48];
+        int i = 0;
+        const char* prefix = "typed: ";
+        while (prefix[i] != '\0') {
+            typed_text[i] = prefix[i];
+            i = i + 1;
+        }
+        typed_text[i] = '\0';
+        int typed_len = i;
+
+        label typed_label;
+        label_init(&typed_label, fw.id, 10, 10, typed_text, 0x00FFFFFF, 0x00303030);
+
+        // Polls forever, same shape every real interactive GUI app here
+        // uses - real keys arrive whenever the console shell's own
+        // keyboard IRQ handler sees g_focused_window_id == fw.id.
+        for (;;) {
+            int key = gt_read_key(fw.id);
+            if (key >= 0 && typed_len < 46) {
+                typed_text[typed_len] = (char) key;
+                typed_len = typed_len + 1;
+                typed_text[typed_len] = '\0';
+                label_set_text(&typed_label, typed_text);
+                do_syscall(1, (u64) "gt_read_key() got=0x", (u64) key, 0);
+            }
+        }
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

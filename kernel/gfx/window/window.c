@@ -12,11 +12,51 @@
 #include "../cursor_image/cursor_image.h"
 
 int g_terminal_window_id = -1;
+int g_focused_window_id = -1;
 
 window g_windows[WINDOW_SLOTS];
 int g_window_zorder[WINDOW_SLOTS];
 int g_window_zorder_count;
 u32 g_window_content[WINDOW_SLOTS][WINDOW_CONTENT_MAX_WIDTH * WINDOW_CONTENT_MAX_HEIGHT];
+
+static char g_window_key_queue[WINDOW_KEY_QUEUE_SIZE];
+static int g_window_key_head;
+static int g_window_key_tail;
+
+bool window_focus(int id) {
+    if (id < 0 || id >= WINDOW_SLOTS || !g_windows[id].used) {
+        return false;
+    }
+    g_focused_window_id = id;
+    return true;
+}
+
+// Real ring-buffer push, same shape as proc/apps/terminal/terminal.c's
+// own g_term_scrollback convention - silently drops the oldest unread
+// key on overflow (a real, honest choice for a 16-slot demo queue, not
+// a full flow-controlled input pipe) rather than blocking the keyboard
+// IRQ handler.
+bool window_push_key(char c) {
+    int next_tail = (g_window_key_tail + 1) % WINDOW_KEY_QUEUE_SIZE;
+    if (next_tail == g_window_key_head) {
+        g_window_key_head = (g_window_key_head + 1) % WINDOW_KEY_QUEUE_SIZE;
+    }
+    g_window_key_queue[g_window_key_tail] = c;
+    g_window_key_tail = next_tail;
+    return true;
+}
+
+int window_pop_key(int window_id) {
+    if (window_id != g_focused_window_id) {
+        return -1;
+    }
+    if (g_window_key_head == g_window_key_tail) {
+        return -1;
+    }
+    char c = g_window_key_queue[g_window_key_head];
+    g_window_key_head = (g_window_key_head + 1) % WINDOW_KEY_QUEUE_SIZE;
+    return (int) c;
+}
 
 // Off-screen composite buffer, sized to the one mode this kernel ever
 // uses (vbe_init(800,600) - see drivers/vbe.c). compositor_redraw() draws
@@ -396,6 +436,10 @@ static void draw_cursor(void) {
 #define TITLEBAR_ICON_MARGIN 4
 #define TITLEBAR_ICON_GAP 4
 #define TITLEBAR_ICON_COLOR 0x00E0E0E0u
+// Real, conventional "this window has keyboard focus" signal - a fixed
+// blue, distinct from every existing app's own title_color (all grays,
+// confirmed by reading each app's own TITLE_COLOR constant).
+#define FOCUSED_TITLEBAR_COLOR 0x00305090u
 #define RESIZE_HANDLE_SIZE 10
 
 static void icon_rect(window* w, int index_from_right, i32* out_x, i32* out_y) {
@@ -446,7 +490,8 @@ void compositor_redraw(void) {
         int id = g_window_zorder[i];
         window* w = &g_windows[id];
         if (!w->borderless) {
-            bb_fill_rect((u32) w->x, (u32) w->y, w->width, TITLEBAR_HEIGHT, w->title_color);
+            u32 titlebar_color = (id == g_focused_window_id) ? FOCUSED_TITLEBAR_COLOR : w->title_color;
+            bb_fill_rect((u32) w->x, (u32) w->y, w->width, TITLEBAR_HEIGHT, titlebar_color);
             draw_titlebar_icons(w);
         }
         if (w->minimized) {
@@ -547,6 +592,7 @@ bool compositor_handle_mouse(void) {
                 if (point_in_box(g_mouse_x, g_mouse_y, icon_x, icon_y, TITLEBAR_ICON_SIZE, TITLEBAR_ICON_SIZE)) {
                     maximize_toggle(w);
                     window_raise(id);
+                    window_focus(id);
                     changed = true;
                     break;
                 }
@@ -554,6 +600,7 @@ bool compositor_handle_mouse(void) {
                 if (point_in_box(g_mouse_x, g_mouse_y, icon_x, icon_y, TITLEBAR_ICON_SIZE, TITLEBAR_ICON_SIZE)) {
                     w->minimized = !w->minimized;
                     window_raise(id);
+                    window_focus(id);
                     changed = true;
                     break;
                 }
@@ -569,6 +616,7 @@ bool compositor_handle_mouse(void) {
                         g_wm_resize_start_width = w->width;
                         g_wm_resize_start_height = w->height;
                         window_raise(id);
+                        window_focus(id);
                         changed = true;
                         break;
                     }
@@ -579,9 +627,34 @@ bool compositor_handle_mouse(void) {
                     g_wm_offset_x = g_mouse_x - w->x;
                     g_wm_offset_y = g_mouse_y - w->y;
                     window_raise(id);
+                    window_focus(id);
                     changed = true;
                     break;
                 }
+                // Real window focus (Faza II point 18): a click anywhere
+                // else within this window's own bounds (its body, since
+                // every check above already handled the titlebar itself)
+                // now claims the click for focus purposes - deliberately
+                // does NOT raise (a plain body click still doesn't bring
+                // a window to front, same stated scope the window-chrome
+                // milestone already established; only titlebar/icon
+                // clicks raise). Stops the scan either way so a window
+                // fully occludes whatever real interaction area might
+                // otherwise sit visually behind it.
+                if (point_in_box(g_mouse_x, g_mouse_y, w->x, w->y, w->width, w->height)) {
+                    window_focus(id);
+                    changed = true;
+                    break;
+                }
+            } else if (point_in_box(g_mouse_x, g_mouse_y, w->x, w->y, w->width, w->height)) {
+                // A borderless window (the wallpaper or the taskbar - the
+                // only two that exist) claims the click by returning
+                // keyboard focus to the console/editor - clicking the
+                // desktop background is a real, conventional way to
+                // defocus whatever app currently has it.
+                g_focused_window_id = -1;
+                changed = true;
+                break;
             }
             zi = zi - 1;
         }

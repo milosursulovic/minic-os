@@ -93,6 +93,18 @@
 // via a1" convention as syscall 38 fs_delete - direct wraps of the
 // already-real service_start/stop/restart, first ring3/GUI exposure of
 // Milestone 7's crash-restart supervision, previously console-shell-only).
+// 69 focus_window (window id via a1, wraps kernel/gfx/window/window.h's
+// window_focus() - real window focus, Faza II point 18. A window can
+// request its own focus directly, not just via a real mouse click on it
+// - a legitimate "grab focus on open" pattern, and the only way to test
+// keyboard routing via sendkey alone, since a QEMU monitor mouse_button
+// permanently kills further sendkey delivery for the rest of that boot).
+// 70 read_key (window id via a1, wraps window_pop_key() - returns the
+// next queued keystroke for that window if it's the currently focused
+// one, else (u64) -1; kernel/isr/isr.c's keyboard IRQ handler only ever
+// pushes into this queue while a window has focus, otherwise every
+// keystroke still goes to the console shell/editor exactly as before
+// this existed).
 
 #include "syscall.h"
 #include "../drivers/io/io.h"
@@ -1414,6 +1426,14 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         char* name = (char*) a1;
         bool ok = service_restart(name);
         return (u64) ok;
+    }
+    if (num == 69) {
+        bool ok = window_focus((int) a1);
+        return (u64) ok;
+    }
+    if (num == 70) {
+        int key = window_pop_key((int) a1);
+        return (u64) key;
     }
     return (u64) -1;  // unknown syscall
 }

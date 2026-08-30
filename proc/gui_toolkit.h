@@ -421,6 +421,21 @@ static __attribute__((unused)) bool gt_service_restart(char* name) {
     return gt_syscall(68, (u64) name, 0, 0) != 0;
 }
 
+// Real window focus (Faza II point 18) - wraps syscall 69. A window can
+// request its own focus directly (a real "grab focus on open" pattern),
+// not just receive it via a real mouse click.
+static __attribute__((unused)) bool gt_focus_window(int window_id) {
+    return gt_syscall(69, (u64) window_id, 0, 0) != 0;
+}
+
+// Returns the next queued keystroke for window_id if it's the currently
+// focused window, else -1 - wraps syscall 70. Real ASCII: printable
+// chars via the same g_scancode_table every console keystroke uses,
+// '\n' for Enter, 0x08 for Backspace.
+static __attribute__((unused)) int gt_read_key(int window_id) {
+    return (int) gt_syscall(70, (u64) window_id, 0, 0);
+}
+
 // Minimal, self-contained hex formatter - kernel/lib/strings.c's format_hex()
 // isn't linked into ring3 programs (each is its own standalone-linked
 // blob, see proc/ring3.ld). Null-terminates, unlike format_hex(), since
