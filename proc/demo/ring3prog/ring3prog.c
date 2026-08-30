@@ -820,30 +820,26 @@ void _start(void) {
         bool focused_ok = gt_focus_window(fw.id);
         do_syscall(1, (u64) "gt_focus_window(fw) ok=0x", (u64) focused_ok, 0);
 
-        char typed_text[48];
-        int i = 0;
-        const char* prefix = "typed: ";
-        while (prefix[i] != '\0') {
-            typed_text[i] = prefix[i];
-            i = i + 1;
-        }
-        typed_text[i] = '\0';
-        int typed_len = i;
+        label prompt_label;
+        label_init(&prompt_label, fw.id, 10, 10, "type here:", 0x00FFFFFF, 0x00303030);
 
-        label typed_label;
-        label_init(&typed_label, fw.id, 10, 10, typed_text, 0x00FFFFFF, 0x00303030);
+        // Real TextBox widget (gui_toolkit.h) - the ONE consumer of
+        // gt_read_key in this trigger. It used to be a raw manual
+        // gt_read_key-into-label echo (this milestone's own predecessor
+        // proof, before text_box existed); that's replaced now rather
+        // than left running alongside the real widget - both would drain
+        // the SAME shared per-window keystroke queue, splitting keys
+        // unpredictably between them (see gui_toolkit.h's own stated
+        // "one shared queue per focused window" limitation).
+        text_box tb;
+        text_box_init(&tb, fw.id, 10, 40, 200, 18, 0x00000000, 0x00FFFFFF, 0x00888888, "");
 
         // Polls forever, same shape every real interactive GUI app here
         // uses - real keys arrive whenever the console shell's own
         // keyboard IRQ handler sees g_focused_window_id == fw.id.
         for (;;) {
-            int key = gt_read_key(fw.id);
-            if (key >= 0 && typed_len < 46) {
-                typed_text[typed_len] = (char) key;
-                typed_len = typed_len + 1;
-                typed_text[typed_len] = '\0';
-                label_set_text(&typed_label, typed_text);
-                do_syscall(1, (u64) "gt_read_key() got=0x", (u64) key, 0);
+            if (text_box_poll(&tb)) {
+                do_syscall(1, (u64) "text_box_poll() length=0x", (u64) tb.length, 0);
             }
         }
     } else {
