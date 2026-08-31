@@ -136,6 +136,21 @@ void yield(void) {
     // Resumes here once some other task switches back.
 }
 
+// A simple cooperative busy-yield, not the blocked/waiting_on mechanism
+// below (that one's built for "wait until true" - target_task's own
+// `used` needs to go from true to FALSE, and inverting the convention
+// cleanly would need a new per-task field for no real benefit at this
+// scope). Returns once the target task has exited (or immediately if it
+// already had, or was never valid - same "just stop waiting" shape).
+void thread_join(int target_task_index) {
+    if (target_task_index < 0 || target_task_index >= MAX_TASKS) {
+        return;
+    }
+    while (g_tasks[target_task_index].used) {
+        yield();
+    }
+}
+
 void sleep_ticks(u64 ticks) {
     task* self = &g_tasks[g_current_task];
     self->blocked = true;

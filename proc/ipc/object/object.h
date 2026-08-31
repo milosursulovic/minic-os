@@ -14,6 +14,10 @@
 #define OBJ_PIPE 7
 #define OBJ_SHARED_MEMORY 8
 #define OBJ_SOCKET 9
+// data_index == task_index directly - a task already IS a thread's real
+// backing state (kernel/sched/task.h), no separate g_threads[] array
+// needed. See kernel/syscall/syscall.c syscalls 71-73.
+#define OBJ_THREAD 10
 
 typedef struct {
     bool used;

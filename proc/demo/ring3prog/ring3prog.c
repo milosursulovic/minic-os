@@ -99,6 +99,25 @@ static u64 file_read(file* self, char* buf, u64 max_len) {
 static u8 g_read_buf[64];
 static u8 g_async_buf[64];
 
+// Real Thread object demo (trigger 23, Faza I point 3) - a real shared
+// global both the main thread and a spawned thread touch, proving genuine
+// concurrent execution (not the main thread quietly doing the work
+// itself): the spawned thread increments this THREAD_COUNTER_TARGET
+// times then exits; the main thread reads it before create, right after
+// create (racy/low, expected), and after join (must be exactly the
+// target) - three real, checkable snapshots.
+#define THREAD_COUNTER_TARGET 1000
+static volatile u64 g_thread_counter;
+
+static void thread_counter_entry(void) {
+    int i = 0;
+    while (i < THREAD_COUNTER_TARGET) {
+        g_thread_counter = g_thread_counter + 1;
+        i = i + 1;
+    }
+    gt_thread_exit();
+}
+
 static bool channel_open(channel* self, int channel_index) {
     u64 result = do_syscall(9, (u64) channel_index, 0, 0);
     if (result == (u64) -1) {
@@ -842,6 +861,23 @@ void _start(void) {
                 do_syscall(1, (u64) "text_box_poll() length=0x", (u64) tb.length, 0);
             }
         }
+    } else if (trigger_value == 23) {
+        // trigger 23 (ring3thread): real Thread object (syscalls 71-73,
+        // kernel/sched/task.c's thread_join()) - a second task sharing
+        // THIS process's own address space, not a whole new process.
+        do_syscall(1, (u64) "counter before create=0x", g_thread_counter, 0);
+
+        int thread_handle = gt_thread_create((u64) &thread_counter_entry);
+        do_syscall(1, (u64) "gt_thread_create() handle=0x", (u64) thread_handle, 0);
+
+        // Real race window, deliberately printed (not asserted) - the
+        // spawned thread may or may not have run yet by this exact point,
+        // same as any real concurrent scheduler. The join below is the
+        // real synchronization point, not this line.
+        do_syscall(1, (u64) "counter right after create=0x", g_thread_counter, 0);
+
+        gt_thread_join(thread_handle);
+        do_syscall(1, (u64) "counter after join=0x", g_thread_counter, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

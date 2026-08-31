@@ -53,6 +53,7 @@ int create_task_with_cr3(void (*entry)(void), u64 cr3);
 bool create_task(void (*entry)(void));
 bool create_isolated_task(void (*entry)(void));
 void yield(void);
+void thread_join(int target_task_index);
 void sleep_ticks(u64 ticks);
 u64 channel_receive(int channel_index);
 void io_request_wait(int slot_index);

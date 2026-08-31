@@ -95,6 +95,11 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
     g_processes[proc_index].cr3 = cr3;
     g_processes[proc_index].task_index = task_index;
     g_processes[proc_index].uid = 0;
+    // 64KB past the main thread's own one-page stack - generous, collision-
+    // free room for thread_create() (syscall 71) to hand out real, distinct
+    // stack pages without any per-thread region bookkeeping.
+    g_processes[proc_index].main_stack_vaddr = stack_vaddr;
+    g_processes[proc_index].next_thread_stack_vaddr = stack_vaddr + 0x10000;
     g_tasks[task_index].process_index = proc_index;
 
     // handle 0 = myself, free for every process. (A reused slot's handle

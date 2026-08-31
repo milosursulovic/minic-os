@@ -19,6 +19,13 @@ typedef struct {
     // primitive for now (any process can change its own uid arbitrarily).
     // Real per-file enforcement lives in proc/ipc/file/file.c.
     u8 uid;
+    // Real Threads (syscall 71 thread_create) share this process's own cr3
+    // instead of getting a freshly cloned address space - each one still
+    // needs its own private stack page though, so these track where the
+    // main thread's stack sits and where to place the next thread's,
+    // never overlapping. See object.h's OBJ_THREAD.
+    u64 main_stack_vaddr;
+    u64 next_thread_stack_vaddr;
 } process;
 
 extern process g_processes[MAX_PROCESSES];
