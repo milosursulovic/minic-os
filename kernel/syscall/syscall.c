@@ -129,6 +129,9 @@
 #include "../drivers/mouse/mouse.h"
 #include "../drivers/rtc/rtc.h"
 #include "../isr/isr.h"
+#include "../../proc/ipc/event/event.h"
+#include "../../proc/ipc/mutex/mutex.h"
+#include "../../proc/ipc/timer/timer.h"
 #include "../drivers/device_manager/device_manager.h"
 #include "../services/service_manager.h"
 #include "../lib/rand.h"
@@ -1510,6 +1513,126 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         g_tasks[g_current_task].used = false;
         yield();
         return 0;  // never actually reached
+    }
+    // Real Event/Mutex/Timer objects (Faza I point 2) - give the just-
+    // added Thread object something real to coordinate/exclude over.
+    // Each _wait/_lock/_signal/_reset/_unlock call validates its handle
+    // is the right OBJ_* type first, same shape syscall 72 (thread_join)
+    // already established.
+    if (num == 74) {
+        if (g_tasks[g_current_task].process_index < 0) {
+            return (u64) -1;
+        }
+        int slot = event_create();
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj = alloc_object(OBJ_EVENT, slot);
+        if (obj < 0) {
+            return (u64) -1;
+        }
+        int h = alloc_handle(g_tasks[g_current_task].process_index, obj, RIGHT_QUERY);
+        return h < 0 ? (u64) -1 : (u64) h;
+    }
+    if (num == 75 || num == 76 || num == 77) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        handle* h = &g_handle_tables[caller_process][handle_idx];
+        if (!h->used) {
+            return (u64) -1;
+        }
+        kernel_object* obj = &g_objects[h->object_index];
+        if (obj->type != OBJ_EVENT) {
+            return (u64) -1;
+        }
+        if (num == 75) {
+            event_wait(obj->data_index);
+        } else if (num == 76) {
+            event_signal(obj->data_index);
+        } else {
+            event_reset(obj->data_index);
+        }
+        return 0;
+    }
+    if (num == 78) {
+        if (g_tasks[g_current_task].process_index < 0) {
+            return (u64) -1;
+        }
+        int slot = mutex_create();
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj = alloc_object(OBJ_MUTEX, slot);
+        if (obj < 0) {
+            return (u64) -1;
+        }
+        int h = alloc_handle(g_tasks[g_current_task].process_index, obj, RIGHT_QUERY);
+        return h < 0 ? (u64) -1 : (u64) h;
+    }
+    if (num == 79 || num == 80) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        handle* h = &g_handle_tables[caller_process][handle_idx];
+        if (!h->used) {
+            return (u64) -1;
+        }
+        kernel_object* obj = &g_objects[h->object_index];
+        if (obj->type != OBJ_MUTEX) {
+            return (u64) -1;
+        }
+        if (num == 79) {
+            mutex_lock(obj->data_index);
+        } else {
+            mutex_unlock(obj->data_index);
+        }
+        return 0;
+    }
+    if (num == 81) {
+        if (g_tasks[g_current_task].process_index < 0) {
+            return (u64) -1;
+        }
+        int slot = timer_create(a1);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj = alloc_object(OBJ_TIMER, slot);
+        if (obj < 0) {
+            return (u64) -1;
+        }
+        int h = alloc_handle(g_tasks[g_current_task].process_index, obj, RIGHT_QUERY);
+        return h < 0 ? (u64) -1 : (u64) h;
+    }
+    if (num == 82) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        handle* h = &g_handle_tables[caller_process][handle_idx];
+        if (!h->used) {
+            return (u64) -1;
+        }
+        kernel_object* obj = &g_objects[h->object_index];
+        if (obj->type != OBJ_TIMER) {
+            return (u64) -1;
+        }
+        timer_wait(obj->data_index);
+        return 0;
     }
     return (u64) -1;  // unknown syscall
 }

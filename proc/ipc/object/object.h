@@ -18,6 +18,11 @@
 // backing state (kernel/sched/task.h), no separate g_threads[] array
 // needed. See kernel/syscall/syscall.c syscalls 71-73.
 #define OBJ_THREAD 10
+// data_index is a slot index into g_events[]/g_mutexes[]/g_timers[]
+// (proc/ipc/event|mutex|timer/), same shape OBJ_CHANNEL/OBJ_PIPE already use.
+#define OBJ_EVENT 11
+#define OBJ_MUTEX 12
+#define OBJ_TIMER 13
 
 typedef struct {
     bool used;

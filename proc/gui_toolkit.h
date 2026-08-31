@@ -459,6 +459,37 @@ static __attribute__((unused)) void gt_thread_exit(void) {
     gt_syscall(73, 0, 0, 0);
 }
 
+// Real Event/Mutex/Timer objects (Faza I point 2) - wrap syscalls 74-82.
+static __attribute__((unused)) int gt_event_create(void) {
+    return (int) gt_syscall(74, 0, 0, 0);
+}
+static __attribute__((unused)) void gt_event_wait(int handle) {
+    gt_syscall(75, (u64) handle, 0, 0);
+}
+static __attribute__((unused)) void gt_event_signal(int handle) {
+    gt_syscall(76, (u64) handle, 0, 0);
+}
+static __attribute__((unused)) void gt_event_reset(int handle) {
+    gt_syscall(77, (u64) handle, 0, 0);
+}
+
+static __attribute__((unused)) int gt_mutex_create(void) {
+    return (int) gt_syscall(78, 0, 0, 0);
+}
+static __attribute__((unused)) void gt_mutex_lock(int handle) {
+    gt_syscall(79, (u64) handle, 0, 0);
+}
+static __attribute__((unused)) void gt_mutex_unlock(int handle) {
+    gt_syscall(80, (u64) handle, 0, 0);
+}
+
+static __attribute__((unused)) int gt_timer_create(u64 duration_ticks) {
+    return (int) gt_syscall(81, duration_ticks, 0, 0);
+}
+static __attribute__((unused)) void gt_timer_wait(int handle) {
+    gt_syscall(82, (u64) handle, 0, 0);
+}
+
 // Minimal, self-contained hex formatter - kernel/lib/strings.c's format_hex()
 // isn't linked into ring3 programs (each is its own standalone-linked
 // blob, see proc/ring3.ld). Null-terminates, unlike format_hex(), since

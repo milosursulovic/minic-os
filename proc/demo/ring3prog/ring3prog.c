@@ -118,6 +118,44 @@ static void thread_counter_entry(void) {
     gt_thread_exit();
 }
 
+// Real Event/Mutex/Timer demo (trigger 24, Faza I point 2) - two threads
+// contend for the SAME mutex-protected counter (the real proof mutex_lock/
+// unlock prevent lost updates under real preemption) while also
+// incrementing an unprotected twin with no locking at all, for contrast.
+#define SYNC_COUNTER_TARGET_PER_THREAD 5000
+static volatile u64 g_protected_counter;
+static volatile u64 g_unprotected_counter;
+static int g_sync_mutex_handle;
+
+static void sync_counter_entry(void) {
+    int i = 0;
+    while (i < SYNC_COUNTER_TARGET_PER_THREAD) {
+        gt_mutex_lock(g_sync_mutex_handle);
+        g_protected_counter = g_protected_counter + 1;
+        gt_mutex_unlock(g_sync_mutex_handle);
+
+        g_unprotected_counter = g_unprotected_counter + 1;
+        i = i + 1;
+    }
+    gt_thread_exit();
+}
+
+// Event ordering: this thread does real (bounded-loop) work, sets a real
+// flag, THEN signals - the main thread's own gt_event_wait() must never
+// observe the flag still false once it returns.
+static volatile bool g_event_work_done;
+static int g_sync_event_handle;
+
+static void event_signal_entry(void) {
+    int i = 0;
+    while (i < 200) {
+        i = i + 1;
+    }
+    g_event_work_done = true;
+    gt_event_signal(g_sync_event_handle);
+    gt_thread_exit();
+}
+
 static bool channel_open(channel* self, int channel_index) {
     u64 result = do_syscall(9, (u64) channel_index, 0, 0);
     if (result == (u64) -1) {
@@ -878,6 +916,31 @@ void _start(void) {
 
         gt_thread_join(thread_handle);
         do_syscall(1, (u64) "counter after join=0x", g_thread_counter, 0);
+    } else if (trigger_value == 24) {
+        // trigger 24 (ring3sync): real Event/Mutex/Timer objects
+        // (syscalls 74-82), built on trigger 23's own Thread object.
+        g_sync_mutex_handle = gt_mutex_create();
+        int t1 = gt_thread_create((u64) &sync_counter_entry);
+        int t2 = gt_thread_create((u64) &sync_counter_entry);
+        gt_thread_join(t1);
+        gt_thread_join(t2);
+        do_syscall(1, (u64) "mutex protected_counter=0x", g_protected_counter, 0);
+        do_syscall(1, (u64) "mutex unprotected_counter=0x", g_unprotected_counter, 0);
+
+        g_sync_event_handle = gt_event_create();
+        g_event_work_done = false;
+        int t3 = gt_thread_create((u64) &event_signal_entry);
+        gt_event_wait(g_sync_event_handle);
+        do_syscall(1, (u64) "event work_done after wait=0x", (u64) g_event_work_done, 0);
+        gt_thread_join(t3);
+
+        int timer_handle = gt_timer_create(50);
+        u64 ticks_before = gt_get_ticks();
+        gt_timer_wait(timer_handle);
+        u64 ticks_after = gt_get_ticks();
+        do_syscall(1, (u64) "timer ticks_before=0x", ticks_before, 0);
+        do_syscall(1, (u64) "timer ticks_after=0x", ticks_after, 0);
+        do_syscall(1, (u64) "timer elapsed=0x", ticks_after - ticks_before, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

@@ -12,10 +12,27 @@
 #include "../../proc/ipc/io_request/io_request.h"
 #include "../../proc/ipc/net_request/net_request.h"
 #include "../../proc/ipc/net_tcp_request/net_tcp_request.h"
+#include "../../proc/ipc/event/event.h"
+#include "../../proc/ipc/mutex/mutex.h"
+#include "../../proc/ipc/timer/timer.h"
 
 #pragma GCC visibility push(hidden)
 extern void switch_context(u64* old_rsp_out, u64 new_rsp);
 #pragma GCC visibility pop
+
+// Save/restore IF - same established pattern kernel/mm/frames/frames.c's
+// alloc_frame()/kernel/mm/heap/heap.c's kalloc() use (see their own
+// comments for the real bug this guards against). mutex_lock()'s own
+// test-and-set needs the identical protection.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
 
 task g_tasks[MAX_TASKS];
 int g_task_count;
@@ -149,6 +166,65 @@ void thread_join(int target_task_index) {
     while (g_tasks[target_task_index].used) {
         yield();
     }
+}
+
+// Blocks until the event is signaled - reuses yield()'s existing
+// waiting_on convention (wakes when *waiting_on becomes true), same shape
+// channel_receive()/io_request_wait() already use.
+void event_wait(int index) {
+    while (index >= 0 && index < EVENT_SLOTS && !g_events[index].signaled) {
+        task* self = &g_tasks[g_current_task];
+        self->blocked = true;
+        self->waiting_on = &g_events[index].signaled;
+        yield();
+    }
+}
+
+// Real mutual exclusion: an atomic (disable_interrupts()-protected)
+// test-and-set, retried via a cooperative yield() on contention rather
+// than a hot spin - the same atomicity pattern frames.c's alloc_frame()
+// was fixed with this session, applied here from the start rather than
+// found as a bug later.
+void mutex_lock(int index) {
+    if (index < 0 || index >= MUTEX_SLOTS) {
+        return;
+    }
+    for (;;) {
+        u64 saved_flags = disable_interrupts();
+        if (!g_mutexes[index].locked) {
+            g_mutexes[index].locked = true;
+            g_mutexes[index].owner_task = g_current_task;
+            restore_interrupts(saved_flags);
+            return;
+        }
+        restore_interrupts(saved_flags);
+        yield();
+    }
+}
+
+void mutex_unlock(int index) {
+    if (index < 0 || index >= MUTEX_SLOTS) {
+        return;
+    }
+    u64 saved_flags = disable_interrupts();
+    g_mutexes[index].locked = false;
+    g_mutexes[index].owner_task = -1;
+    restore_interrupts(saved_flags);
+}
+
+// Blocks until the timer's own stored deadline - reuses the exact
+// wake_tick blocking path sleep_ticks() already uses (waiting_on stays
+// NULL, yield() compares g_tick_count itself), just against a real
+// object's stored deadline instead of a fresh relative one.
+void timer_wait(int index) {
+    if (index < 0 || index >= TIMER_SLOTS) {
+        return;
+    }
+    task* self = &g_tasks[g_current_task];
+    self->blocked = true;
+    self->waiting_on = NULL;
+    self->wake_tick = g_timers[index].wake_tick;
+    yield();
 }
 
 void sleep_ticks(u64 ticks) {
