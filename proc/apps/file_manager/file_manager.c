@@ -65,11 +65,12 @@ typedef struct {
 
 static entry g_entries[MINIFS_MAX_FILES];
 static int g_entry_count;
-static int g_selected_index;  // index into g_entries, -1 = none
 
 static button g_up_btn, g_newfile_btn, g_newdir_btn, g_delete_btn;
-static button g_row_btns[VISIBLE_ROWS];
+static list_view g_lst;
 static char g_row_labels[VISIBLE_ROWS][32];
+static char* g_row_label_ptrs[VISIBLE_ROWS];
+static label g_path_lbl;
 static char g_path_label[64];
 
 static int g_next_file_num;
@@ -172,7 +173,6 @@ static void navigate_into(int window_id, const char* dir_name) {
         i = i + 1;
     }
     g_current_path[i] = '\0';
-    g_selected_index = -1;
     refresh_listing();
     redraw_path_label(window_id);
     redraw_all_rows(window_id);
@@ -192,7 +192,6 @@ static void navigate_up(int window_id) {
     } else {
         g_current_path[i] = '\0';
     }
-    g_selected_index = -1;
     refresh_listing();
     redraw_path_label(window_id);
     redraw_all_rows(window_id);
@@ -251,58 +250,36 @@ static void redraw_path_label(int window_id) {
         uppercase_copy(&g_path_label[i], g_current_path, 64 - i);
     }
 
-    gt_window_draw_text_args text_args;
-    text_args.id = window_id;
-    text_args.x = 0;
-    text_args.y = TOOLBAR_HEIGHT;
-    text_args.fg_color = TEXT_COLOR;
-    text_args.bg_color = BODY_COLOR;
-    text_args.text = &g_path_label[0];
-    gt_syscall(32, (u64) &text_args, 0, 0);
+    // label_set_text() only draws the new text - the explicit clear-rect
+    // fill above is still needed first in case the new path string is
+    // shorter than the old one (label's own documented convention).
+    label_set_text(&g_path_lbl, g_path_label);
 }
 
-// Redraws every visible row slot - used rows get their entry's name/size
-// text, unused slots get cleared to the background. Only called right
-// after a listing-changing action (navigate/create/delete), never from
-// an unconditional poll loop - see the file-level comment.
+// Redraws every visible row via list_view (proc/gui_toolkit.h) - used
+// rows get their entry's name/size text, unused slots cleared to
+// background by list_view_set_rows() itself. Only called right after a
+// listing-changing action (navigate/create/delete), never from an
+// unconditional poll loop - see the file-level comment. Real extraction:
+// this used to hand-roll button_draw() per row (same pattern service_
+// manager.c independently duplicated) - list_view was built specifically
+// to consolidate that.
 static void redraw_all_rows(int window_id) {
+    (void) window_id;  // list_view already knows its own window_id
     int row = 0;
-    while (row < VISIBLE_ROWS) {
-        u32 y = ROWS_TOP + (u32) (row * ROW_HEIGHT);
-        if (row < g_entry_count) {
-            char* label = &g_row_labels[row][0];
-            uppercase_copy(label, g_entries[row].name, 20);
-            int i = strlen_local(label);
-            if (g_entries[row].is_dir) {
-                label[i] = '/';
-                i = i + 1;
-                label[i] = '\0';
-            }
-
-            g_row_btns[row].window_id = window_id;
-            g_row_btns[row].x = 0;
-            g_row_btns[row].y = y;
-            g_row_btns[row].width = BODY_WIDTH;
-            g_row_btns[row].height = ROW_HEIGHT;
-            g_row_btns[row].label = label;
-            g_row_btns[row].normal_color = (row == g_selected_index) ? ROW_SELECTED_COLOR : ROW_COLOR;
-            g_row_btns[row].pressed_color = ROW_SELECTED_COLOR;
-            g_row_btns[row].label_color = TEXT_COLOR;
-            g_row_btns[row].was_down = false;
-            button_draw(&g_row_btns[row], false);
-            g_row_btns[row].last_rendered_pressed = false;
-        } else {
-            gt_window_fill_rect_args bg;
-            bg.id = window_id;
-            bg.x = 0;
-            bg.y = y;
-            bg.width = BODY_WIDTH;
-            bg.height = ROW_HEIGHT;
-            bg.color = BODY_COLOR;
-            gt_syscall(30, (u64) &bg, 0, 0);
+    while (row < g_entry_count) {
+        char* row_label = &g_row_labels[row][0];
+        uppercase_copy(row_label, g_entries[row].name, 20);
+        int i = strlen_local(row_label);
+        if (g_entries[row].is_dir) {
+            row_label[i] = '/';
+            i = i + 1;
+            row_label[i] = '\0';
         }
+        g_row_label_ptrs[row] = row_label;
         row = row + 1;
     }
+    list_view_set_rows(&g_lst, g_row_label_ptrs, g_entry_count);
 }
 
 static void do_new_file(int window_id) {
@@ -326,7 +303,6 @@ static void do_new_file(int window_id) {
 
         u8 content = 0;
         if (gt_vfs_write(full_path, &content, 1)) {
-            g_selected_index = -1;
             refresh_listing();
             redraw_all_rows(window_id);
             return;
@@ -352,7 +328,6 @@ static void do_new_dir(int window_id) {
         char rel_path[MAX_PATH_LEN];  // gt_fs_mkdir (syscall 39) is VFS-unaware - bare MiniFS-relative
         strip_system_prefix(rel_path, full_path);
         if (gt_fs_mkdir(rel_path)) {
-            g_selected_index = -1;
             refresh_listing();
             redraw_all_rows(window_id);
             return;
@@ -365,15 +340,14 @@ static void do_delete(int window_id) {
     if (!in_system_mount()) {
         return;
     }
-    if (g_selected_index < 0 || g_selected_index >= g_entry_count) {
+    if (g_lst.selected_index < 0 || g_lst.selected_index >= g_entry_count) {
         return;
     }
     char full_path[MAX_PATH_LEN];
-    join_path(full_path, g_current_path, g_entries[g_selected_index].name);
+    join_path(full_path, g_current_path, g_entries[g_lst.selected_index].name);
     char rel_path[MAX_PATH_LEN];  // gt_fs_delete (syscall 38) is VFS-unaware - bare MiniFS-relative
     strip_system_prefix(rel_path, full_path);
     gt_fs_delete(rel_path);
-    g_selected_index = -1;
     refresh_listing();
     redraw_all_rows(window_id);
 }
@@ -384,7 +358,6 @@ void _start(void) {
                                       BODY_COLOR, TITLE_COLOR);
 
     g_current_path[0] = '\0';
-    g_selected_index = -1;
     g_next_file_num = 0;
     g_next_dir_num = 0;
 
@@ -396,6 +369,10 @@ void _start(void) {
                 TOOLBAR_BTN_COLOR, TOOLBAR_BTN_PRESSED_COLOR, TEXT_COLOR);
     button_init(&g_delete_btn, window_id, 232, 0, 70, 16, "DELETE",
                 TOOLBAR_BTN_COLOR, TOOLBAR_BTN_PRESSED_COLOR, TEXT_COLOR);
+
+    label_init(&g_path_lbl, window_id, 0, TOOLBAR_HEIGHT, "", TEXT_COLOR, BODY_COLOR);
+    list_view_init(&g_lst, window_id, 0, ROWS_TOP, BODY_WIDTH, ROW_HEIGHT,
+                   ROW_COLOR, ROW_SELECTED_COLOR, TEXT_COLOR, BODY_COLOR);
 
     redraw_path_label(window_id);
     refresh_listing();
@@ -414,17 +391,16 @@ void _start(void) {
         if (button_poll(&g_delete_btn)) {
             do_delete(window_id);
         }
-        int row = 0;
-        while (row < g_entry_count) {
-            if (button_poll(&g_row_btns[row])) {
-                if (g_entries[row].is_dir) {
-                    navigate_into(window_id, g_entries[row].name);
-                } else if (g_selected_index != row) {
-                    g_selected_index = row;
-                    redraw_all_rows(window_id);
-                }
+        int clicked_row = list_view_poll(&g_lst);
+        if (clicked_row >= 0) {
+            if (g_entries[clicked_row].is_dir) {
+                navigate_into(window_id, g_entries[clicked_row].name);
             }
-            row = row + 1;
+            // A file click's own real selection highlight is already
+            // handled by list_view_poll() itself (it updates
+            // g_lst.selected_index and redraws old/new rows) - no extra
+            // action needed here, unlike the old per-button hand-rolled
+            // version which had to do that manually.
         }
     }
 }

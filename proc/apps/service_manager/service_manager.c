@@ -55,9 +55,17 @@
 // in the background, need periodic redraw independent of user action.
 #define LIST_REDRAW_TICK_INTERVAL 50
 
-static char g_selected_name[32];  // "" = no selection
-static button g_row_btns[SERVICE_SLOTS];
+static char g_selected_name[32];  // "" = no selection - the real source of
+                                    // truth; list_view's own selected_index
+                                    // gets reset to -1 on every
+                                    // list_view_set_rows() call (including
+                                    // the periodic background-refresh one
+                                    // below), so it can't be the source of
+                                    // truth here the way file_manager.c's
+                                    // retrofit could use it directly.
+static list_view g_lst;
 static char g_row_labels[SERVICE_SLOTS][48];
+static char* g_row_label_ptrs[SERVICE_SLOTS];
 static char g_row_names[SERVICE_SLOTS][32];  // real (non-uppercased) names for selection/actions
 static int g_row_count;
 
@@ -106,12 +114,18 @@ static int append_str(char* dst, int i, const char* s) {
     return i;
 }
 
-// Redraws every row - real slots first, unused visible rows cleared.
-// Wholesale, not incremental (SERVICE_SLOTS=8 is cheap enough), same
-// spirit as device_manager.c's own redraw_list(). Preserves the current
-// selection highlight by NAME across refreshes (a service's own registry
-// slot never gets reused/removed - only the processes it spawns do - so
-// comparing by name is both correct and stable here).
+// Redraws every row via list_view (proc/gui_toolkit.h) - real slots
+// first, unused visible rows cleared by list_view_set_rows() itself.
+// Real extraction: this used to hand-roll button_draw() per row (the
+// exact pattern file_manager.c independently duplicated - list_view was
+// built to consolidate both). Preserves the current selection highlight
+// by NAME across refreshes (a service's own registry slot never gets
+// reused/removed - only the processes it spawns do - so comparing by
+// name is both correct and stable here) - real, necessary extra step
+// this retrofit needs that file_manager.c's own didn't: list_view_
+// set_rows() unconditionally resets selected_index to -1 on every call,
+// which would otherwise silently clear the user's selection on every
+// periodic background refresh below, not just after a real click.
 static void redraw_rows(int window_id) {
     g_row_count = 0;
     int index = 0;
@@ -122,49 +136,36 @@ static void redraw_rows(int window_id) {
         if (gt_service_list(index, raw_name, &flags, &restart_count)) {
             copy_str(g_row_names[g_row_count], raw_name, 32);
 
-            char* label = &g_row_labels[g_row_count][0];
+            char* row_label = &g_row_labels[g_row_count][0];
             int i = 0;
             char upper_name[32];
             uppercase_copy(upper_name, raw_name, 32);
-            i = append_str(label, i, upper_name);
-            i = append_str(label, i, " RUN=0X");
-            label[i] = (char) ('0' + ((flags & 2) ? 1 : 0));
+            i = append_str(row_label, i, upper_name);
+            i = append_str(row_label, i, " RUN=0X");
+            row_label[i] = (char) ('0' + ((flags & 2) ? 1 : 0));
             i = i + 1;
-            i = append_str(label, i, " RST=0X");
-            i += gt_format_hex(restart_count, &label[i]);
-            label[i] = '\0';
-
-            u32 y = ROWS_TOP + (u32) (g_row_count * ROW_HEIGHT);
-            bool selected = streq_local(raw_name, g_selected_name);
-            g_row_btns[g_row_count].window_id = window_id;
-            g_row_btns[g_row_count].x = 0;
-            g_row_btns[g_row_count].y = y;
-            g_row_btns[g_row_count].width = BODY_WIDTH;
-            g_row_btns[g_row_count].height = ROW_HEIGHT;
-            g_row_btns[g_row_count].label = label;
-            g_row_btns[g_row_count].normal_color = selected ? ROW_SELECTED_COLOR : ROW_COLOR;
-            g_row_btns[g_row_count].pressed_color = ROW_SELECTED_COLOR;
-            g_row_btns[g_row_count].label_color = TEXT_COLOR;
-            g_row_btns[g_row_count].was_down = false;
-            button_draw(&g_row_btns[g_row_count], false);
-            g_row_btns[g_row_count].last_rendered_pressed = false;
+            i = append_str(row_label, i, " RST=0X");
+            i += gt_format_hex(restart_count, &row_label[i]);
+            row_label[i] = '\0';
+            g_row_label_ptrs[g_row_count] = row_label;
 
             g_row_count = g_row_count + 1;
         }
         index = index + 1;
     }
-    int row = g_row_count;
-    while (row < SERVICE_SLOTS) {
-        u32 y = ROWS_TOP + (u32) (row * ROW_HEIGHT);
-        gt_window_fill_rect_args bg;
-        bg.id = window_id;
-        bg.x = 0;
-        bg.y = y;
-        bg.width = BODY_WIDTH;
-        bg.height = ROW_HEIGHT;
-        bg.color = BODY_COLOR;
-        gt_syscall(30, (u64) &bg, 0, 0);
-        row = row + 1;
+    (void) window_id;  // list_view already knows its own window_id
+    list_view_set_rows(&g_lst, g_row_label_ptrs, g_row_count);
+
+    // Restore the real selection (by name) that list_view_set_rows()
+    // just unconditionally cleared.
+    int i = 0;
+    while (i < g_row_count) {
+        if (streq_local(g_row_names[i], g_selected_name)) {
+            g_lst.selected_index = i;
+            list_view_draw_row(&g_lst, i);
+            break;
+        }
+        i = i + 1;
     }
 }
 
@@ -182,6 +183,8 @@ void _start(void) {
     button_init(&g_restart_btn, window_id, 200, 0, 96, 16, "RESTART",
                 TOOLBAR_BTN_COLOR, TOOLBAR_BTN_PRESSED_COLOR, TEXT_COLOR);
 
+    list_view_init(&g_lst, window_id, 0, ROWS_TOP, BODY_WIDTH, ROW_HEIGHT,
+                   ROW_COLOR, ROW_SELECTED_COLOR, TEXT_COLOR, BODY_COLOR);
     redraw_rows(window_id);
 
     u64 last_rendered_ticks = gt_get_ticks();
@@ -206,14 +209,12 @@ void _start(void) {
             }
         }
 
-        int row = 0;
-        while (row < g_row_count) {
-            if (button_poll(&g_row_btns[row])) {
-                copy_str(g_selected_name, g_row_names[row], 32);
-                redraw_rows(window_id);
-                break;
-            }
-            row = row + 1;
+        int clicked_row = list_view_poll(&g_lst);
+        if (clicked_row >= 0) {
+            // list_view_poll() already updated g_lst.selected_index and
+            // redrew the old/new row highlights itself - only the real
+            // name (this app's own source of truth) needs updating here.
+            copy_str(g_selected_name, g_row_names[clicked_row], 32);
         }
 
         u64 current_ticks = gt_get_ticks();

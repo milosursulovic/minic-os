@@ -44,17 +44,6 @@
 // alone an ineffective throttle.
 #define LIST_REDRAW_TICK_INTERVAL 50
 
-static void draw_row_text(int window_id, u32 y, const char* text) {
-    gt_window_draw_text_args args;
-    args.id = window_id;
-    args.x = 0;
-    args.y = y;
-    args.fg_color = TEXT_COLOR;
-    args.bg_color = BODY_COLOR;
-    args.text = (char*) text;
-    gt_syscall(32, (u64) &args, 0, 0);
-}
-
 static void uppercase_copy(char* dst, const char* src, int max_len) {
     int i = 0;
     while (src[i] != '\0' && i < max_len - 1) {
@@ -78,20 +67,24 @@ static int append_str(char* dst, int i, const char* s) {
     return i;
 }
 
-// Redraws the whole list - real slots first (used, in registry order),
-// unused visible rows cleared to background. Not incremental (no per-row
-// dirty tracking, unlike terminal.c's scrollback mirror): MAX_DEVICES=16
-// rows is cheap enough to redraw wholesale on the throttled interval.
-static void redraw_list(int window_id) {
-    int row = 0;
+static char g_lines[MAX_DEVICES][64];
+static char* g_line_ptrs[MAX_DEVICES];
+
+// Redraws the whole list via list_view (proc/gui_toolkit.h) - real slots
+// first (used, in registry order), unused visible rows cleared to
+// background by list_view_set_rows() itself. Never calls list_view_poll -
+// this app is genuinely read-only, matching its own file-level comment;
+// lst.selected_index simply stays -1 forever, so every row always
+// renders in row_color.
+static void redraw_list(list_view* lst) {
+    int row_count = 0;
     int index = 0;
     while (index < MAX_DEVICES) {
         char raw_name[32];
         int category;
         u32 info;
-        u32 y = ROWS_TOP + (u32) (row * ROW_HEIGHT);
         if (gt_device_list(index, raw_name, &category, &info)) {
-            char line[64];
+            char* line = g_lines[row_count];
             int i = 0;
             char upper_name[32];
             uppercase_copy(upper_name, raw_name, 32);
@@ -107,23 +100,12 @@ static void redraw_list(int window_id) {
             }
             i += gt_format_hex(info, &line[i]);
             line[i] = '\0';
-            draw_row_text(window_id, y, line);
-            row = row + 1;
+            g_line_ptrs[row_count] = line;
+            row_count = row_count + 1;
         }
         index = index + 1;
     }
-    while (row * ROW_HEIGHT < (int) (MAX_DEVICES * ROW_HEIGHT)) {
-        u32 y = ROWS_TOP + (u32) (row * ROW_HEIGHT);
-        gt_window_fill_rect_args bg;
-        bg.id = window_id;
-        bg.x = 0;
-        bg.y = y;
-        bg.width = BODY_WIDTH;
-        bg.height = ROW_HEIGHT;
-        bg.color = BODY_COLOR;
-        gt_syscall(30, (u64) &bg, 0, 0);
-        row = row + 1;
-    }
+    list_view_set_rows(lst, g_line_ptrs, row_count);
 }
 
 __attribute__((section(".text.start")))
@@ -131,15 +113,20 @@ void _start(void) {
     int window_id = gt_window_create(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT,
                                       BODY_COLOR, TITLE_COLOR);
 
-    draw_row_text(window_id, 0, "DEVICES");
-    redraw_list(window_id);
+    label title;
+    label_init(&title, window_id, 0, 0, "DEVICES", TEXT_COLOR, BODY_COLOR);
+
+    list_view lst;
+    list_view_init(&lst, window_id, 0, ROWS_TOP, BODY_WIDTH, ROW_HEIGHT,
+                   BODY_COLOR, BODY_COLOR, TEXT_COLOR, BODY_COLOR);
+    redraw_list(&lst);
 
     u64 last_rendered_ticks = gt_get_ticks();
 
     for (;;) {
         u64 current_ticks = gt_get_ticks();
         if (current_ticks - last_rendered_ticks >= LIST_REDRAW_TICK_INTERVAL) {
-            redraw_list(window_id);
+            redraw_list(&lst);
             last_rendered_ticks = current_ticks;
         }
     }
