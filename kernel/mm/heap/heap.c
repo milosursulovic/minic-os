@@ -17,6 +17,27 @@ u64 g_heap_cap;   // hard cap on growth, so a runaway allocator can't eat every 
 static bool g_heap_inited;
 void* g_last_alloc;
 
+// Save/restore IF - same established pattern as kernel/gfx/window/window.c's
+// window_create() and kernel/mm/frames/frames.c's alloc_frame()/free_frame()
+// (just fixed for the same real bug class, see its own comment for the
+// full story - [[project_mouse_keyboard_race_bug]]). kalloc()/kfree()'s
+// free-list scan-then-mutate was equally unprotected - two callers (a
+// task and a preempting interrupt-triggered path, or two tasks) could
+// both find and claim the SAME free block, or race a coalesce against a
+// concurrent alloc, before this fix. Matters even more here than in
+// frames.c: kalloc() backs task KERNEL STACKS (create_task_with_cr3's
+// kalloc(16384)), so this race could alias two tasks' own kernel stacks,
+// not just user-space memory.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
+
 static block_header* block_at(u64 offset) {
     return (block_header*) (HEAP_BASE + offset);
 }
@@ -67,6 +88,7 @@ void heap_init(void) {
 }
 
 void* kalloc(u64 size) {
+    u64 saved_flags = disable_interrupts();
     if (!g_heap_inited) {
         heap_init();
     }
@@ -90,6 +112,7 @@ void* kalloc(u64 size) {
                 }
                 block->free = false;
                 u8* block_bytes = (u8*) block;
+                restore_interrupts(saved_flags);
                 return (void*) (block_bytes + header_size);
             }
             offset = offset + header_size + block->size;
@@ -98,6 +121,7 @@ void* kalloc(u64 size) {
         // Nothing free was big enough - grow and retry.
         u64 old_size = g_heap_size;
         if (!heap_grow(size + header_size)) {
+            restore_interrupts(saved_flags);
             return NULL;
         }
         block_header* grown = block_at(old_size);
@@ -110,10 +134,12 @@ void kfree(void* ptr) {
     if (ptr == NULL) {
         return;
     }
+    u64 saved_flags = disable_interrupts();
     u64 header_size = sizeof(block_header);
     u64 ptr_addr = (u64) ptr;
     // Reject out-of-range pointers rather than let the offset subtraction underflow.
     if (ptr_addr < HEAP_BASE + header_size || ptr_addr >= HEAP_BASE + g_heap_size) {
+        restore_interrupts(saved_flags);
         return;
     }
     u64 offset = ptr_addr - HEAP_BASE - header_size;
@@ -152,6 +178,7 @@ void kfree(void* ptr) {
             prev_block->size = prev_block->size + header_size + block->size;
         }
     }
+    restore_interrupts(saved_flags);
 }
 
 u64 heap_free_bytes(void) {
