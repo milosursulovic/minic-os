@@ -8,6 +8,7 @@
 
 #include "paging.h"
 #include "../frames/frames.h"
+#include "../../../proc/ipc/shared_memory/shared_memory.h"
 
 u64 g_pml4_phys;
 
@@ -69,9 +70,24 @@ bool map_page_in(u64 pml4_phys, u64 vaddr, u64 paddr, u64 flags) {
     }
 
     pt[i1] = (paddr & ~((u64) 0xFFF)) | (flags & (((u64) 0xFFF) | PAGE_NX)) | 0x01;
-    if (pml4_phys == g_pml4_phys) {
-        invalidate_page(vaddr);  // only meaningful for the currently-loaded space
-    }
+    // Real bug found 2026-09-08 (Faza I point 8's cross-process SharedMemory
+    // round-trip proof): this used to only invalidate when
+    // `pml4_phys == g_pml4_phys` - but g_pml4_phys is a ONE-TIME boot
+    // snapshot of the ORIGINAL kernel PML4 (set once in paging_init()),
+    // never updated by load_cr3()'s own task-switch reloads - so it's
+    // never equal to any real ring3 process's own cloned address space,
+    // meaning invalidate_page() was silently skipped for every single
+    // ring3 mapping call ever made. Symptom: a process mapping a
+    // shared-memory frame it had never touched before could see stale
+    // (observed: all-zero) content on its first READ even though the
+    // SAME physical frame genuinely held real data written by another
+    // process through its own mapping - a first WRITE through the new
+    // mapping "self-healed" it (forces a fresh translation), masking the
+    // bug for the much more common write-first access pattern. invlpg
+    // only ever affects the CURRENTLY-loaded TLB, so calling it here
+    // unconditionally (even while editing an address space that isn't
+    // presently loaded) is always safe - worst case a harmless no-op.
+    invalidate_page(vaddr);
     return true;
 }
 
@@ -155,7 +171,16 @@ void free_address_space(u64 pml4_phys) {
                     u32 i1 = 0;
                     while (i1 < 512) {
                         if ((pt[i1] & 1) != 0) {
-                            free_frame((void*) (pt[i1] & ~((u64) 0xFFF)));
+                            void* leaf_frame = (void*) (pt[i1] & ~((u64) 0xFFF));
+                            // Real bug found 2026-09-08 (Faza I point 8) -
+                            // see shared_memory_owns_frame()'s own comment.
+                            // Only leaf DATA pages need this check - the
+                            // PT/PD/PDPT/PML4 structure pages below are
+                            // never shared between processes even when
+                            // some of the data they point to is.
+                            if (!shared_memory_owns_frame(leaf_frame)) {
+                                free_frame(leaf_frame);
+                            }
                         }
                         i1 = i1 + 1;
                     }

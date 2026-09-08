@@ -110,10 +110,21 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
     return proc_index;
 }
 
-static u8 g_loaded_image_buf[16384];
+// Real, latent capacity bug found 2026-08-31 (same "bump the cap before
+// the new consumer starves everyone else" class as MAX_TASKS/
+// MAX_PROCESSES earlier this session): ring3prog.c's own natural growth
+// this session (Thread/Event/Mutex/Timer/SharedMemory-sync demos) pushed
+// its compiled size (0x7b00 = 31488 bytes as of this fix) past the old
+// 16384-byte cap - fs_read_file() correctly refuses (`size > max_len`
+// returns -2, not a silent truncation), so spawn_process_from_path()
+// simply always failed for testprog.bin from that point on, with no
+// crash - just spawn_process()-family syscalls silently returning -1.
+// 65536 is real headroom, not another exact-fit.
+#define LOADED_IMAGE_BUF_SIZE 65536
+static u8 g_loaded_image_buf[LOADED_IMAGE_BUF_SIZE];
 
 int spawn_process_from_path(const char* path, u64 load_vaddr, u64 stack_vaddr) {
-    int n = vfs_read(path, &g_loaded_image_buf[0], 16384);
+    int n = vfs_read(path, &g_loaded_image_buf[0], LOADED_IMAGE_BUF_SIZE);
     if (n < 0) {
         return -1;
     }

@@ -50,3 +50,36 @@ bool shared_memory_map(int index, u64 cr3, u64 vaddr) {
     }
     return true;
 }
+
+// Real bug found 2026-09-08 (Faza I point 8's cross-process round-trip
+// proof): kernel/mm/paging/paging.c's free_address_space() used to free
+// EVERY frame it found mapped in the exiting process's own page tables,
+// with no concept of "this one is borrowed, not owned" - a process that
+// merely had a SharedMemory frame mapped (via shared_memory_map()/
+// shared_memory_map_into(), not the frame's original owner) would free
+// it out from under every OTHER process still using it the moment it
+// exited. Reproduced concretely: a spawned child wrote a real payload to
+// a shared page, signaled done, and called process_exit() - the parent's
+// own SUBSEQUENT read of that exact page came back all-zero, because the
+// child's own exit had already freed the frame back to the pool, and a
+// completely unrelated page-table allocation (for the parent's own first-
+// ever mapping in that vaddr region) immediately reused and zeroed it.
+// free_address_space() now asks this before freeing any leaf data frame -
+// SHM_SLOTS/SHM_MAX_PAGES are both small (4x4), a linear scan here is
+// negligible next to the real correctness this closes.
+bool shared_memory_owns_frame(void* frame) {
+    int i = 0;
+    while (i < SHM_SLOTS) {
+        if (g_shared_regions[i].used) {
+            u32 p = 0;
+            while (p < g_shared_regions[i].page_count) {
+                if (g_shared_regions[i].frames[p] == frame) {
+                    return true;
+                }
+                p = p + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}

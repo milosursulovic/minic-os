@@ -156,6 +156,12 @@ static void event_signal_entry(void) {
     gt_thread_exit();
 }
 
+// Real cross-process SharedMemory round-trip (trigger 25/26, Faza I
+// point 8) - distinct from trigger 19's own vaddrs (0x80300000/
+// 0x80400000), purely for clarity since these live in a separate
+// process's own address space anyway.
+#define SHM_SYNC_VADDR 0x80500000
+
 static bool channel_open(channel* self, int channel_index) {
     u64 result = do_syscall(9, (u64) channel_index, 0, 0);
     if (result == (u64) -1) {
@@ -345,6 +351,68 @@ static int posix_close(int fd) {
 // fire when a shell command explicitly asks for them.
 __attribute__((section(".text.start")))
 void _start(void) {
+    // Real cross-process SharedMemory round-trip child-role pre-check
+    // (Faza I point 8, trigger 25) - if trigger 25's own parent already
+    // atomically granted this fresh instance handles 1/2/3 (SharedMemory/
+    // Event/Mutex, syscall 84) before it ever ran a single instruction,
+    // THIS is that demo's own worker child, not a normal boot/trigger
+    // instance - run the worker role immediately and exit, skipping the
+    // entire normal channel-based dispatch below (which this instance
+    // could never signal itself out of anyway - channel_open() only ever
+    // grants RIGHT_RECEIVE, by design, so a would-be ring3-side
+    // "send myself the next trigger" approach is a dead end). Handle 1
+    // (not 2 - a real bug found and fixed here) is the first free slot:
+    // this check runs BEFORE file_write()'s own ring3msg.txt handle
+    // further down _start(), so nothing has consumed handle 1 yet at
+    // this point - only handle 0 (self) exists before this. Syscall 84's
+    // own atomicity guarantees handle 1 is either valid together with
+    // 2/3, or not valid at all - never a partial, racy state visible here.
+    // Real, found-empirically SEPARATE race: syscall 84's own grant is
+    // atomic, but nothing stops THIS freshly-spawned task from being
+    // scheduled and reaching this exact check BEFORE the parent's grant
+    // call has run at all - a brand-new task is immediately runnable the
+    // instant process_spawn() returns, and preemption can land here in
+    // the small handful of instructions between that return and the
+    // parent's very next syscall. A fixed retry COUNT turned out not to
+    // be a real fix - under QEMU/TCG a few hundred cheap syscalls in a
+    // tight loop can easily complete inside a single timer tick, so the
+    // whole retry loop can run to exhaustion without a single real
+    // preemption ever happening, never actually giving the parent a
+    // turn. Bounding by real elapsed TICKS instead (same "throttle
+    // window" convention this codebase already uses elsewhere) - ticks
+    // only advance via genuine timer interrupts, which are also exactly
+    // what hands other tasks their own turn, so this really does
+    // guarantee real wall-clock opportunities for the parent's grant
+    // call to run, not just more iterations of the same instant.
+    bool shmsync_child_check = false;
+    u64 shmsync_start_tick = gt_get_ticks();
+    while (gt_get_ticks() - shmsync_start_tick < 50) {
+        shmsync_child_check = gt_shm_map(1, SHM_SYNC_VADDR);
+        if (shmsync_child_check) {
+            break;
+        }
+    }
+    do_syscall(1, (u64) "shmsync_child_check=0x", (u64) shmsync_child_check, 0);
+    if (shmsync_child_check) {
+        gt_mutex_lock(3);
+        char* dst = (char*) SHM_SYNC_VADDR;
+        const char* payload = "hello from child process, synchronized!";
+        int i = 0;
+        while (payload[i] != '\0') {
+            dst[i] = payload[i];
+            i = i + 1;
+        }
+        dst[i] = '\0';
+        gt_mutex_unlock(3);
+
+        do_syscall(1, (u64) "child wrote payload, signaling", 0, 0);
+        gt_event_signal(2);
+
+        do_syscall(12, 0, 0, 0);  // process_exit - never returns
+        for (;;) {
+        }
+    }
+
     do_syscall(3, 0, 0, 0);      // handle 0 = myself
     do_syscall(3, 99, 0, 0);     // handle 99 was never allocated - expect -1
 
@@ -941,6 +1009,47 @@ void _start(void) {
         do_syscall(1, (u64) "timer ticks_before=0x", ticks_before, 0);
         do_syscall(1, (u64) "timer ticks_after=0x", ticks_after, 0);
         do_syscall(1, (u64) "timer elapsed=0x", ticks_after - ticks_before, 0);
+    } else if (trigger_value == 25) {
+        // trigger 25 (ring3shmsync, the parent/initiator role): real
+        // cross-process SharedMemory, synchronized via Mutex/Event
+        // (syscalls 74-82) and a new atomic 3-handle grant (syscall 84) -
+        // Faza I point 8. Needs /system/testprog.bin to already exist
+        // (run `install` first), same precondition trigger 19 already has.
+        // The spawned child recognizes its own worker role via a pre-
+        // check at the very top of THIS SAME _start() (see there for why
+        // a channel-based handoff can't work here at all: channel_open()
+        // only ever grants RIGHT_RECEIVE, by design, so ring3 code can
+        // never successfully channel_send() to itself either).
+        int shm_handle = gt_shm_create(4096);
+        int event_handle = gt_event_create();
+        int mutex_handle = gt_mutex_create();
+        do_syscall(1, (u64) "shm_handle=0x", (u64) shm_handle, 0);
+        do_syscall(1, (u64) "event_handle=0x", (u64) event_handle, 0);
+        do_syscall(1, (u64) "mutex_handle=0x", (u64) mutex_handle, 0);
+
+        process child_image;
+        child_image.path = "/system/testprog.bin";
+        u64 child_task_index = process_spawn(&child_image, 0x80000000, 0x80020000);
+        do_syscall(1, (u64) "shmsync child_task_index=0x", child_task_index, 0);
+
+        // Granted atomically - see syscall 84's own comment for why three
+        // separate grant calls would leave a real, ring3-observable
+        // partial-grant window. Lands deterministically at handle 1/2/3
+        // (handle 0 = self, always granted first by spawn_process()) -
+        // the child's own pre-check at the very top of _start() (before
+        // it ever reaches its own file_write()) relies on this.
+        bool granted = gt_handle_grant3((int) shm_handle, (int) event_handle, (int) mutex_handle, child_task_index);
+        do_syscall(1, (u64) "granted child handles ok=0x", (u64) granted, 0);
+
+        // Real synchronization point - blocks until the child has
+        // actually written and signaled, not a fixed delay.
+        gt_event_wait(event_handle);
+        do_syscall(1, (u64) "parent observed child signal", 0, 0);
+
+        bool mapped = gt_shm_map(shm_handle, SHM_SYNC_VADDR);
+        do_syscall(1, (u64) "parent shm_map ok=0x", (u64) mapped, 0);
+        do_syscall(1, (u64) "parent read from child: ", 0, 0);
+        do_syscall(1, (u64) SHM_SYNC_VADDR, 0, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

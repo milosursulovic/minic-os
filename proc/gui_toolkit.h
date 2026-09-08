@@ -490,6 +490,22 @@ static __attribute__((unused)) void gt_timer_wait(int handle) {
     gt_syscall(82, (u64) handle, 0, 0);
 }
 
+// Real cross-process handle sharing (Faza I point 8) - wraps syscall 83.
+// Grants a real, valid handle for the SAME underlying object (any type)
+// into target_task_index's own process, at whatever handle index its
+// table happens to have free next. Returns that new handle index, or -1.
+static __attribute__((unused)) int gt_handle_grant(int handle, u64 target_task_index) {
+    return (int) gt_syscall(83, (u64) handle, target_task_index, 0);
+}
+
+// Atomic 3-handle grant (syscall 84) - see its own kernel-side comment
+// for why a single call matters here (no ring3-observable partial-grant
+// window). Returns true only if all three landed.
+static __attribute__((unused)) bool gt_handle_grant3(int handle_a, int handle_b, int handle_c, u64 target_task_index) {
+    u64 packed_bc = ((u64) (u32) handle_b << 32) | (u32) handle_c;
+    return gt_syscall(84, (u64) handle_a, packed_bc, target_task_index) != (u64) -1;
+}
+
 // Minimal, self-contained hex formatter - kernel/lib/strings.c's format_hex()
 // isn't linked into ring3 programs (each is its own standalone-linked
 // blob, see proc/ring3.ld). Null-terminates, unlike format_hex(), since

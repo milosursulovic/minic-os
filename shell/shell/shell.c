@@ -124,8 +124,8 @@ void shell_history_down(void) {
 }
 
 static void cmd_help(void) {
-    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent slidercontent listcontent ring3focus ring3thread ring3sync");
-    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent slidercontent listcontent ring3focus ring3thread ring3sync");
+    vga_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent slidercontent listcontent ring3focus ring3thread ring3sync ring3shmsync");
+    serial_print("commands: help clear ticks alloc bigalloc free free <addr> mem reset shutdown reboot cursor frame unframe frames map tasks procs ps objs netconns chan send disk diskwrite mkfs mkfile cat ls pwd cd <dir> mkdir <dir> cp <src> <dst> mv <src> <dst> touch <name> edit <name> vfscat <path> vfswrite install spawn ring3go ring3fault ring3nx ring3reg ring3unreg ring3async ring3asyncwrite ring3asyncping ring3asyncdns ring3asynctcp ring3win ring3mouse ring3text ring3button pci nic fb text mouse win winlist wincontent textcontent buttoncontent desktop arp ping <host> ipconfig dns tcp echo <text> pngtest ring3fileobj ring3perms ring3posix ring3pipe ring3shm devices exit ring3tcpserver service <start|stop|restart|status> <name> ring3widgets checkboxcontent radiocontent progresscontent slidercontent listcontent ring3focus ring3thread ring3sync ring3shmsync");
 }
 
 static void cmd_ticks(void) {
@@ -287,6 +287,20 @@ static void cmd_ring3_sync(void) {
     }
     vga_print("sent ring3 sync trigger");
     serial_print("sent ring3 sync trigger");
+}
+
+// Real cross-process SharedMemory round-trip (syscall 83 handle_grant) -
+// see ring3prog.c triggers 25 (parent)/26 (child). Needs /system/
+// testprog.bin to already exist - run `install` first.
+static void cmd_ring3_shm_sync(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 0x19);
+    if (!ok) {
+        vga_print("ring3shmsync failed - channel full");
+        serial_print("ring3shmsync failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 shmsync trigger");
+    serial_print("sent ring3 shmsync trigger");
 }
 
 // Reads back a pixel inside ring3widgets's checkbox inner fill (see
@@ -750,7 +764,7 @@ static void strip_system_prefix(char* out, const char* path) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 89
+#define SHELL_COMMAND_COUNT 90
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -794,6 +808,7 @@ static void shell_commands_init(void) {
     g_shell_commands[86] = "ring3focus";
     g_shell_commands[87] = "ring3thread";
     g_shell_commands[88] = "ring3sync";
+    g_shell_commands[89] = "ring3shmsync";
     g_shell_commands_initialized = true;
 }
 
@@ -2455,6 +2470,8 @@ void run_command(void) {
         cmd_ring3_thread();
     } else if (streq(g_line_buffer, "ring3sync")) {
         cmd_ring3_sync();
+    } else if (streq(g_line_buffer, "ring3shmsync")) {
+        cmd_ring3_shm_sync();
     } else if (streq(g_line_buffer, "checkboxcontent")) {
         cmd_checkboxcontent();
     } else if (streq(g_line_buffer, "radiocontent")) {

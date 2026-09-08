@@ -1634,5 +1634,83 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         timer_wait(obj->data_index);
         return 0;
     }
+    // Real cross-process handle sharing (Faza I point 8) - a fresh
+    // process's handle table starts and stays empty (only handle 0 =
+    // self, granted automatically by spawn_process()), completely
+    // disconnected from its parent's own handles. Generic (works for any
+    // object type, not just SharedMemory - syscall 57's own "map into a
+    // target's address space" only covers memory specifically): resolve
+    // the caller's own handle to (object_index, rights), grant the SAME
+    // object into the target task's own process with the SAME rights.
+    if (num == 83) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        handle* h = &g_handle_tables[caller_process][handle_idx];
+        if (!h->used) {
+            return (u64) -1;
+        }
+        int target_task_index = (int) a2;
+        if (target_task_index < 0 || target_task_index >= MAX_TASKS) {
+            return (u64) -1;
+        }
+        int target_process = g_tasks[target_task_index].process_index;
+        if (target_process < 0) {
+            return (u64) -1;
+        }
+        int new_handle = alloc_handle(target_process, h->object_index, h->rights);
+        return new_handle < 0 ? (u64) -1 : (u64) new_handle;
+    }
+    // Atomic 3-handle grant (Faza I point 8's cross-process SharedMemory
+    // demo) - three separate syscall 83 calls in a row would leave a
+    // real, ring3-observable window (a fresh child scheduled BETWEEN two
+    // of the parent's own grant calls sees only a partial grant) since
+    // ring3 code is genuinely interruptible between any two `int 0x80`
+    // calls even with no explicit yield - this single syscall runs the
+    // whole 3-grant sequence under the same interrupt-gate atomicity
+    // every syscall already gets, so a waiting child either sees all
+    // three handles or none, never a partial set. handle_a -> a1,
+    // handle_b/handle_c packed into a2 (high/low 32 bits) since a
+    // syscall only carries 3 real argument slots.
+    if (num == 84) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int target_task_index = (int) a3;
+        if (target_task_index < 0 || target_task_index >= MAX_TASKS) {
+            return (u64) -1;
+        }
+        int target_process = g_tasks[target_task_index].process_index;
+        if (target_process < 0) {
+            return (u64) -1;
+        }
+        int handles[3];
+        handles[0] = (int) a1;
+        handles[1] = (int) (a2 >> 32);
+        handles[2] = (int) (a2 & 0xFFFFFFFF);
+        int i = 0;
+        while (i < 3) {
+            int hi = handles[i];
+            if (hi < 0 || hi >= HANDLES_PER_PROCESS || !g_handle_tables[caller_process][hi].used) {
+                return (u64) -1;
+            }
+            i = i + 1;
+        }
+        i = 0;
+        while (i < 3) {
+            handle* h = &g_handle_tables[caller_process][handles[i]];
+            if (alloc_handle(target_process, h->object_index, h->rights) < 0) {
+                return (u64) -1;
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
     return (u64) -1;  // unknown syscall
 }

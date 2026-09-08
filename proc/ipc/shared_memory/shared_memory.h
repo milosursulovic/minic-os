@@ -30,5 +30,9 @@ int alloc_shared_memory(u32 size);
 // child possible) at vaddr, vaddr+4096, ... - writable+user (0x06, the
 // same flag value proc/process.c's spawn_process() already uses).
 bool shared_memory_map(int index, u64 cr3, u64 vaddr);
+// True if frame is a page of any currently-active shared region - lets
+// free_address_space() (kernel/mm/paging/paging.c) skip freeing a frame
+// it doesn't exclusively own. See its own call site's comment.
+bool shared_memory_owns_frame(void* frame);
 
 #pragma GCC visibility pop
