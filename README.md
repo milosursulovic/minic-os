@@ -1,3 +1,5 @@
+<img src="icon.png" alt="MiniC-OS icon" width="128" height="128" align="right" />
+
 # MiniC-OS kernel
 
 A multiboot1 kernel that boots to 64-bit long mode, handles real
