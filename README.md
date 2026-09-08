@@ -1,4 +1,6 @@
-<img src="icon.png" alt="MiniC-OS icon" width="128" height="128" align="right" />
+<p align="center">
+  <img src="icon.png" alt="MiniC-OS icon" width="128" height="128" />
+</p>
 
 # MiniC-OS kernel
 
