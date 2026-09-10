@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.png" alt="MiniC-OS icon" width="128" height="128" />
+  <img src="assets/icon.png" alt="MiniC-OS icon" width="128" height="128" />
 </p>
 
 # MiniC-OS kernel

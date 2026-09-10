@@ -10,6 +10,7 @@
 #include "../../lib/strings.h"
 #include "../image/image.h"
 #include "../cursor_image/cursor_image.h"
+#include "../wallpaper/wallpaper.h"
 
 int g_terminal_window_id = -1;
 int g_focused_window_id = -1;
@@ -349,6 +350,31 @@ bool window_fill_content_rect(int id, u32 x, u32 y, u32 w, u32 h, u32 color) {
         u32 col = 0;
         while (col < w && x + col < g_windows[id].width) {
             g_window_content[id][(y + row) * WINDOW_CONTENT_MAX_WIDTH + (x + col)] = color;
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+    g_windows[id].has_content = true;
+    return true;
+}
+
+bool window_draw_wallpaper(int id) {
+    if (id < 0 || id >= WINDOW_SLOTS || !g_windows[id].used) {
+        return false;
+    }
+    wallpaper_image_init();
+    if (g_wallpaper_image.pixels == NULL) {
+        return false;
+    }
+    u32 body_height = window_body_height(&g_windows[id]);
+    u32 row = 0;
+    while (row < g_wallpaper_image.height && row < body_height) {
+        u32 col = 0;
+        while (col < g_wallpaper_image.width && col < g_windows[id].width) {
+            u32 pixel = g_wallpaper_image.pixels[row * g_wallpaper_image.width + col];
+            if (pixel != IMAGE_TRANSPARENT) {
+                g_window_content[id][row * WINDOW_CONTENT_MAX_WIDTH + col] = pixel;
+            }
             col = col + 1;
         }
         row = row + 1;

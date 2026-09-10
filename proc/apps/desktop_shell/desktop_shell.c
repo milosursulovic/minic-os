@@ -81,12 +81,22 @@ void _start(void) {
     // image predating Settings, or one that's never had a color chosen)
     // falls back to today's hardcoded default - fully backward-compatible.
     u32 wallpaper_color = WALLPAPER_COLOR;
+    bool has_saved_color = false;
     u32 saved_color;
     if (gt_vfs_read("/system/settings.cfg", (u8*) &saved_color, sizeof(saved_color)) == (int) sizeof(saved_color)) {
         wallpaper_color = saved_color;
+        has_saved_color = true;
     }
 
-    gt_window_create_borderless(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, wallpaper_color);
+    int wallpaper_id = gt_window_create_borderless(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, wallpaper_color);
+    // No custom color chosen via Settings yet - draw the real default
+    // wallpaper image (kernel/gfx/wallpaper/) instead of the flat fill.
+    // A saved custom color always wins (real user customization stays
+    // in effect, same backward-compatible spirit the color-read above
+    // already has).
+    if (!has_saved_color) {
+        gt_window_draw_wallpaper(wallpaper_id);
+    }
     int taskbar_id = gt_window_create_borderless(0, SCREEN_HEIGHT - TASKBAR_HEIGHT,
                                                   SCREEN_WIDTH, TASKBAR_HEIGHT, TASKBAR_COLOR);
 

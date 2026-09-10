@@ -264,7 +264,11 @@ $(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o: kernel/gfx/png/png_test_huf
 	@mkdir -p $(BUILD_DIR)/kernel/gfx/png
 	cd kernel/gfx/png && $(AS) --32 png_test_huffman_blob.s -o ../../../$@
 
-PNG_ASSET_BLOBS := $(BUILD_DIR)/kernel/gfx/png/cursor_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_stored_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o
+$(BUILD_DIR)/kernel/gfx/png/wallpaper_blob.o: kernel/gfx/png/wallpaper_blob.s assets/wallpaper.png
+	@mkdir -p $(BUILD_DIR)/kernel/gfx/png
+	cd kernel/gfx/png && $(AS) --32 wallpaper_blob.s -o ../../../$@
+
+PNG_ASSET_BLOBS := $(BUILD_DIR)/kernel/gfx/png/cursor_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_stored_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o $(BUILD_DIR)/kernel/gfx/png/wallpaper_blob.o
 
 kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
 	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)

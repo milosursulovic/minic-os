@@ -164,5 +164,10 @@ bool syscall_window(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         *result = (u64) key;
         return true;
     }
+    if (num == 94) {
+        bool ok = window_draw_wallpaper((int) a1);
+        *result = (u64) ok;
+        return true;
+    }
     return false;
 }

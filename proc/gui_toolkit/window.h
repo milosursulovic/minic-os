@@ -120,3 +120,9 @@ static __attribute__((unused)) bool gt_focus_window(int window_id) {
 static __attribute__((unused)) int gt_read_key(int window_id) {
     return (int) gt_syscall(70, (u64) window_id, 0, 0);
 }
+
+// Draws the real embedded default wallpaper image (kernel/gfx/wallpaper/)
+// into window_id's content buffer - wraps syscall 94.
+static __attribute__((unused)) bool gt_window_draw_wallpaper(int window_id) {
+    return gt_syscall(94, (u64) window_id, 0, 0) != 0;
+}

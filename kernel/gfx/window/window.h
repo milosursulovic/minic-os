@@ -119,6 +119,12 @@ bool compositor_handle_mouse(void);
 // body size. Once called, the compositor draws this buffer instead of
 // body_color - a window is either a flat placeholder or fully app-drawn.
 bool window_fill_content_rect(int id, u32 x, u32 y, u32 w, u32 h, u32 color);
+// Copies the embedded default wallpaper image (kernel/gfx/wallpaper/
+// wallpaper.h) into window id's content buffer at body-local (0,0),
+// clipped to the body/image bounds (same clipping shape as
+// window_fill_content_rect). Real IMAGE_TRANSPARENT pixels are skipped,
+// same convention as image.h's own draw_image().
+bool window_draw_wallpaper(int id);
 // Draws text into id's content buffer, same body-local clipping as
 // window_fill_content_rect. Single line only; unsupported characters (see
 // gfx/font.h) leave their cell untouched.
