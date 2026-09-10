@@ -8,6 +8,9 @@
 #include "../gfx/window/window.h"
 #include "../lib/strings.h"
 #include "../sched/task.h"
+#include "../mm/paging/paging.h"
+#include "../mm/frames/frames.h"
+#include "../mm/cow/cow.h"
 #include "../../shell/editor/editor.h"
 #include "../../shell/shell/shell.h"
 
@@ -296,6 +299,38 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
         serial_print(", halting\n");
     } else if (vector == 14) {
         u64 fault_addr = read_cr2();
+        // Real copy-on-write fork() write-fault repair (Faza I point 4,
+        // item 8) - a write (error_code bit 1) to a page that's present
+        // (bit 0) but read-only because it's COW-shared gets a fresh
+        // private copy instead of halting. Every other page-fault
+        // scenario (kernel-write, NX, a genuinely bad access, or a write
+        // to a present-but-NOT-cow page) falls through to the existing
+        // halt below, completely unchanged.
+        if ((error_code & 0x3) == 0x3) {
+            u64 page_vaddr = fault_addr & ~((u64) 0xFFF);
+            u64 cr3 = g_tasks[g_current_task].cr3;
+            u64 old_paddr = translate_in(cr3, page_vaddr);
+            void* old_frame = (void*) (old_paddr & ~((u64) 0xFFF));
+            if (old_paddr != 0 && cow_is_shared(old_frame)) {
+                void* new_frame = alloc_frame();
+                if (new_frame != NULL) {
+                    u8* src = (u8*) old_frame;
+                    u8* dst = (u8*) new_frame;
+                    u32 i = 0;
+                    while (i < 4096) {
+                        dst[i] = src[i];
+                        i = i + 1;
+                    }
+                    if (map_page_in(cr3, page_vaddr, (u64) new_frame, 0x06)) {
+                        if (cow_should_free(old_frame)) {
+                            free_frame(old_frame);
+                        }
+                        return;
+                    }
+                    free_frame(new_frame);
+                }
+            }
+        }
         serial_print("page fault at 0x");
         print_hex(fault_addr);
         serial_print(", error_code=0x");

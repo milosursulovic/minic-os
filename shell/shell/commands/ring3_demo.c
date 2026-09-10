@@ -418,3 +418,29 @@ void cmd_ring3_vfs_perm(void) {
     vga_print("sent ring3 vfsperm trigger");
     serial_print("sent ring3 vfsperm trigger");
 }
+
+// Faza I point 4 item 8: real copy-on-write fork() - see ring3prog.c
+// trigger 31.
+void cmd_ring3_fork(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 31);
+    if (!ok) {
+        vga_print("ring3fork failed - channel full");
+        serial_print("ring3fork failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 fork trigger");
+    serial_print("sent ring3 fork trigger");
+}
+
+// Faza I point 4 item 8: real guard pages - see ring3prog.c trigger 32.
+// KERNEL-HALTING, run standalone.
+void cmd_ring3_guard(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 32);
+    if (!ok) {
+        vga_print("ring3guard failed - channel full");
+        serial_print("ring3guard failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 guard trigger - expect a page fault");
+    serial_print("sent ring3 guard trigger - expect a page fault");
+}

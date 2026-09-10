@@ -8,6 +8,7 @@
 
 #include "paging.h"
 #include "../frames/frames.h"
+#include "../cow/cow.h"
 #include "../../../proc/ipc/shared_memory/shared_memory.h"
 
 u64 g_pml4_phys;
@@ -152,6 +153,64 @@ u64 clone_address_space(void) {
     return (u64) new_pml4_frame;
 }
 
+// Real copy-on-write fork() (Faza I point 4, item 8) - same triple-
+// nested PDPT[2]+/PD/PT walk shape as free_address_space() below, but
+// instead of freeing each present leaf, demotes the PARENT's own
+// mapping to read-only and maps the exact same frame read-only into the
+// child at the same reconstructed vaddr, then registers it with
+// cow_track(). map_page_in() is reused as-is for both sides - it
+// already handles missing intermediate tables and already invalidates
+// unconditionally.
+bool clone_address_space_cow(u64 parent_pml4_phys, u64 child_pml4_phys) {
+    u64* pml4 = (u64*) parent_pml4_phys;
+    u64* pdpt = (u64*) (pml4[0] & ~((u64) 0xFFF));
+    u32 i3 = 2;
+    while (i3 < 512) {
+        if ((pdpt[i3] & 1) != 0) {
+            u64* pd = (u64*) (pdpt[i3] & ~((u64) 0xFFF));
+            u32 i2 = 0;
+            while (i2 < 512) {
+                if ((pd[i2] & 1) != 0) {
+                    u64* pt = (u64*) (pd[i2] & ~((u64) 0xFFF));
+                    u32 i1 = 0;
+                    while (i1 < 512) {
+                        if ((pt[i1] & 1) != 0) {
+                            // Real bug caught during this item's own
+                            // verification: stripping only the low 12
+                            // bits left PAGE_NX (bit 63, set on every
+                            // stack page) baked INTO paddr - cow_track()
+                            // then registered a "frame" address that
+                            // didn't match translate_in()'s own correctly-
+                            // stripped value, so cow_is_shared() always
+                            // missed, AND map_page_in() below would have
+                            // written a corrupted frame-address field
+                            // into the new PTE. Must strip PAGE_NX too,
+                            // same as translate_in() already does.
+                            u64 paddr = pt[i1] & ~(((u64) 0xFFF) | PAGE_NX);
+                            u64 flags = pt[i1] & (((u64) 0xFFF) | PAGE_NX);
+                            u64 cow_flags = flags & ~((u64) 0x02);  // strip writable
+                            u64 vaddr = ((u64) i3 << 30) | ((u64) i2 << 21) | ((u64) i1 << 12);
+                            if (!map_page_in(parent_pml4_phys, vaddr, paddr, cow_flags)) {
+                                return false;
+                            }
+                            if (!map_page_in(child_pml4_phys, vaddr, paddr, cow_flags)) {
+                                return false;
+                            }
+                            if (!cow_track((void*) paddr)) {
+                                return false;
+                            }
+                        }
+                        i1 = i1 + 1;
+                    }
+                }
+                i2 = i2 + 1;
+            }
+        }
+        i3 = i3 + 1;
+    }
+    return true;
+}
+
 // Frees every private-region frame (PDPT[2]+: PT/PD/leaf data pages)
 // plus the process's own PML4/PDPT frames. Never touches PDPT[0]/[1] -
 // those are the shared kernel/heap sub-tables. Caller must not still be
@@ -178,7 +237,12 @@ void free_address_space(u64 pml4_phys) {
                             // PT/PD/PDPT/PML4 structure pages below are
                             // never shared between processes even when
                             // some of the data they point to is.
-                            if (!shared_memory_owns_frame(leaf_frame)) {
+                            // cow_should_free() always runs first (it has a
+                            // real side effect - decrementing a tracked
+                            // frame's refcount - even when the answer ends
+                            // up being "no, don't free" because
+                            // shared_memory_owns_frame() also says no).
+                            if (cow_should_free(leaf_frame) && !shared_memory_owns_frame(leaf_frame)) {
                                 free_frame(leaf_frame);
                             }
                         }

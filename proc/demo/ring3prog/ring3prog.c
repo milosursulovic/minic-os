@@ -1185,6 +1185,43 @@ void _start(void) {
         char buf0[32];
         int n0 = gt_vfs_read("/system/vfsperm.mfs", (u8*) &buf0[0], 31);
         do_syscall(1, (u64) "(uid=0, root) raw vfs_read n=0x", (u64) n0, 0);
+    } else if (trigger_value == 31) {
+        // trigger 31 (ring3fork) - Faza I point 4 item 8: real copy-on-
+        // write fork(). x=100 lives on this task's own COW-shareable
+        // stack; each side's own assignment below is a real write to
+        // that shared page, triggering the new page-fault repair path
+        // independently for parent and child - if COW were broken, both
+        // would see the SAME frame and either corrupt or overwrite each
+        // other's value.
+        u64 x = 100;
+        do_syscall(1, (u64) "before fork, x=0x", x, 0);
+        u64 fork_result = do_syscall(95, 0, 0, 0);
+        if (fork_result == 0) {
+            x = 300;
+            do_syscall(1, (u64) "child: x=0x", x, 0);
+            do_syscall(12, 0, 0, 0);  // process_exit - never returns
+            for (;;) {
+            }
+        }
+        x = 200;
+        do_syscall(1, (u64) "parent: child_task=0x", fork_result, 0);
+        do_syscall(1, (u64) "parent: x=0x", x, 0);
+    } else if (trigger_value == 32) {
+        // trigger 32 (ring3guard) - Faza I point 4 item 8: real guard
+        // pages. KERNEL-HALTING, run standalone. This process's own
+        // stack sits at a single mapped page (0x80020000, the same
+        // fixed address ring3nx's own stack-execution test already
+        // relies on) - clone_address_space()'s lazy, sparse PDPT[2]+
+        // population never maps anything below it unless something
+        // explicitly asked for that address, a real guard page by
+        // construction. Deliberately underflows by 8 bytes - must fault
+        // with the present bit CLEAR (error_code 0x6: user+write+not-
+        // present), distinctly different from ring3fault's 0x7
+        // (present, wrong permission) and ring3nx's 0x15 (present+NX).
+        do_syscall(1, (u64) "attempting a deliberate stack-guard underflow write at 0x", 0x80020000 - 8, 0);
+        u64* guard = (u64*) (0x80020000 - 8);
+        *guard = 0xDEADBEEF;
+        do_syscall(1, (u64) "guard write succeeded (BUG!)", 0, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";
