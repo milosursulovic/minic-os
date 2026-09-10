@@ -16,6 +16,7 @@
 #include "proc/ipc/net_request/net_request.h"
 #include "proc/ipc/net_tcp_request/net_tcp_request.h"
 #include "kernel/services/service_manager.h"
+#include "kernel/security/users/users.h"
 #include "kernel/lib/rand.h"
 #include "kernel/fs/vfs/vfs.h"
 #include "shell/shell/shell.h"
@@ -48,6 +49,7 @@ void _start(void) {
     vga_enable_cursor();
     vga_update_cursor(g_vga_cursor);
     init_scancode_table();
+    users_init();
     device_manager_register("PS/2 Keyboard", DEVICE_CATEGORY_INPUT, 1);
     // RTC has no init function at all (kernel/drivers/rtc/rtc.c only ever
     // reads on demand) - registered as an assumed-always-present

@@ -1122,6 +1122,37 @@ void _start(void) {
         do_syscall(1, (u64) "device category=0x", (u64) device_category, 0);
         do_syscall(1, (u64) "device info=0x", (u64) device_info, 0);
         gt_device_close(device_handle);
+    } else if (trigger_value == 29) {
+        // trigger 29 (ring3users) - Faza I point 14 item 6: real user
+        // accounts backing a uid, not just a bare number. Deliberately
+        // does NOT touch gt_setuid/ring3perms - item 7 (permission-
+        // gating) is where enforcement actually starts using this table;
+        // this trigger only proves the lookup itself distinguishes a
+        // real registered account from an arbitrary uid.
+        char name0[32];
+        u8 gid0;
+        bool found0 = gt_user_lookup(0, &name0[0], &gid0);
+        do_syscall(1, (u64) "uid=0x0 found=0x", (u64) found0, 0);
+        if (found0) {
+            do_syscall(1, (u64) "  name: ", 0, 0);
+            do_syscall(1, (u64) &name0[0], 0, 0);
+            do_syscall(1, (u64) "  gid=0x", (u64) gid0, 0);
+        }
+
+        char name100[32];
+        u8 gid100;
+        bool found100 = gt_user_lookup(100, &name100[0], &gid100);
+        do_syscall(1, (u64) "uid=0x64 found=0x", (u64) found100, 0);
+        if (found100) {
+            do_syscall(1, (u64) "  name: ", 0, 0);
+            do_syscall(1, (u64) &name100[0], 0, 0);
+            do_syscall(1, (u64) "  gid=0x", (u64) gid100, 0);
+        }
+
+        char name99[32];
+        u8 gid99;
+        bool found99 = gt_user_lookup(99, &name99[0], &gid99);
+        do_syscall(1, (u64) "uid=0x63 found=0x", (u64) found99, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

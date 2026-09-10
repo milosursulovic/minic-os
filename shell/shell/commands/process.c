@@ -7,6 +7,7 @@
 #include "../../../proc/ipc/object/object.h"
 #include "../../../proc/ipc/channel/channel.h"
 #include "../../../kernel/fs/vfs/vfs.h"
+#include "../../../kernel/security/users/users.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -130,4 +131,24 @@ void cmd_spawn(void) {
     vga_print("spawned process 0x");
     serial_print("spawned process 0x");
     print_hex((u64) idx);
+}
+
+// Real user-account table (Faza I point 14, kernel/security/users/) -
+// lists every registered account, same introspection precedent as
+// commands/hardware.c's cmd_devices/commands/service.c's cmd_service.
+void cmd_users(void) {
+    int i = 0;
+    while (i < g_user_count) {
+        vga_print(g_users[i].username);
+        serial_print(g_users[i].username);
+        vga_print(" uid=0x");
+        serial_print(" uid=0x");
+        print_hex((u64) g_users[i].uid);
+        vga_print(" gid=0x");
+        serial_print(" gid=0x");
+        print_hex((u64) g_users[i].primary_gid);
+        vga_print("  ");
+        serial_print("  ");
+        i = i + 1;
+    }
 }

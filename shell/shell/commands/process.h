@@ -10,5 +10,6 @@ void cmd_chan(void);
 void cmd_send(void);
 void cmd_install(void);
 void cmd_spawn(void);
+void cmd_users(void);
 
 #pragma GCC visibility pop

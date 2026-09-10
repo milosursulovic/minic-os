@@ -388,3 +388,17 @@ void cmd_ring3_objs(void) {
     vga_print("sent ring3 objs trigger");
     serial_print("sent ring3 objs trigger");
 }
+
+// Faza I point 14 item 6: real user-account lookup - see ring3prog.c
+// trigger 29. Deliberately independent of ring3perms (16) - doesn't
+// touch gt_setuid at all.
+void cmd_ring3_users(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 29);
+    if (!ok) {
+        vga_print("ring3users failed - channel full");
+        serial_print("ring3users failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 users trigger");
+    serial_print("sent ring3 users trigger");
+}
