@@ -9,8 +9,14 @@ extern const u32 BACKEND_DEVICE;
 extern const u32 BACKEND_PROCFS;
 
 bool vfs_mount(const char* prefix, u32 backend);
-int vfs_read(const char* path, u8* buf, u32 max_len);
-bool vfs_write(const char* path, u8* data, u32 len);
+// Faza I point 5 item 7: caller_uid is checked against a MiniFS-backed
+// path's real owner_uid/mode (kernel/fs/minifs/minifs.h) before the
+// read/write is allowed - same MODE_OWNER_ONLY_READ/WRITE enforcement
+// proc/ipc/file/file.c's file_object_open() already has, now real for
+// this older raw path too. A path with no owner/mode set yet (or on a
+// non-MiniFS mount) is unaffected - no restriction to check.
+int vfs_read(const char* path, u8* buf, u32 max_len, u8 caller_uid);
+bool vfs_write(const char* path, u8* data, u32 len, u8 caller_uid);
 // dir_path == "" is the real VFS root itself - lists the registered mount
 // points (their own prefixes, minus the leading '/') as directories, so
 // a GUI file browser can navigate the whole namespace from "/" down,

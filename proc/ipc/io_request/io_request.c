@@ -64,10 +64,12 @@ void io_worker_entry(void) {
         while (i < IO_REQUEST_SLOTS) {
             if (g_io_requests[i].used && !g_io_requests[i].done) {
                 if (g_io_requests[i].is_write) {
-                    bool ok = vfs_write(&g_io_requests[i].path[0], &g_io_requests[i].buffer[0], g_io_requests[i].payload_len);
+                    // Out of item 7's scope (Faza I point 5) - unchanged,
+                    // fully-permissive async I/O, same as before.
+                    bool ok = vfs_write(&g_io_requests[i].path[0], &g_io_requests[i].buffer[0], g_io_requests[i].payload_len, 0);
                     g_io_requests[i].result = ok ? (int) g_io_requests[i].payload_len : -1;
                 } else {
-                    int n = vfs_read(&g_io_requests[i].path[0], &g_io_requests[i].buffer[0], IO_REQUEST_BUF_SIZE);
+                    int n = vfs_read(&g_io_requests[i].path[0], &g_io_requests[i].buffer[0], IO_REQUEST_BUF_SIZE, 0);
                     g_io_requests[i].result = n;
                 }
                 g_io_requests[i].done = true;

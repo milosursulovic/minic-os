@@ -64,13 +64,20 @@ static const char* vfs_strip_prefix(const char* path, int mount_index) {
     return rest;
 }
 
-int vfs_read(const char* path, u8* buf, u32 max_len) {
+int vfs_read(const char* path, u8* buf, u32 max_len, u8 caller_uid) {
     int m = vfs_find_mount(path);
     if (m < 0) {
         return -1;
     }
     const char* rest = vfs_strip_prefix(path, m);
     if (g_mounts[m].backend == BACKEND_MINIFS) {
+        u8 owner_uid;
+        u8 mode;
+        if (fs_get_owner_mode(rest, &owner_uid, &mode)) {
+            if ((mode & MODE_OWNER_ONLY_READ) != 0 && caller_uid != owner_uid && caller_uid != 0) {
+                return -1;
+            }
+        }
         return fs_read_file(rest, buf, max_len);
     }
     if (g_mounts[m].backend == BACKEND_DEVICE) {
@@ -84,13 +91,20 @@ int vfs_read(const char* path, u8* buf, u32 max_len) {
 
 // Device/process pseudo-files are read-only; only a MiniFS-backed mount
 // accepts writes.
-bool vfs_write(const char* path, u8* data, u32 len) {
+bool vfs_write(const char* path, u8* data, u32 len, u8 caller_uid) {
     int m = vfs_find_mount(path);
     if (m < 0) {
         return false;
     }
     const char* rest = vfs_strip_prefix(path, m);
     if (g_mounts[m].backend == BACKEND_MINIFS) {
+        u8 owner_uid;
+        u8 mode;
+        if (fs_get_owner_mode(rest, &owner_uid, &mode)) {
+            if ((mode & MODE_OWNER_ONLY_WRITE) != 0 && caller_uid != owner_uid && caller_uid != 0) {
+                return false;
+            }
+        }
         return fs_write_file(rest, data, len);
     }
     return false;

@@ -1,6 +1,8 @@
 #include "vfs.h"
 #include "../../fs/vfs/vfs.h"
 #include "../../fs/minifs/minifs.h"
+#include "../../sched/task.h"
+#include "../../../proc/process.h"
 
 typedef struct __attribute__((packed)) {
     char* dir_path;
@@ -12,9 +14,11 @@ typedef struct __attribute__((packed)) {
 
 bool syscall_vfs(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
     if (num == 4) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        u8 caller_uid = caller_process < 0 ? 0 : g_processes[caller_process].uid;
         char* path = (char*) a1;
         u8* buf = (u8*) a2;
-        int n = vfs_read(path, buf, (u32) a3);
+        int n = vfs_read(path, buf, (u32) a3, caller_uid);
         if (n < 0) {
             *result = (u64) -1;
             return true;
@@ -23,9 +27,11 @@ bool syscall_vfs(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         return true;
     }
     if (num == 5) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        u8 caller_uid = caller_process < 0 ? 0 : g_processes[caller_process].uid;
         char* path = (char*) a1;
         u8* buf = (u8*) a2;
-        bool ok = vfs_write(path, buf, (u32) a3);
+        bool ok = vfs_write(path, buf, (u32) a3, caller_uid);
         if (!ok) {
             *result = (u64) -1;
             return true;
@@ -58,14 +64,18 @@ bool syscall_vfs(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         return true;
     }
     if (num == 50) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        u8 caller_uid = caller_process < 0 ? 0 : g_processes[caller_process].uid;
         char* path = (char*) a1;
-        bool ok = fs_set_owner(path, (u8) a2);
+        bool ok = fs_set_owner(path, (u8) a2, caller_uid);
         *result = ok ? 0 : (u64) -1;
         return true;
     }
     if (num == 51) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        u8 caller_uid = caller_process < 0 ? 0 : g_processes[caller_process].uid;
         char* path = (char*) a1;
-        bool ok = fs_set_mode(path, (u8) a2);
+        bool ok = fs_set_mode(path, (u8) a2, caller_uid);
         *result = ok ? 0 : (u64) -1;
         return true;
     }

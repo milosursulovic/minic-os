@@ -34,15 +34,19 @@ bool fs_list_entry(const char* dir_path, int index, char* name_out, u32* size_ou
 // on-disk bytes (see minifs.c - fits exactly, no format migration).
 // mode is a RESTRICTION mask, not a grant - mode==0 (every file that
 // predates this feature) means no restriction, matching the real
-// already-shipped "anyone can touch anything" behavior exactly. Not
-// permission-gated themselves in this milestone - any process can
-// currently retarget any file's owner/mode (a real, separate, stated
-// limitation).
+// already-shipped "anyone can touch anything" behavior exactly.
 #define MODE_OWNER_ONLY_READ 1
 #define MODE_OWNER_ONLY_WRITE 2
 bool fs_get_owner_mode(const char* path, u8* owner_uid_out, u8* mode_out);
-bool fs_set_owner(const char* path, u8 uid);
-bool fs_set_mode(const char* path, u8 mode);
+// Faza I point 5 item 7: fs_set_owner/fs_set_mode are now permission-
+// gated themselves - refuses (false) unless caller_uid is the file's
+// current owner or root (0), same condition proc/ipc/file/file.c's
+// file_object_open() already established for read/write. A brand-new
+// file defaults to owner_uid=0, so only root can perform its first real
+// retarget - matches file_object_close()'s own privileged "creator
+// becomes owner" step, which deliberately calls this as root.
+bool fs_set_owner(const char* path, u8 uid, u8 caller_uid);
+bool fs_set_mode(const char* path, u8 mode, u8 caller_uid);
 
 #define MINIFS_MAX_FILES 16
 

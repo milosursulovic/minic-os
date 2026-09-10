@@ -76,7 +76,7 @@ int file_object_open(const char* path, bool write_mode, u8 caller_uid) {
     if (write_mode) {
         f->length = 0;
     } else {
-        int n = vfs_read(path, f->buffer, FILE_MAX_SIZE);
+        int n = vfs_read(path, f->buffer, FILE_MAX_SIZE, caller_uid);
         if (n < 0) {
             return -1;
         }
@@ -134,11 +134,16 @@ bool file_object_close(int slot) {
             strip_system_prefix(stripped, f->path);
             fs_delete_file(stripped);  // overwrite semantics - ok if it didn't exist yet
         }
-        ok = vfs_write(f->path, f->buffer, f->length);
+        ok = vfs_write(f->path, f->buffer, f->length, f->owner_uid);
         if (ok && is_system) {
             // Real Unix "creator becomes owner" - applied for real once
             // the file genuinely exists on disk, not at open() time.
-            fs_set_owner(stripped, f->owner_uid);
+            // caller_uid=0 (root) here deliberately - this is the
+            // kernel's own privileged bookkeeping step assigning the
+            // FIRST real owner over a just-created file's default
+            // owner_uid=0 (Faza I point 5 item 7's own new fs_set_owner
+            // gate), not a request from f->owner_uid's own perspective.
+            fs_set_owner(stripped, f->owner_uid, 0);
         }
     }
     f->used = false;

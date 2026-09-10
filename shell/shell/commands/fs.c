@@ -136,7 +136,7 @@ void cmd_mkfile(void) {
     char full_path[128];
     join_path(full_path, g_shell_cwd, name_buf);
 
-    bool ok = vfs_write(full_path, (u8*) &content_buf[0], (u32) i);
+    bool ok = vfs_write(full_path, (u8*) &content_buf[0], (u32) i, 0);  // shell acts as root
     if (!ok) {
         vga_print("mkfile failed");
         serial_print("mkfile failed");
@@ -157,7 +157,7 @@ void cmd_cat(void) {
         return;
     }
     u8 buf[65];
-    int n = vfs_read(&g_last_file_name[0], buf, 64);
+    int n = vfs_read(&g_last_file_name[0], buf, 64, 0);  // shell acts as root
     if (n < 0) {
         vga_print("cat failed");
         serial_print("cat failed");
@@ -332,7 +332,7 @@ void cmd_cp(void) {
     join_path(dst_path, g_shell_cwd, dst_name);
 
     u8 buf[4096];
-    int n = vfs_read(src_path, buf, sizeof(buf));
+    int n = vfs_read(src_path, buf, sizeof(buf), 0);  // shell acts as root
     if (n == -2) {
         vga_print("cp: source too large");
         serial_print("cp: source too large");
@@ -351,7 +351,7 @@ void cmd_cp(void) {
     char stripped_dst[128];
     strip_system_prefix(stripped_dst, dst_path);
     fs_delete_file(stripped_dst);  // overwrite semantics - failure here just means dst didn't exist yet, expected
-    bool ok = vfs_write(dst_path, buf, (u32) n);
+    bool ok = vfs_write(dst_path, buf, (u32) n, 0);  // shell acts as root
     if (!ok) {
         vga_print("cp failed");
         serial_print("cp failed");
@@ -378,7 +378,7 @@ void cmd_mv(void) {
     join_path(dst_path, g_shell_cwd, dst_name);
 
     u8 buf[4096];
-    int n = vfs_read(src_path, buf, sizeof(buf));
+    int n = vfs_read(src_path, buf, sizeof(buf), 0);  // shell acts as root
     if (n == -2) {
         vga_print("mv: source too large");
         serial_print("mv: source too large");
@@ -397,7 +397,7 @@ void cmd_mv(void) {
     char stripped_dst[128];
     strip_system_prefix(stripped_dst, dst_path);
     fs_delete_file(stripped_dst);  // overwrite semantics, same as cp
-    bool ok = vfs_write(dst_path, buf, (u32) n);
+    bool ok = vfs_write(dst_path, buf, (u32) n, 0);  // shell acts as root
     if (!ok) {
         vga_print("mv failed");
         serial_print("mv failed");
@@ -427,7 +427,7 @@ void cmd_touch(void) {
         return;
     }
     u8 empty = 0;
-    vfs_write(path, &empty, 0);  // ignored, same as before: never fails just because the file already exists
+    vfs_write(path, &empty, 0, 0);  // shell acts as root; ignored either way, same as before
     vga_print("touched ");
     serial_print("touched ");
     vga_print(arg);
@@ -462,7 +462,7 @@ void cmd_cat_path(void) {
     char path[128];
     join_path(path, g_shell_cwd, arg);
     u8 buf[65];
-    int n = vfs_read(path, buf, 64);
+    int n = vfs_read(path, buf, 64, 0);  // shell acts as root
     if (n == -2) {
         vga_print("cat: file too large to display");
         serial_print("cat: file too large to display");
@@ -482,7 +482,7 @@ void cmd_cat_path(void) {
 void cmd_vfs_cat(void) {
     char* path = &g_line_buffer[7];  // past "vfscat "
     u8 buf[256];
-    int n = vfs_read(path, buf, 256);
+    int n = vfs_read(path, buf, 256, 0);  // shell acts as root
     if (n == -2) {
         vga_print("vfscat: file too large to display");
         serial_print("vfscat: file too large to display");
@@ -502,7 +502,7 @@ void cmd_vfs_cat(void) {
 void cmd_vfs_write(void) {
     const char* content = "This file was written through the VFS layer, not MiniFS directly.";
     int len = strlen_(content) + 1;  // include the null terminator, same as mkfile's content
-    bool ok = vfs_write("/system/vfsdemo.mfs", (u8*) content, (u32) len);
+    bool ok = vfs_write("/system/vfsdemo.mfs", (u8*) content, (u32) len, 0);  // shell acts as root
     if (ok) {
         vga_print("wrote /system/vfsdemo.mfs via VFS");
         serial_print("wrote /system/vfsdemo.mfs via VFS");

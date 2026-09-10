@@ -402,3 +402,19 @@ void cmd_ring3_users(void) {
     vga_print("sent ring3 users trigger");
     serial_print("sent ring3 users trigger");
 }
+
+// Faza I point 5 item 7: proves the older raw vfs_read path is really
+// permission-gated now, not just the File-object path ring3perms (16)
+// already covers - see ring3prog.c trigger 30. Needs `install` (or a
+// prior `mkfs`) the same as ring3perms already implicitly needs a real
+// MiniFS volume mounted.
+void cmd_ring3_vfs_perm(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 30);
+    if (!ok) {
+        vga_print("ring3vfsperm failed - channel full");
+        serial_print("ring3vfsperm failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 vfsperm trigger");
+    serial_print("sent ring3 vfsperm trigger");
+}

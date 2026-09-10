@@ -30,5 +30,6 @@ void cmd_ring3_shm_sync(void);
 void cmd_ring3_msg(void);
 void cmd_ring3_objs(void);
 void cmd_ring3_users(void);
+void cmd_ring3_vfs_perm(void);
 
 #pragma GCC visibility pop

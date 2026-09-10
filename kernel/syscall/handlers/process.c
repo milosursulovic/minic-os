@@ -162,7 +162,9 @@ bool syscall_process(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             *result = (u64) -1;
             return true;
         }
-        int n = vfs_read(path, &g_registered_service_buf[slot][0], REGISTERED_SERVICE_MAX_BYTES);
+        int caller_process = g_tasks[g_current_task].process_index;
+        u8 caller_uid = caller_process < 0 ? 0 : g_processes[caller_process].uid;
+        int n = vfs_read(path, &g_registered_service_buf[slot][0], REGISTERED_SERVICE_MAX_BYTES, caller_uid);
         if (n < 0) {
             *result = (u64) -1;
             return true;

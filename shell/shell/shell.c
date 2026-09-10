@@ -151,7 +151,7 @@ bool split_two_args(char* args, char* first_out, char** second_out) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 94
+#define SHELL_COMMAND_COUNT 95
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -200,6 +200,7 @@ static void shell_commands_init(void) {
     g_shell_commands[91] = "ring3objs";
     g_shell_commands[92] = "users";
     g_shell_commands[93] = "ring3users";
+    g_shell_commands[94] = "ring3vfsperm";
     g_shell_commands_initialized = true;
 }
 
@@ -421,6 +422,8 @@ void run_command(void) {
         cmd_users();
     } else if (streq(g_line_buffer, "ring3users")) {
         cmd_ring3_users();
+    } else if (streq(g_line_buffer, "ring3vfsperm")) {
+        cmd_ring3_vfs_perm();
     } else if (streq(g_line_buffer, "checkboxcontent")) {
         cmd_checkboxcontent();
     } else if (streq(g_line_buffer, "radiocontent")) {

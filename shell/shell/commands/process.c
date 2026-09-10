@@ -108,7 +108,7 @@ void cmd_objs(void) {
 
 void cmd_install(void) {
     u32 len = (u32) ((u64) &g_test_prog_end - (u64) &g_test_prog_start);
-    bool ok = vfs_write("/system/testprog.bin", &g_test_prog_start, len);
+    bool ok = vfs_write("/system/testprog.bin", &g_test_prog_start, len, 0);  // shell acts as root
     if (!ok) {
         vga_print("install failed");
         serial_print("install failed");

@@ -1153,6 +1153,38 @@ void _start(void) {
         u8 gid99;
         bool found99 = gt_user_lookup(99, &name99[0], &gid99);
         do_syscall(1, (u64) "uid=0x63 found=0x", (u64) found99, 0);
+    } else if (trigger_value == 30) {
+        // trigger 30 (ring3vfsperm) - Faza I point 5 item 7: proves the
+        // OLDER raw vfs_read path (syscall 4, NOT the File-object path
+        // ring3perms/trigger 16 already covers) is now really permission-
+        // gated too. Seeds a real owner=1/MODE_OWNER_ONLY_READ file the
+        // same way ring3perms does (file_object_open/write/close +
+        // gt_fs_set_mode), then reads it via the RAW gt_vfs_read
+        // directly - bypassing file_object_open's own separate pre-check
+        // entirely - as a non-owner/non-root uid (must fail), then as
+        // the real owner and as root (must both succeed).
+        gt_setuid(1);
+        int owner_handle = gt_file_open("/system/vfsperm.mfs", 1);
+        const char* secret = "vfs-layer-owner-only";
+        gt_file_write(owner_handle, (const u8*) secret, 20);
+        gt_file_close(owner_handle);  // real Unix "creator becomes owner" - now owned by uid 1
+
+        gt_fs_set_mode("vfsperm.mfs", MODE_OWNER_ONLY_READ);
+
+        gt_setuid(5);  // an arbitrary unrelated non-root uid
+        char buf5[32];
+        int n5 = gt_vfs_read("/system/vfsperm.mfs", (u8*) &buf5[0], 31);
+        do_syscall(1, (u64) "(uid=5, non-owner, non-root) raw vfs_read n=0x", (u64) n5, 0);
+
+        gt_setuid(1);  // owner
+        char buf1[32];
+        int n1 = gt_vfs_read("/system/vfsperm.mfs", (u8*) &buf1[0], 31);
+        do_syscall(1, (u64) "(uid=1, owner) raw vfs_read n=0x", (u64) n1, 0);
+
+        gt_setuid(0);  // root
+        char buf0[32];
+        int n0 = gt_vfs_read("/system/vfsperm.mfs", (u8*) &buf0[0], 31);
+        do_syscall(1, (u64) "(uid=0, root) raw vfs_read n=0x", (u64) n0, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

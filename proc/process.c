@@ -124,7 +124,7 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
 static u8 g_loaded_image_buf[LOADED_IMAGE_BUF_SIZE];
 
 int spawn_process_from_path(const char* path, u64 load_vaddr, u64 stack_vaddr) {
-    int n = vfs_read(path, &g_loaded_image_buf[0], LOADED_IMAGE_BUF_SIZE);
+    int n = vfs_read(path, &g_loaded_image_buf[0], LOADED_IMAGE_BUF_SIZE, 0);  // out of item 7's scope - unchanged, fully-permissive spawn read
     if (n < 0) {
         return -1;
     }

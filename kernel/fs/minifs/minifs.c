@@ -437,7 +437,7 @@ bool fs_get_owner_mode(const char* path, u8* owner_uid_out, u8* mode_out) {
     return true;
 }
 
-bool fs_set_owner(const char* path, u8 uid) {
+bool fs_set_owner(const char* path, u8 uid, u8 caller_uid) {
     u32 parent_lba;
     char name[20];
     if (!resolve_parent_dir(path, &parent_lba, name)) {
@@ -450,13 +450,16 @@ bool fs_set_owner(const char* path, u8 uid) {
     dir_entry* entries = (dir_entry*) &dir_buf[0];
     int slot = find_entry(entries, name);
     if (slot < 0) {
+        return false;
+    }
+    if (caller_uid != entries[slot].owner_uid && caller_uid != 0) {
         return false;
     }
     entries[slot].owner_uid = uid;
     return ata_write_sector(parent_lba, dir_buf);
 }
 
-bool fs_set_mode(const char* path, u8 mode) {
+bool fs_set_mode(const char* path, u8 mode, u8 caller_uid) {
     u32 parent_lba;
     char name[20];
     if (!resolve_parent_dir(path, &parent_lba, name)) {
@@ -469,6 +472,9 @@ bool fs_set_mode(const char* path, u8 mode) {
     dir_entry* entries = (dir_entry*) &dir_buf[0];
     int slot = find_entry(entries, name);
     if (slot < 0) {
+        return false;
+    }
+    if (caller_uid != entries[slot].owner_uid && caller_uid != 0) {
         return false;
     }
     entries[slot].mode = mode;
