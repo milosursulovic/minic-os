@@ -1091,6 +1091,37 @@ void _start(void) {
         do_syscall(1, (u64) "ring3msg extra_len=0x", (u64) g_msg_extra_len, 0);
         do_syscall(1, (u64) "ring3msg payload: ", 0, 0);
         do_syscall(1, (u64) &buf[0], 0, 0);
+    } else if (trigger_value == 28) {
+        // trigger 28 (ring3objs) - Faza I point 2 item 5: real Directory/
+        // Device object types, handle+rights gated (syscalls 87-92)
+        // instead of the older raw dir_path+index (syscall 37) / raw
+        // device index (syscall 64).
+        int dir_handle = gt_directory_open("/system");
+        do_syscall(1, (u64) "dir_handle=0x", (u64) dir_handle, 0);
+        char entry_name[64];
+        u32 entry_size;
+        bool entry_is_dir;
+        while (gt_directory_read_next(dir_handle, &entry_name[0], &entry_size, &entry_is_dir)) {
+            do_syscall(1, (u64) "  entry: ", 0, 0);
+            do_syscall(1, (u64) &entry_name[0], 0, 0);
+            do_syscall(1, (u64) "    size=0x", (u64) entry_size, 0);
+            do_syscall(1, (u64) "    is_dir=0x", (u64) entry_is_dir, 0);
+        }
+        gt_directory_close(dir_handle);
+        do_syscall(1, (u64) "directory listing done", 0, 0);
+
+        int device_handle = gt_device_open(0);
+        do_syscall(1, (u64) "device_handle=0x", (u64) device_handle, 0);
+        char device_name[32];
+        int device_category;
+        u32 device_info;
+        bool queried = gt_device_query(device_handle, &device_name[0], &device_category, &device_info);
+        do_syscall(1, (u64) "device_query ok=0x", (u64) queried, 0);
+        do_syscall(1, (u64) "device name: ", 0, 0);
+        do_syscall(1, (u64) &device_name[0], 0, 0);
+        do_syscall(1, (u64) "device category=0x", (u64) device_category, 0);
+        do_syscall(1, (u64) "device info=0x", (u64) device_info, 0);
+        gt_device_close(device_handle);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

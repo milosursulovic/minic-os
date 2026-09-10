@@ -132,6 +132,7 @@
 #include "../../proc/ipc/event/event.h"
 #include "../../proc/ipc/mutex/mutex.h"
 #include "../../proc/ipc/timer/timer.h"
+#include "../../proc/ipc/directory/directory.h"
 #include "../drivers/device_manager/device_manager.h"
 #include "../services/service_manager.h"
 #include "../lib/rand.h"
@@ -197,6 +198,19 @@ typedef struct __attribute__((packed)) {
     int* category_out;
     u32* info_out;
 } device_list_args;
+
+// Faza I point 2 item 5 - OBJ_DIRECTORY/OBJ_DEVICE (syscalls 87-92).
+typedef struct __attribute__((packed)) {
+    char* name_out;
+    u32* size_out;
+    bool* is_dir_out;
+} directory_read_args;
+
+typedef struct __attribute__((packed)) {
+    char* name_out;
+    int* category_out;
+    u32* info_out;
+} device_query_args;
 
 typedef struct __attribute__((packed)) {
     int index;
@@ -1769,6 +1783,147 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         u32 max_len = (u32) a3;
         u32 got = channel_receive_msg(channel_index, (void*) a2, max_len);
         return (u64) got;
+    }
+    if (num == 87) {
+        // directory_open - Faza I point 2 item 5. Same open->alloc_object->
+        // alloc_handle shape as syscall 44 (file_object_open).
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        char* dir_path = (char*) a1;
+        int slot = directory_object_open(dir_path);
+        if (slot < 0) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_DIRECTORY, slot);
+        if (obj_index < 0) {
+            directory_object_close(slot);
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, RIGHT_READ);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            directory_object_close(slot);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 88) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_READ) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_DIRECTORY) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        directory_read_args* args = (directory_read_args*) a2;
+        bool ok = directory_object_read_next(slot, args->name_out, args->size_out, args->is_dir_out);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 89) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_DIRECTORY) {
+            return (u64) -1;
+        }
+        int slot = g_objects[obj_index].data_index;
+        bool ok = directory_object_close(slot);
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 90) {
+        // device_open - Faza I point 2 item 5. data_index is the device's
+        // own index directly into g_devices[] (see OBJ_DEVICE's own
+        // comment, object.h).
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int index = (int) a1;
+        char dummy_name[32];
+        int dummy_category;
+        u32 dummy_info;
+        if (!device_manager_get(index, &dummy_name[0], &dummy_category, &dummy_info)) {
+            return (u64) -1;
+        }
+        int obj_index = alloc_object(OBJ_DEVICE, index);
+        if (obj_index < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, RIGHT_QUERY);
+        if (handle_idx < 0) {
+            free_object(obj_index);
+            return (u64) -1;
+        }
+        return (u64) handle_idx;
+    }
+    if (num == 91) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_QUERY) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_DEVICE) {
+            return (u64) -1;
+        }
+        int index = g_objects[obj_index].data_index;
+        device_query_args* args = (device_query_args*) a2;
+        bool ok = device_manager_get(index, args->name_out, args->category_out, args->info_out);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 92) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_DEVICE) {
+            return (u64) -1;
+        }
+        free_object(obj_index);
+        free_handle(caller_process, handle_idx);
+        return 0;
     }
     return (u64) -1;  // unknown syscall
 }

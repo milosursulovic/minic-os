@@ -23,6 +23,15 @@
 #define OBJ_EVENT 11
 #define OBJ_MUTEX 12
 #define OBJ_TIMER 13
+// data_index is a slot index into g_open_directories[]
+// (proc/ipc/directory/directory.h). Faza I point 2 item 5.
+#define OBJ_DIRECTORY 14
+// data_index is the device's own index directly into
+// kernel/drivers/device_manager/device_manager.h's g_devices[] - same
+// "no separate array needed" pattern OBJ_THREAD already established for
+// g_tasks[], since device_entry already holds everything a Device
+// object needs to expose.
+#define OBJ_DEVICE 15
 
 typedef struct {
     bool used;

@@ -516,6 +516,55 @@ static __attribute__((unused)) u32 gt_channel_receive_msg(int handle, void* buf,
     return (u32) gt_syscall(86, (u64) handle, (u64) buf, (u64) max_len);
 }
 
+// Faza I point 2 item 5: real Directory/Device object types (syscalls
+// 87-92) - handle+rights gated, unlike the older raw-index gt_fs_list()/
+// gt_device_list() above.
+static __attribute__((unused)) int gt_directory_open(const char* dir_path) {
+    u64 result = gt_syscall(87, (u64) dir_path, 0, 0);
+    return result == (u64) -1 ? -1 : (int) result;
+}
+
+typedef struct __attribute__((packed)) {
+    char* name_out;
+    u32* size_out;
+    bool* is_dir_out;
+} gt_directory_read_args;
+
+static __attribute__((unused)) bool gt_directory_read_next(int handle, char* name_out, u32* size_out, bool* is_dir_out) {
+    gt_directory_read_args args;
+    args.name_out = name_out;
+    args.size_out = size_out;
+    args.is_dir_out = is_dir_out;
+    return gt_syscall(88, (u64) handle, (u64) &args, 0) != (u64) -1;
+}
+
+static __attribute__((unused)) bool gt_directory_close(int handle) {
+    return gt_syscall(89, (u64) handle, 0, 0) != (u64) -1;
+}
+
+static __attribute__((unused)) int gt_device_open(int index) {
+    u64 result = gt_syscall(90, (u64) index, 0, 0);
+    return result == (u64) -1 ? -1 : (int) result;
+}
+
+typedef struct __attribute__((packed)) {
+    char* name_out;
+    int* category_out;
+    u32* info_out;
+} gt_device_query_args;
+
+static __attribute__((unused)) bool gt_device_query(int handle, char* name_out, int* category_out, u32* info_out) {
+    gt_device_query_args args;
+    args.name_out = name_out;
+    args.category_out = category_out;
+    args.info_out = info_out;
+    return gt_syscall(91, (u64) handle, (u64) &args, 0) != (u64) -1;
+}
+
+static __attribute__((unused)) bool gt_device_close(int handle) {
+    return gt_syscall(92, (u64) handle, 0, 0) != (u64) -1;
+}
+
 // Minimal, self-contained hex formatter - kernel/lib/strings.c's format_hex()
 // isn't linked into ring3 programs (each is its own standalone-linked
 // blob, see proc/ring3.ld). Null-terminates, unlike format_hex(), since
