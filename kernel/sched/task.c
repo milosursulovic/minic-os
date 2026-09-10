@@ -241,9 +241,22 @@ u64 channel_receive(int channel_index) {
         self->waiting_on = &g_channels[channel_index].full;
         yield();
     }
-    u64 value = g_channels[channel_index].message;
-    g_channels[channel_index].full = false;
+    u64 value = 0;
+    channel_take_msg(channel_index, &value, sizeof(value));
     return value;
+}
+
+// Faza I point 8 item 4: same blocking-wait shape as channel_receive()
+// above, but hands back the real structured payload instead of
+// interpreting it as one u64.
+u32 channel_receive_msg(int channel_index, void* buf, u32 max_len) {
+    while (!channel_has_message(channel_index)) {
+        task* self = &g_tasks[g_current_task];
+        self->blocked = true;
+        self->waiting_on = &g_channels[channel_index].full;
+        yield();
+    }
+    return channel_take_msg(channel_index, buf, max_len);
 }
 
 void io_request_wait(int slot_index) {

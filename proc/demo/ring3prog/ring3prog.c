@@ -176,8 +176,32 @@ static bool channel_send(channel* self, u64 value) {
     return result != (u64) -1;
 }
 
-static u64 channel_receive(channel* self) {
-    return do_syscall(8, (u64) self->handle, 0, 0);
+// Faza I point 8 item 4: real structured Channel payload, beyond one raw
+// u64 (syscall 86 / gt_channel_receive_msg). A channel is a single-slot
+// mailbox, so a trigger's own value and any extra structured data for it
+// must travel together as ONE message rather than two separate sends
+// (two sends would race/fail - the second one hits "full" before this
+// process has drained the first, a real bug found while building
+// trigger 27 below). First 8 bytes are always the trigger value (every
+// existing trigger only ever sends exactly 8 bytes via channel_send(),
+// so this replaces the old u64-only channel_receive()/syscall 8 at the
+// top of _start()'s dispatch outright) - anything beyond that is the
+// trigger-specific extra payload, left in g_msg_buf/g_msg_extra_len for
+// whichever branch needs it.
+#define RING3_MSG_BUF_MAX 128  // matches CHANNEL_MSG_MAX (proc/ipc/channel/channel.h)
+static u8 g_msg_buf[RING3_MSG_BUF_MAX];
+static u32 g_msg_extra_len;
+
+static u64 channel_receive_full(channel* self) {
+    u32 total = gt_channel_receive_msg(self->handle, &g_msg_buf[0], RING3_MSG_BUF_MAX);
+    u64 value = 0;
+    if (total >= sizeof(value)) {
+        value = *(u64*) &g_msg_buf[0];
+        g_msg_extra_len = total - (u32) sizeof(value);
+    } else {
+        g_msg_extra_len = 0;
+    }
+    return value;
 }
 
 static u64 process_spawn(process* self, u64 load_vaddr, u64 stack_vaddr) {
@@ -442,7 +466,7 @@ void _start(void) {
     channel_open(&spawn_trigger, 1);
     channel_send(&spawn_trigger, 0xDEADBEEF);
 
-    u64 trigger_value = channel_receive(&spawn_trigger);
+    u64 trigger_value = channel_receive_full(&spawn_trigger);
     do_syscall(1, (u64) "Channel.receive() got trigger 0x", trigger_value, 0);
 
     // trigger 2 (ring3fault): forbidden write to kernel space - must page fault.
@@ -1050,6 +1074,23 @@ void _start(void) {
         do_syscall(1, (u64) "parent shm_map ok=0x", (u64) mapped, 0);
         do_syscall(1, (u64) "parent read from child: ", 0, 0);
         do_syscall(1, (u64) SHM_SYNC_VADDR, 0, 0);
+    } else if (trigger_value == 27) {
+        // trigger 27 (ring3msg) - Faza I point 8 item 4: a real
+        // structured Channel payload, beyond one raw u64. channel_receive_full()
+        // above already read the WHOLE message (trigger value + extra
+        // payload) in one shot - g_msg_extra_len/g_msg_buf[8..] hold the
+        // structured part the shell's ring3msg command appended after
+        // the trigger value.
+        char buf[RING3_MSG_BUF_MAX];
+        u32 i = 0;
+        while (i < g_msg_extra_len) {
+            buf[i] = (char) g_msg_buf[8 + i];
+            i = i + 1;
+        }
+        buf[g_msg_extra_len] = '\0';
+        do_syscall(1, (u64) "ring3msg extra_len=0x", (u64) g_msg_extra_len, 0);
+        do_syscall(1, (u64) "ring3msg payload: ", 0, 0);
+        do_syscall(1, (u64) &buf[0], 0, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

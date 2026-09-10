@@ -1712,5 +1712,63 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
         }
         return 0;
     }
+    if (num == 85) {
+        // channel_send_msg - Faza I point 8 item 4. Same handle/rights
+        // validation as syscall 7 (channel_send), plus a real payload
+        // length cap. a2 is dereferenced directly as a user pointer, the
+        // same no-copy_from_user convention every other ptr-taking
+        // syscall in this kernel already uses (e.g. syscall 1/46).
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_SEND) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_CHANNEL) {
+            return (u64) -1;
+        }
+        u32 len = (u32) a3;
+        if (len > CHANNEL_MSG_MAX) {
+            return (u64) -1;
+        }
+        int channel_index = g_objects[obj_index].data_index;
+        bool ok = channel_send_msg(channel_index, (const void*) a2, len);
+        return ok ? 0 : (u64) -1;
+    }
+    if (num == 86) {
+        // channel_receive_msg - Faza I point 8 item 4. Same handle/rights
+        // validation as syscall 8 (channel_receive).
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            return (u64) -1;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            return (u64) -1;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            return (u64) -1;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_RECEIVE) == 0) {
+            return (u64) -1;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_CHANNEL) {
+            return (u64) -1;
+        }
+        int channel_index = g_objects[obj_index].data_index;
+        u32 max_len = (u32) a3;
+        u32 got = channel_receive_msg(channel_index, (void*) a2, max_len);
+        return (u64) got;
+    }
     return (u64) -1;  // unknown syscall
 }

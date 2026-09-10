@@ -506,6 +506,16 @@ static __attribute__((unused)) bool gt_handle_grant3(int handle_a, int handle_b,
     return gt_syscall(84, (u64) handle_a, packed_bc, target_task_index) != (u64) -1;
 }
 
+// Faza I point 8 item 4: real structured payload over a Channel, beyond
+// one raw u64 (syscalls 85/86).
+static __attribute__((unused)) bool gt_channel_send_msg(int handle, const void* data, u32 len) {
+    return gt_syscall(85, (u64) handle, (u64) data, (u64) len) != (u64) -1;
+}
+
+static __attribute__((unused)) u32 gt_channel_receive_msg(int handle, void* buf, u32 max_len) {
+    return (u32) gt_syscall(86, (u64) handle, (u64) buf, (u64) max_len);
+}
+
 // Minimal, self-contained hex formatter - kernel/lib/strings.c's format_hex()
 // isn't linked into ring3 programs (each is its own standalone-linked
 // blob, see proc/ring3.ld). Null-terminates, unlike format_hex(), since

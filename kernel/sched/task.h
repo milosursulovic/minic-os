@@ -60,6 +60,7 @@ void mutex_unlock(int index);
 void timer_wait(int index);
 void sleep_ticks(u64 ticks);
 u64 channel_receive(int channel_index);
+u32 channel_receive_msg(int channel_index, void* buf, u32 max_len);
 void io_request_wait(int slot_index);
 void net_ping_request_wait(int slot_index);
 void net_tcp_request_wait(int slot_index);
