@@ -19,6 +19,7 @@
 #include "kernel/security/users/users.h"
 #include "kernel/lib/rand.h"
 #include "kernel/fs/vfs/vfs.h"
+#include "kernel/fs/minifs/minifs.h"
 #include "shell/shell/shell.h"
 #include "shell/editor/editor.h"
 
@@ -96,6 +97,45 @@ void _start(void) {
     vfs_mount("/system", BACKEND_MINIFS);
     vfs_mount("/devices", BACKEND_DEVICE);
     vfs_mount("/processes", BACKEND_PROCFS);
+
+    // Faza I point 6, item 12: the remaining real mounts. /temp is a
+    // genuinely ephemeral RAM-backed tmpfs (kernel/fs/tmpfs); /volumes
+    // is an alias view of this same mount table (kernel/fs/vfs.c's
+    // BACKEND_MOUNTS, no real second disk exists to represent
+    // otherwise); /apps and /users are real MiniFS subdirectories
+    // (fs_create_dir is already idempotent - fails harmlessly if the
+    // name exists, same "ok if it didn't exist yet" pattern editor.c/
+    // settings.c already rely on, safe to call every boot).
+    vfs_mount("/temp", BACKEND_TMPFS);
+    vfs_mount("/volumes", BACKEND_MOUNTS);
+    vfs_mount_at("/apps", BACKEND_MINIFS, "apps");
+    fs_create_dir("apps");
+    vfs_mount_at("/users", BACKEND_MINIFS, "users");
+    fs_create_dir("users");
+    // Real per-user home directories for whichever accounts actually
+    // exist (users_init() above seeded root/guest) - not hardcoded
+    // names, so this stays correct if user_create() adds more later.
+    int users_i = 0;
+    while (users_i < MAX_USERS) {
+        if (g_users[users_i].used) {
+            char home_path[64];
+            int p = 0;
+            const char* prefix = "users/";
+            while (prefix[p] != '\0') {
+                home_path[p] = prefix[p];
+                p = p + 1;
+            }
+            int q = 0;
+            while (g_users[users_i].username[q] != '\0') {
+                home_path[p] = g_users[users_i].username[q];
+                p = p + 1;
+                q = q + 1;
+            }
+            home_path[p] = '\0';
+            fs_create_dir(home_path);
+        }
+        users_i = users_i + 1;
+    }
 
     // Registered (available to "service start hello_service"), not
     // auto-started - real service-manager semantics, matches init.c's own

@@ -84,34 +84,13 @@ char g_shell_cwd[128] = "";
 static int g_next_file_index;
 static char g_last_file_name[128];  // full path, not just the bare name - cmd_cat needs no cwd logic of its own
 
-// fs_create_dir/fs_delete_file (raw MiniFS, no VFS wrapper exists) and
-// the full-screen editor are only ever meaningful inside the one
-// writable mount - /devices and /processes reflect live kernel state,
-// not something you create/delete/edit files in. Same name/shape as
-// proc/apps/file_manager.c's own in_system_mount().
-static bool in_system_mount(const char* path) {
-    return starts_with(path, "/system");
-}
-
-// Strips a leading "/system" (+ one following '/', if present) from a
-// real VFS-absolute path, for the raw MiniFS calls that have no VFS
-// wrapper - MiniFS's own path resolver (fs/minifs/minifs.c's
-// split_path()) has no concept of a mount prefix at all, only bare-
-// relative paths. Byte-for-byte the same logic as
-// proc/apps/file_manager.c's own strip_system_prefix() (can't share it
-// directly - that one runs in ring3, this runs in the kernel).
-static void strip_system_prefix(char* out, const char* path) {
-    const char* rest = &path[7];  // strlen("/system")
-    if (rest[0] == '/') {
-        rest = &rest[1];
-    }
-    int i = 0;
-    while (rest[i] != '\0') {
-        out[i] = rest[i];
-        i = i + 1;
-    }
-    out[i] = '\0';
-}
+// Faza I point 6 item 12: /apps and /users are now real, separate
+// MiniFS-backed mounts too (not just /system), so the writability gate
+// and raw-MiniFS path resolution below are generic (kernel/fs/vfs/vfs.c's
+// vfs_is_writable()/vfs_resolve_minifs_path()) instead of hardcoding
+// "starts_with(path, \"/system\")" - proc/apps/file_manager.c still has
+// its own, narrower /system-only version (out of this item's scope; its
+// GUI navigation wasn't part of the approved verification for this item).
 
 // Creates a new file each call, inside the current directory: file0.mfs, file1.mfs, ...
 void cmd_mkfile(void) {
@@ -170,11 +149,13 @@ void cmd_cat(void) {
 }
 
 void cmd_ls(void) {
-    // file_count is a whole-MiniFS-volume stat (fs_superblock_info) - it
-    // only means something while actually browsing /system; the virtual
-    // root (the mount table itself) and /devices/processes (live kernel
-    // state, not a MiniFS volume) have no such concept.
-    if (in_system_mount(g_shell_cwd)) {
+    // file_count is a whole-MiniFS-volume stat (fs_superblock_info) - the
+    // same number regardless of which MiniFS-backed mount (/system,
+    // /apps, /users) it's shown under, since they're all the one real
+    // disk; the virtual root, /devices/processes, /temp and /volumes
+    // (none of them a real MiniFS volume) have no such concept.
+    char minifs_scratch[200];
+    if (vfs_resolve_minifs_path(g_shell_cwd, minifs_scratch)) {
         u32 file_count;
         if (!fs_superblock_info(&file_count)) {
             vga_print("ls failed - disk read error");
@@ -294,14 +275,7 @@ void cmd_mkdir(void) {
     char* arg = &g_line_buffer[6];  // past "mkdir "
     char new_path[128];
     join_path(new_path, g_shell_cwd, arg);
-    if (!in_system_mount(new_path)) {
-        vga_print("mkdir: not writable here");
-        serial_print("mkdir: not writable here");
-        return;
-    }
-    char stripped[128];
-    strip_system_prefix(stripped, new_path);
-    bool ok = fs_create_dir(stripped);
+    bool ok = vfs_mkdir(new_path);
     if (!ok) {
         vga_print("mkdir failed");
         serial_print("mkdir failed");
@@ -343,14 +317,12 @@ void cmd_cp(void) {
         serial_print("cp: source not found");
         return;
     }
-    if (!in_system_mount(dst_path)) {
+    if (!vfs_is_writable(dst_path)) {
         vga_print("cp: destination not writable");
         serial_print("cp: destination not writable");
         return;
     }
-    char stripped_dst[128];
-    strip_system_prefix(stripped_dst, dst_path);
-    fs_delete_file(stripped_dst);  // overwrite semantics - failure here just means dst didn't exist yet, expected
+    vfs_delete(dst_path, 0);  // overwrite semantics - failure here just means dst didn't exist yet, expected
     bool ok = vfs_write(dst_path, buf, (u32) n, 0);  // shell acts as root
     if (!ok) {
         vga_print("cp failed");
@@ -389,25 +361,19 @@ void cmd_mv(void) {
         serial_print("mv: source not found");
         return;
     }
-    if (!in_system_mount(dst_path)) {
+    if (!vfs_is_writable(dst_path)) {
         vga_print("mv: destination not writable");
         serial_print("mv: destination not writable");
         return;
     }
-    char stripped_dst[128];
-    strip_system_prefix(stripped_dst, dst_path);
-    fs_delete_file(stripped_dst);  // overwrite semantics, same as cp
+    vfs_delete(dst_path, 0);  // overwrite semantics, same as cp
     bool ok = vfs_write(dst_path, buf, (u32) n, 0);  // shell acts as root
     if (!ok) {
         vga_print("mv failed");
         serial_print("mv failed");
         return;
     }
-    if (in_system_mount(src_path)) {
-        char stripped_src[128];
-        strip_system_prefix(stripped_src, src_path);
-        fs_delete_file(stripped_src);
-    }
+    vfs_delete(src_path, 0);  // best-effort - a non-writable/non-existent source is simply left alone
     vga_print("moved");
     serial_print("moved");
 }
@@ -421,7 +387,7 @@ void cmd_touch(void) {
     char* arg = &g_line_buffer[6];  // past "touch "
     char path[128];
     join_path(path, g_shell_cwd, arg);
-    if (!in_system_mount(path)) {
+    if (!vfs_is_writable(path)) {
         vga_print("touch: not writable here");
         serial_print("touch: not writable here");
         return;
@@ -444,13 +410,12 @@ void cmd_edit(void) {
     char* arg = &g_line_buffer[5];  // past "edit "
     char path[128];
     join_path(path, g_shell_cwd, arg);
-    if (!in_system_mount(path)) {
+    char stripped[200];
+    if (!vfs_resolve_minifs_path(path, stripped)) {
         vga_print("edit: not writable here");
         serial_print("edit: not writable here");
         return;
     }
-    char stripped[128];
-    strip_system_prefix(stripped, path);
     editor_start(stripped);
 }
 
