@@ -37,5 +37,10 @@ extern int g_device_count;
 // or -1 if this is a new device and no slot is free.
 int device_manager_register(const char* name, int category, u32 info);
 bool device_manager_get(int index, char* name_out, int* category_out, u32* info_out);
+// Real nested device tree hierarchy (Faza I point 9, item 13) - the same
+// "raw index, false past the end" contract device_manager_get() already
+// uses, just pre-filtered to one category. category_index is 0-based
+// *within that category*, not a raw g_devices[] slot number.
+bool device_manager_get_in_category(int category, int category_index, char* name_out, u32* info_out);
 
 #pragma GCC visibility pop

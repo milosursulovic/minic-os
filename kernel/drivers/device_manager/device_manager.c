@@ -64,3 +64,23 @@ bool device_manager_get(int index, char* name_out, int* category_out, u32* info_
     *info_out = g_devices[index].info;
     return true;
 }
+
+bool device_manager_get_in_category(int category, int category_index, char* name_out, u32* info_out) {
+    if (category_index < 0) {
+        return false;
+    }
+    int seen = 0;
+    int i = 0;
+    while (i < MAX_DEVICES) {
+        if (g_devices[i].used && g_devices[i].category == category) {
+            if (seen == category_index) {
+                copy_bounded(name_out, g_devices[i].name, 32);
+                *info_out = g_devices[i].info;
+                return true;
+            }
+            seen = seen + 1;
+        }
+        i = i + 1;
+    }
+    return false;
+}

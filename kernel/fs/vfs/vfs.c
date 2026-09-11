@@ -197,7 +197,7 @@ bool vfs_list_entry(const char* dir_path, int index, char* name_out, u32* size_o
         return fs_list_entry(full, index, name_out, size_out, is_dir_out);
     }
     if (g_mounts[m].backend == BACKEND_DEVICE) {
-        return devfs_list_entry(index, name_out, size_out, is_dir_out);
+        return devfs_list_entry(rest, index, name_out, size_out, is_dir_out);
     }
     if (g_mounts[m].backend == BACKEND_PROCFS) {
         return procfs_list_entry(index, name_out, size_out, is_dir_out);
