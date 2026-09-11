@@ -190,6 +190,43 @@ bool syscall_process(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         *result = 0;
         return true;
     }
+    if (num == 96) {
+        // process_wait - Faza I point 3 item 9: real blocking wait for a
+        // whole process, same handle/RIGHT_QUERY/OBJ_PROCESS validation
+        // syscall 3 already does, then the exact cooperative busy-yield
+        // shape kernel/sched/task.c's own thread_join() already
+        // established for threads (checking the process's own `used`
+        // flag instead of the task's).
+        int caller_process = g_tasks[g_current_task].process_index;
+        if (caller_process < 0) {
+            *result = (u64) -1;
+            return true;
+        }
+        int handle_idx = (int) a1;
+        if (handle_idx < 0 || handle_idx >= HANDLES_PER_PROCESS) {
+            *result = (u64) -1;
+            return true;
+        }
+        if (!g_handle_tables[caller_process][handle_idx].used) {
+            *result = (u64) -1;
+            return true;
+        }
+        if ((g_handle_tables[caller_process][handle_idx].rights & RIGHT_QUERY) == 0) {
+            *result = (u64) -1;
+            return true;
+        }
+        int obj_index = g_handle_tables[caller_process][handle_idx].object_index;
+        if (g_objects[obj_index].type != OBJ_PROCESS) {
+            *result = (u64) -1;
+            return true;
+        }
+        int proc_idx = g_objects[obj_index].data_index;
+        while (g_processes[proc_idx].used) {
+            yield();
+        }
+        *result = 0;
+        return true;
+    }
     if (num == 49) {
         int caller_process = g_tasks[g_current_task].process_index;
         if (caller_process < 0) {

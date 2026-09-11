@@ -1222,6 +1222,31 @@ void _start(void) {
         u64* guard = (u64*) (0x80020000 - 8);
         *guard = 0xDEADBEEF;
         do_syscall(1, (u64) "guard write succeeded (BUG!)", 0, 0);
+    } else if (trigger_value == 33) {
+        // trigger 33 (ring3wait) - Faza I point 3 item 9: real high-level
+        // Process.spawn()/.wait() API. gt_process_wait() (syscall 96)
+        // must genuinely block until the target exits, not race ahead.
+        // Reuses trigger 31's own real fork() (item 8) as the child-
+        // creation vehicle - simpler than routing a fresh spawn_process()
+        // child through the shared boot-listener channel, and just as
+        // real a process boundary.
+        u64 fork_result = do_syscall(95, 0, 0, 0);
+        if (fork_result == 0) {
+            int timer_handle = gt_timer_create(30);
+            gt_timer_wait(timer_handle);
+            do_syscall(1, (u64) "ring3wait child: done waiting, exiting", 0, 0);
+            do_syscall(12, 0, 0, 0);  // process_exit - never returns
+            for (;;) {
+            }
+        }
+        int handle = gt_process_open((int) fork_result, RIGHT_QUERY);
+        u64 start_tick = gt_get_ticks();
+        bool waited = gt_process_wait(handle);
+        u64 elapsed = gt_get_ticks() - start_tick;
+        do_syscall(1, (u64) "ring3wait parent: wait ok=0x", (u64) waited, 0);
+        do_syscall(1, (u64) "ring3wait parent: elapsed_ticks=0x", elapsed, 0);
+        u64 post_query = gt_process_query(handle);
+        do_syscall(1, (u64) "ring3wait parent: post-wait query=0x", post_query, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

@@ -33,5 +33,6 @@ void cmd_ring3_users(void);
 void cmd_ring3_vfs_perm(void);
 void cmd_ring3_fork(void);
 void cmd_ring3_guard(void);
+void cmd_ring3_wait(void);
 
 #pragma GCC visibility pop

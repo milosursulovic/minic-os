@@ -23,6 +23,7 @@
 #include "gui_toolkit/channel.h"
 #include "gui_toolkit/directory.h"
 #include "gui_toolkit/users.h"
+#include "gui_toolkit/process.h"
 
 #include "gui_toolkit/widgets/button.h"
 #include "gui_toolkit/widgets/label.h"

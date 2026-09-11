@@ -444,3 +444,16 @@ void cmd_ring3_guard(void) {
     vga_print("sent ring3 guard trigger - expect a page fault");
     serial_print("sent ring3 guard trigger - expect a page fault");
 }
+
+// Faza I point 3 item 9: real high-level Process.spawn()/.wait() native
+// API - see ring3prog.c trigger 33.
+void cmd_ring3_wait(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 33);
+    if (!ok) {
+        vga_print("ring3wait failed - channel full");
+        serial_print("ring3wait failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 wait trigger");
+    serial_print("sent ring3 wait trigger");
+}
