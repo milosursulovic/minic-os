@@ -39,22 +39,25 @@ static int find_free_slot(void) {
     return -1;
 }
 
-int file_object_open(const char* path, bool write_mode, u8 caller_uid) {
+int file_object_open(const char* path, int access, u8 caller_uid) {
+    bool wants_read = access != FILE_ACCESS_WRONLY;
+    bool wants_write = access != FILE_ACCESS_RDONLY;
     if (in_system_mount(path)) {
         char stripped[128];
         strip_system_prefix(stripped, path);
         u8 owner_uid;
         u8 mode;
         if (fs_get_owner_mode(stripped, &owner_uid, &mode)) {
-            u8 restriction = write_mode ? MODE_OWNER_ONLY_WRITE : MODE_OWNER_ONLY_READ;
-            if ((mode & restriction) != 0 && caller_uid != owner_uid && caller_uid != 0) {
-                return -1;
+            bool read_blocked = wants_read && (mode & MODE_OWNER_ONLY_READ) != 0;
+            bool write_blocked = wants_write && (mode & MODE_OWNER_ONLY_WRITE) != 0;
+            if ((read_blocked || write_blocked) && caller_uid != owner_uid && caller_uid != 0) {
+                return -2;
             }
         }
         // fs_get_owner_mode() returning false means the path doesn't
         // exist yet - nothing to check permissions against (a write-mode
-        // open is about to create it; a read-mode open will fail below
-        // exactly as it always has).
+        // or read-write open is about to create it; a read-only open
+        // will fail below exactly as it always has).
     }
 
     int slot = find_free_slot();
@@ -70,17 +73,22 @@ int file_object_open(const char* path, bool write_mode, u8 caller_uid) {
     }
     f->path[i] = '\0';
 
-    f->write_mode = write_mode;
+    f->access = access;
     f->cursor = 0;
     f->owner_uid = caller_uid;
-    if (write_mode) {
+    if (access == FILE_ACCESS_WRONLY) {
         f->length = 0;
     } else {
         int n = vfs_read(path, f->buffer, FILE_MAX_SIZE, caller_uid);
         if (n < 0) {
-            return -1;
+            if (access == FILE_ACCESS_RDWR) {
+                f->length = 0;  // doesn't exist yet - real RDWR create-on-close, same as WRONLY
+            } else {
+                return -1;
+            }
+        } else {
+            f->length = (u32) n;
         }
-        f->length = (u32) n;
     }
     f->used = true;
     return slot;
@@ -101,33 +109,47 @@ int file_object_read(int slot, u8* out, u32 max_len) {
 
 int file_object_write(int slot, const u8* data, u32 len) {
     open_file* f = &g_open_files[slot];
-    u32 space = FILE_MAX_SIZE - f->length;
+    u32 space = FILE_MAX_SIZE - f->cursor;
     u32 n = len < space ? len : space;
     u32 i = 0;
     while (i < n) {
-        f->buffer[f->length + i] = data[i];
+        f->buffer[f->cursor + i] = data[i];
         i = i + 1;
     }
-    f->length = f->length + n;
+    f->cursor = f->cursor + n;
+    if (f->cursor > f->length) {
+        f->length = f->cursor;
+    }
     return (int) n;
 }
 
-bool file_object_seek(int slot, u32 pos) {
+i64 file_object_seek(int slot, i64 offset, int whence) {
     open_file* f = &g_open_files[slot];
-    if (f->write_mode) {
-        return false;
+    if (f->access == FILE_ACCESS_WRONLY) {
+        return -1;
     }
-    if (pos > f->length) {
-        return false;
+    i64 base;
+    if (whence == 0) {
+        base = 0;
+    } else if (whence == 1) {
+        base = (i64) f->cursor;
+    } else if (whence == 2) {
+        base = (i64) f->length;
+    } else {
+        return -1;
     }
-    f->cursor = pos;
-    return true;
+    i64 new_pos = base + offset;
+    if (new_pos < 0 || new_pos > (i64) f->length) {
+        return -1;
+    }
+    f->cursor = (u32) new_pos;
+    return new_pos;
 }
 
 bool file_object_close(int slot) {
     open_file* f = &g_open_files[slot];
     bool ok = true;
-    if (f->write_mode) {
+    if (f->access != FILE_ACCESS_RDONLY) {
         bool is_system = in_system_mount(f->path);
         char stripped[128];
         if (is_system) {

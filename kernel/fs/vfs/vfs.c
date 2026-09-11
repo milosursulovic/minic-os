@@ -147,3 +147,28 @@ bool vfs_list_entry(const char* dir_path, int index, char* name_out, u32* size_o
     }
     return false;
 }
+
+bool vfs_stat(const char* path, u32* size_out, bool* is_dir_out, u8* owner_uid_out, u8* mode_out) {
+    int m = vfs_find_mount(path);
+    if (m < 0 || g_mounts[m].backend != BACKEND_MINIFS) {
+        return false;
+    }
+    const char* rest = vfs_strip_prefix(path, m);
+    return fs_stat_file(rest, size_out, is_dir_out, owner_uid_out, mode_out);
+}
+
+bool vfs_delete(const char* path, u8 caller_uid) {
+    int m = vfs_find_mount(path);
+    if (m < 0 || g_mounts[m].backend != BACKEND_MINIFS) {
+        return false;
+    }
+    const char* rest = vfs_strip_prefix(path, m);
+    u8 owner_uid;
+    u8 mode;
+    if (fs_get_owner_mode(rest, &owner_uid, &mode)) {
+        if ((mode & MODE_OWNER_ONLY_WRITE) != 0 && caller_uid != owner_uid && caller_uid != 0) {
+            return false;
+        }
+    }
+    return fs_delete_file(rest);
+}

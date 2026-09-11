@@ -38,6 +38,10 @@ bool fs_list_entry(const char* dir_path, int index, char* name_out, u32* size_ou
 #define MODE_OWNER_ONLY_READ 1
 #define MODE_OWNER_ONLY_WRITE 2
 bool fs_get_owner_mode(const char* path, u8* owner_uid_out, u8* mode_out);
+// Real stat() backing - same lookup fs_get_owner_mode already does, just
+// returns the dir_entry's other two fields too, in one call instead of
+// several separate round trips.
+bool fs_stat_file(const char* path, u32* size_out, bool* is_dir_out, u8* owner_uid_out, u8* mode_out);
 // Faza I point 5 item 7: fs_set_owner/fs_set_mode are now permission-
 // gated themselves - refuses (false) unless caller_uid is the file's
 // current owner or root (0), same condition proc/ipc/file/file.c's

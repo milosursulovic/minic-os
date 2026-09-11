@@ -12,10 +12,14 @@ bool syscall_file(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             return true;
         }
         char* path = (char*) a1;
-        bool write_mode = a2 != 0;
-        int slot = file_object_open(path, write_mode, g_processes[caller_process].uid);
+        int access = (int) a2;
+        int slot = file_object_open(path, access, g_processes[caller_process].uid);
         if (slot < 0) {
-            *result = (u64) -1;
+            // Preserve the real, distinct failure code (-1 not-found/
+            // other, -2 permission-denied) through the u64 result -
+            // proc/posix/posix.h reads it back as (i64) to set a real
+            // errno instead of guessing.
+            *result = (u64) (i64) slot;
             return true;
         }
         int obj_index = alloc_object(OBJ_FILE, slot);
@@ -24,7 +28,14 @@ bool syscall_file(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             *result = (u64) -1;
             return true;
         }
-        int handle_idx = alloc_handle(caller_process, obj_index, write_mode ? RIGHT_WRITE : RIGHT_READ);
+        int rights = 0;
+        if (access != FILE_ACCESS_WRONLY) {
+            rights = rights | RIGHT_READ;
+        }
+        if (access != FILE_ACCESS_RDONLY) {
+            rights = rights | RIGHT_WRITE;
+        }
+        int handle_idx = alloc_handle(caller_process, obj_index, rights);
         if (handle_idx < 0) {
             free_object(obj_index);
             file_object_close(slot);
@@ -119,8 +130,8 @@ bool syscall_file(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             return true;
         }
         int slot = g_objects[obj_index].data_index;
-        bool ok = file_object_seek(slot, (u32) a2);
-        *result = ok ? 0 : (u64) -1;
+        i64 new_pos = file_object_seek(slot, (i64) a2, (int) a3);
+        *result = (u64) new_pos;
         return true;
     }
     if (num == 48) {

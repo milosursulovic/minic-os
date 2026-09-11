@@ -24,4 +24,15 @@ bool vfs_write(const char* path, u8* data, u32 len, u8 caller_uid);
 // owning mount and delegates to that backend's own listing.
 bool vfs_list_entry(const char* dir_path, int index, char* name_out, u32* size_out, bool* is_dir_out);
 
+// Real POSIX stat()/unlink() backing (Faza I point 13, item 11) -
+// MiniFS-backed mounts only, same scope limit vfs_write already has
+// (device/procfs paths have no real on-disk entry to report on or
+// remove, so both return false for them - explicit, not silent).
+// vfs_stat needs no permission check (real POSIX stat() doesn't need
+// data-access permission either, just path lookup).
+bool vfs_stat(const char* path, u32* size_out, bool* is_dir_out, u8* owner_uid_out, u8* mode_out);
+// Gated the same way vfs_write is - refuses if MODE_OWNER_ONLY_WRITE is
+// set and caller_uid is neither the owner nor root.
+bool vfs_delete(const char* path, u8 caller_uid);
+
 #pragma GCC visibility pop

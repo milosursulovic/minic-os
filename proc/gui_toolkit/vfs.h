@@ -19,6 +19,14 @@ typedef struct __attribute__((packed)) {
     u32* disk_file_count_out;
 } gt_sys_info_args;
 
+typedef struct __attribute__((packed)) {
+    char* path;
+    u32* size_out;
+    bool* is_dir_out;
+    u8* owner_uid_out;
+    u8* mode_out;
+} gt_vfs_stat_args;
+
 // Lists one entry (0..MINIFS_MAX_FILES-1) of dir_path ("" = /system
 // root). Returns false past the last used slot or an unresolvable
 // dir_path - same as fs_list_entry (kernel/fs/minifs.c), which this wraps
@@ -65,4 +73,23 @@ static __attribute__((unused)) bool gt_sys_info(u32* total_frames_out, u32* free
     args.free_frames_out = free_frames_out;
     args.disk_file_count_out = disk_file_count_out;
     return gt_syscall(40, (u64) &args, 0, 0) == 0;
+}
+
+// Real POSIX stat()/unlink() backing (Faza I point 13, item 11) - wraps
+// syscalls 97/98. Unlike gt_fs_delete/gt_fs_mkdir above (bare MiniFS-
+// relative paths, raw ops that bypass VFS prefix routing), these take a
+// real VFS-absolute path (e.g. "/system/foo.mfs"), same convention
+// gt_file_open/gt_vfs_read/gt_vfs_write already use.
+static __attribute__((unused)) bool gt_vfs_stat(char* path, u32* size_out, bool* is_dir_out, u8* owner_uid_out, u8* mode_out) {
+    gt_vfs_stat_args args;
+    args.path = path;
+    args.size_out = size_out;
+    args.is_dir_out = is_dir_out;
+    args.owner_uid_out = owner_uid_out;
+    args.mode_out = mode_out;
+    return gt_syscall(97, (u64) &args, 0, 0) == 0;
+}
+
+static __attribute__((unused)) bool gt_vfs_unlink(char* path) {
+    return gt_syscall(98, (u64) path, 0, 0) == 0;
 }

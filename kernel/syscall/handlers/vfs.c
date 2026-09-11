@@ -12,6 +12,14 @@ typedef struct __attribute__((packed)) {
     bool* is_dir_out;
 } fs_list_args;
 
+typedef struct __attribute__((packed)) {
+    char* path;
+    u32* size_out;
+    bool* is_dir_out;
+    u8* owner_uid_out;
+    u8* mode_out;
+} vfs_stat_args;
+
 bool syscall_vfs(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
     if (num == 4) {
         int caller_process = g_tasks[g_current_task].process_index;
@@ -76,6 +84,21 @@ bool syscall_vfs(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         u8 caller_uid = caller_process < 0 ? 0 : g_processes[caller_process].uid;
         char* path = (char*) a1;
         bool ok = fs_set_mode(path, (u8) a2, caller_uid);
+        *result = ok ? 0 : (u64) -1;
+        return true;
+    }
+    if (num == 97) {
+        vfs_stat_args* args = (vfs_stat_args*) a1;
+        bool ok = vfs_stat(args->path, args->size_out, args->is_dir_out,
+                            args->owner_uid_out, args->mode_out);
+        *result = ok ? 0 : (u64) -1;
+        return true;
+    }
+    if (num == 98) {
+        int caller_process = g_tasks[g_current_task].process_index;
+        u8 caller_uid = caller_process < 0 ? 0 : g_processes[caller_process].uid;
+        char* path = (char*) a1;
+        bool ok = vfs_delete(path, caller_uid);
         *result = ok ? 0 : (u64) -1;
         return true;
     }

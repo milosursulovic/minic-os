@@ -457,3 +457,16 @@ void cmd_ring3_wait(void) {
     vga_print("sent ring3 wait trigger");
     serial_print("sent ring3 wait trigger");
 }
+
+// Faza I point 13 item 11: POSIX completeness - O_RDWR, SEEK_CUR/END,
+// errno, unlink()/stat()/fcntl() - see ring3prog.c trigger 34.
+void cmd_ring3_posix2(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 34);
+    if (!ok) {
+        vga_print("ring3posix2 failed - channel full");
+        serial_print("ring3posix2 failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 posix2 trigger");
+    serial_print("sent ring3 posix2 trigger");
+}

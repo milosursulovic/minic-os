@@ -437,6 +437,28 @@ bool fs_get_owner_mode(const char* path, u8* owner_uid_out, u8* mode_out) {
     return true;
 }
 
+bool fs_stat_file(const char* path, u32* size_out, bool* is_dir_out, u8* owner_uid_out, u8* mode_out) {
+    u32 parent_lba;
+    char name[20];
+    if (!resolve_parent_dir(path, &parent_lba, name)) {
+        return false;
+    }
+    u8 dir_buf[512];
+    if (!ata_read_sector(parent_lba, dir_buf)) {
+        return false;
+    }
+    dir_entry* entries = (dir_entry*) &dir_buf[0];
+    int slot = find_entry(entries, name);
+    if (slot < 0) {
+        return false;
+    }
+    *size_out = entries[slot].size_bytes;
+    *is_dir_out = entries[slot].is_dir;
+    *owner_uid_out = entries[slot].owner_uid;
+    *mode_out = entries[slot].mode;
+    return true;
+}
+
 bool fs_set_owner(const char* path, u8 uid, u8 caller_uid) {
     u32 parent_lba;
     char name[20];

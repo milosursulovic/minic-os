@@ -1247,6 +1247,54 @@ void _start(void) {
         do_syscall(1, (u64) "ring3wait parent: elapsed_ticks=0x", elapsed, 0);
         u64 post_query = gt_process_query(handle);
         do_syscall(1, (u64) "ring3wait parent: post-wait query=0x", post_query, 0);
+    } else if (trigger_value == 34) {
+        // trigger 34 (ring3posix2) - Faza I point 13, item 11: POSIX
+        // completeness. Proves O_RDWR (real random-access read+write on
+        // one fd), SEEK_CUR/SEEK_END, a real errno, and unlink()/stat()/
+        // fcntl(), all in one self-contained run.
+        const char* path = "/system/posix2test.mfs";
+        const char* original = "abcdefghijklmnopqrst";  // 20 bytes, a..t
+
+        int wfd = open(path, O_WRONLY);
+        write(wfd, original, 20);
+        close(wfd);
+
+        int fd = open(path, O_RDWR);
+        do_syscall(1, (u64) "open(O_RDWR) fd=0x", (u64) fd, 0);
+
+        i64 end_pos = lseek(fd, 0, SEEK_END);
+        do_syscall(1, (u64) "lseek(SEEK_END, 0)=0x", (u64) end_pos, 0);
+
+        i64 back_pos = lseek(fd, -5, SEEK_CUR);
+        do_syscall(1, (u64) "lseek(SEEK_CUR, -5)=0x", (u64) back_pos, 0);
+
+        int wn = write(fd, "12345", 5);
+        do_syscall(1, (u64) "in-place write() n=0x", (u64) wn, 0);
+
+        lseek(fd, 0, SEEK_SET);
+        u8 readback[24];
+        int rn = read(fd, readback, 20);
+        readback[rn] = 0;
+        do_syscall(1, (u64) "readback n=0x", (u64) rn, 0);
+        do_syscall(1, (u64) &readback[0], 0, 0);  // expected: abcdefghijklmno12345
+
+        int flags = fcntl(fd, F_GETFL);
+        do_syscall(1, (u64) "fcntl(F_GETFL)=0x", (u64) flags, 0);
+
+        close(fd);
+
+        stat_t st;
+        int stat_ok = stat(path, &st);
+        do_syscall(1, (u64) "stat() ok=0x", (u64) stat_ok, 0);
+        do_syscall(1, (u64) "stat() st_size=0x", (u64) st.st_size, 0);
+
+        int unlink_ok = unlink(path);
+        do_syscall(1, (u64) "unlink() ok=0x", (u64) unlink_ok, 0);
+
+        stat_t st2;
+        int stat_after_unlink = stat(path, &st2);
+        do_syscall(1, (u64) "stat(after unlink) result=0x", (u64) stat_after_unlink, 0);
+        do_syscall(1, (u64) "errno=0x", (u64) errno, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";
