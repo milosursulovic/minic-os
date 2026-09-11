@@ -5,6 +5,28 @@
 #include "../../../proc/ipc/object/object.h"
 #include "../../../proc/process.h"
 
+// Save/restore IF - same established pattern proc/process.c's
+// spawn_process() and kernel/syscall/handlers/fork.c's syscall_fork()
+// use, and for the identical real bug: create_task_with_cr3() makes the
+// new task schedulable (used=true) the instant it returns, but this
+// function still has several steps left (ring3_entry_vaddr,
+// ring3_user_stack_top, process_index, handle) before it's safe for that
+// task to actually run - a preemption landing in that gap would let the
+// scheduler resume it with ring3_entry_vaddr still 0, which yield() reads
+// as "not ring3-capable" and skips its TSS.RSP0 update entirely, leaving
+// TSS.RSP0 pointed at whichever task was running before. The new task's
+// own first ring3->ring0 transition then pushes its trapframe onto THAT
+// other (unrelated, still-live) task's kernel stack - corrupting it.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
+
 // Real Thread object (Faza I point 3) - a second task sharing the
 // calling process's own cr3 (create_task_with_cr3 already accepts an
 // arbitrary cr3 - no scheduler changes needed), given its own private
@@ -20,14 +42,19 @@ bool syscall_thread(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             return true;
         }
         process* p = &g_processes[caller_process];
+
+        u64 saved_flags = disable_interrupts();
+
         int task_index = create_task_with_cr3(&process_entry_trampoline, p->cr3);
         if (task_index < 0) {
+            restore_interrupts(saved_flags);
             *result = (u64) -1;
             return true;
         }
         void* frame = alloc_frame();
         if (frame == NULL) {
             g_tasks[task_index].used = false;
+            restore_interrupts(saved_flags);
             *result = (u64) -1;
             return true;
         }
@@ -37,6 +64,7 @@ bool syscall_thread(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         if (!map_page_in(p->cr3, stack_vaddr, (u64) frame, 0x06 | PAGE_NX)) {
             free_frame(frame);
             g_tasks[task_index].used = false;
+            restore_interrupts(saved_flags);
             *result = (u64) -1;
             return true;
         }
@@ -47,6 +75,7 @@ bool syscall_thread(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         int obj = alloc_object(OBJ_THREAD, task_index);
         if (obj < 0) {
             g_tasks[task_index].used = false;
+            restore_interrupts(saved_flags);
             *result = (u64) -1;
             return true;
         }
@@ -54,9 +83,11 @@ bool syscall_thread(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         if (h < 0) {
             free_object(obj);
             g_tasks[task_index].used = false;
+            restore_interrupts(saved_flags);
             *result = (u64) -1;
             return true;
         }
+        restore_interrupts(saved_flags);
         *result = (u64) h;
         return true;
     }

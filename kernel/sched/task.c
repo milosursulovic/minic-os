@@ -109,7 +109,21 @@ bool create_isolated_task(void (*entry)(void)) {
     return create_task_with_cr3(entry, cr3) >= 0;
 }
 
+// Real bug fixed here (self-ptr-0x20 / stuck-respawn Part 2): everything
+// from `g_current_task = next` through switch_context()'s actual stack
+// flip is a critical section over shared scheduler state, exactly like
+// mutex_lock()'s test-and-set above - but unlike that one, it used to run
+// with interrupts enabled for a cooperative caller (every IDT entry is an
+// interrupt gate, so IF is only auto-cleared for the ISR-preemption call
+// path). A timer IRQ landing in that window re-entered yield() with
+// g_current_task already advanced to `next` but its saved_rsp not yet
+// pointing at its own stack - corrupting g_tasks[next].saved_rsp with the
+// interrupted (still-live) `prev` stack pointer instead. disable_interrupts()
+// here closes the window; switch_context's own `sti` (right before its
+// `ret`, see switch.s) is what correctly turns interrupts back on once
+// we're actually running on the resumed task's stack.
 void yield(void) {
+    u64 saved_flags = disable_interrupts();
     int prev = g_current_task;
     int next = prev;
     int scanned = 0;
@@ -139,6 +153,7 @@ void yield(void) {
         }
     }
     if (next == prev || g_tasks[next].blocked || !g_tasks[next].used) {
+        restore_interrupts(saved_flags);  // no switch happening - nothing else will re-enable IF
         return;  // nothing else runnable right now - keep running prev
     }
     g_current_task = next;

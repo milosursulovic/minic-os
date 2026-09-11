@@ -5,6 +5,21 @@
 
 open_file g_open_files[FILE_OBJECT_SLOTS];
 
+// Save/restore IF - same established pattern kernel/mm/frames/frames.c's
+// alloc_frame()/kernel/mm/heap/heap.c's kalloc() use, for the identical
+// bug class ([[project_mouse_keyboard_race_bug]]): find_free_slot()-then-
+// mutate with no atomicity - two processes' posix_open()/file_write()
+// syscalls, one preempted mid-claim, could both land on the same slot.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
+
 // fs_delete_file (raw MiniFS, no VFS wrapper) is only meaningful inside
 // the one writable mount - same in_system_mount()/strip_system_prefix()
 // logic shell/shell/shell.c and proc/apps/file_manager/file_manager.c
@@ -60,7 +75,16 @@ int file_object_open(const char* path, int access, u8 caller_uid) {
         // will fail below exactly as it always has).
     }
 
+    // Claim the slot atomically (fast - no I/O under cli), then fill it
+    // in below with interrupts enabled - vfs_read() can be a real,
+    // possibly slow disk operation, and holding cli across that would
+    // block every other interrupt (timer/keyboard) for its duration.
+    u64 saved_flags = disable_interrupts();
     int slot = find_free_slot();
+    if (slot >= 0) {
+        g_open_files[slot].used = true;
+    }
+    restore_interrupts(saved_flags);
     if (slot < 0) {
         return -1;
     }

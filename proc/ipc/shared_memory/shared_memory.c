@@ -4,6 +4,21 @@
 
 shared_region g_shared_regions[SHM_SLOTS];
 
+// Save/restore IF - same established pattern kernel/mm/frames/frames.c's
+// alloc_frame() uses, for the identical bug class
+// ([[project_mouse_keyboard_race_bug]]): find_free_slot()-then-mutate
+// with no atomicity, so two callers racing a preemption in between could
+// both claim the same slot.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
+
 static int find_free_slot(void) {
     int i = 0;
     while (i < SHM_SLOTS) {
@@ -20,22 +35,27 @@ int alloc_shared_memory(u32 size) {
     if (page_count == 0 || page_count > SHM_MAX_PAGES) {
         return -1;
     }
+    u64 saved_flags = disable_interrupts();
     int slot = find_free_slot();
     if (slot < 0) {
+        restore_interrupts(saved_flags);
         return -1;
     }
+    g_shared_regions[slot].used = true;  // claim now, before releasing IF - fill in below
 
     u32 p = 0;
     while (p < page_count) {
         void* frame = alloc_frame();
         if (frame == NULL) {
+            g_shared_regions[slot].used = false;
+            restore_interrupts(saved_flags);
             return -1;
         }
         g_shared_regions[slot].frames[p] = frame;
         p = p + 1;
     }
     g_shared_regions[slot].page_count = page_count;
-    g_shared_regions[slot].used = true;
+    restore_interrupts(saved_flags);
     return slot;
 }
 
