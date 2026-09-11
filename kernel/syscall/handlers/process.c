@@ -22,6 +22,28 @@ static u8 g_registered_service_buf[REGISTERED_SERVICE_SLOTS][REGISTERED_SERVICE_
 static u32 g_registered_service_len[REGISTERED_SERVICE_SLOTS];
 static bool g_registered_service_used[REGISTERED_SERVICE_SLOTS];
 
+// Save/restore IF - same established pattern kernel/mm/frames/frames.c's
+// alloc_frame()/proc/process.c's spawn_process() use. Real bug this
+// closes (found stress-testing item 10's own fix): process_exit() below
+// used to set g_processes[caller_process].used=false, THEN re-read
+// .cr3 off the same struct to free it - a timer-ISR preemption in
+// between let a respawn win this now-"free" proc_index slot and
+// overwrite .cr3 with its OWN cr3 before the old task resumed, so
+// free_address_space() ended up freeing the NEW process's address
+// space instead of the old one's, while it was already running -
+// corrupting an unrelated live process's memory the moment a freed
+// frame got reused. Wrapping the whole teardown closes the window the
+// same way spawn_process()'s own registration was closed.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
+
 // Not a static array of &symbol pointers - that needs an absolute 64-bit
 // relocation the ELF32 build container can't represent.
 static bool builtin_program_bounds(int index, u8** start_out, u8** end_out) {
@@ -131,6 +153,7 @@ bool syscall_process(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
     if (num == 12) {
         int caller_process = g_tasks[g_current_task].process_index;
         if (caller_process >= 0) {
+            u64 saved_flags = disable_interrupts();
             g_processes[caller_process].used = false;
             free_address_space(g_processes[caller_process].cr3);
             int h = 0;
@@ -141,6 +164,7 @@ bool syscall_process(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
                 }
                 h = h + 1;
             }
+            restore_interrupts(saved_flags);
         }
         g_tasks[g_current_task].used = false;
         yield();

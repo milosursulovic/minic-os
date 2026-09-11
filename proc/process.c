@@ -17,6 +17,31 @@ extern u8 g_test_prog_end;
 process g_processes[MAX_PROCESSES];
 int g_process_count;
 
+// Save/restore IF - same established pattern kernel/mm/frames/frames.c's
+// alloc_frame()/kernel/mm/heap/heap.c's kalloc() use. Real stuck-respawn
+// bug (found 2026-08-30, root-caused here): create_task_with_cr3() sets
+// the new task's used=true immediately, making it schedulable, but
+// spawn_process() below still has several steps left to finish wiring
+// it up (ring3_entry_vaddr/stack, g_processes[proc_index], and the
+// task's own process_index back-link). A timer-ISR preemption landing
+// in that window could switch to the brand-new task while its
+// process_index was still -1; for a program that exits almost
+// instantly (hello_service.c is exactly process_exit() then an
+// unreachable loop), the child's process_exit() syscall would then read
+// process_index=-1, skip marking the process used=false, and just kill
+// the task - orphaning the process record as used=true forever, since
+// no task would ever call exit for that proc_index again. Disabling
+// interrupts across the whole registration sequence closes the window.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
+
 // run_ring3_test() never returns - last kernel-mode code this task runs.
 void process_entry_trampoline(void) {
     task* self = &g_tasks[g_current_task];
@@ -80,8 +105,16 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
         return -1;
     }
 
+    // Critical section: from the moment the task exists (and is therefore
+    // schedulable - see this file's own disable_interrupts() comment
+    // above) until it's fully wired up. Without this, a timer-ISR
+    // preemption in the middle could run the brand-new task before its
+    // process_index back-link is set.
+    u64 saved_flags = disable_interrupts();
+
     int task_index = create_task_with_cr3(&process_entry_trampoline, cr3);
     if (task_index < 0) {
+        restore_interrupts(saved_flags);
         return -1;
     }
     g_tasks[task_index].ring3_entry_vaddr = load_vaddr;
@@ -107,6 +140,7 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
     int self_object = alloc_object(OBJ_PROCESS, proc_index);
     alloc_handle(proc_index, self_object, RIGHT_QUERY);
 
+    restore_interrupts(saved_flags);
     return proc_index;
 }
 

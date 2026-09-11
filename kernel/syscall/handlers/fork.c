@@ -46,6 +46,24 @@ static u64 read_trapframe(u64 kernel_stack_top, u64 offset) {
     return *(u64*) (kernel_stack_top - offset);
 }
 
+// Save/restore IF - same established pattern kernel/mm/frames/frames.c's
+// alloc_frame()/proc/process.c's spawn_process() use, and for the exact
+// same real bug: create_task_with_cr3() makes the child task schedulable
+// immediately, but this function still has several steps left (snapshot
+// capture, ring3_entry_vaddr, g_processes[proc_index], process_index
+// back-link) before it's safe for the child to actually run. See
+// process.c's own comment for the full stuck-respawn-bug story this
+// closes for spawn_process(); the identical race exists here too.
+static u64 disable_interrupts(void) {
+    u64 saved_flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(saved_flags) : : "memory");
+    return saved_flags;
+}
+
+static void restore_interrupts(u64 saved_flags) {
+    __asm__ volatile("push %0\n\tpopfq" : : "r"(saved_flags) : "memory", "cc");
+}
+
 // This task's very first (and only) resume, if it's a fork() child -
 // create_task_with_cr3()'s entry point. Reads this task's own stored
 // snapshot and jumps into it via fork_enter_ring3.s. Never returns.
@@ -96,8 +114,16 @@ bool syscall_fork(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             return true;
         }
 
+        // Critical section: the child task becomes schedulable the
+        // instant create_task_with_cr3() sets its used=true - everything
+        // below must finish before a timer-ISR preemption could let it
+        // run with an incomplete process_index/register snapshot. See
+        // this file's own disable_interrupts() comment above.
+        u64 saved_flags = disable_interrupts();
+
         int task_index = create_task_with_cr3(&fork_resume_trampoline, child_cr3);
         if (task_index < 0) {
+            restore_interrupts(saved_flags);
             free_address_space(child_cr3);
             *result = (u64) -1;
             return true;
@@ -166,6 +192,7 @@ bool syscall_fork(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         int self_object = alloc_object(OBJ_PROCESS, proc_index);
         alloc_handle(proc_index, self_object, RIGHT_QUERY);
 
+        restore_interrupts(saved_flags);
         *result = (u64) task_index;
         return true;
     }
