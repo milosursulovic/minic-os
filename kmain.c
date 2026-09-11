@@ -6,6 +6,8 @@
 #include "kernel/drivers/interrupts_init/interrupts_init.h"
 #include "kernel/drivers/keyboard/keyboard.h"
 #include "kernel/drivers/device_manager/device_manager.h"
+#include "kernel/drivers/usb/uhci.h"
+#include "kernel/drivers/usb/usb_hid.h"
 #include "kernel/mm/frames/frames.h"
 #include "kernel/mm/paging/paging.h"
 #include "kernel/sched/task.h"
@@ -62,6 +64,14 @@ void _start(void) {
     // platform device, matching how that driver itself never actually
     // probes for its own presence.
     device_manager_register("CMOS RTC", DEVICE_CATEGORY_PLATFORM, 0);
+
+    // Real hand-written UHCI USB driver (Faza I point 9, item 16) - a
+    // real, honest no-op if no UHCI controller exists, or nothing is
+    // attached to its root hub, matching every other driver's own
+    // "lazily reflects what's really there" convention.
+    if (uhci_init()) {
+        usb_hid_init();
+    }
 
     idt_init();
     pic_remap();

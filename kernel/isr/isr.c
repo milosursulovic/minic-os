@@ -11,6 +11,7 @@
 #include "../mm/paging/paging.h"
 #include "../mm/frames/frames.h"
 #include "../mm/cow/cow.h"
+#include "../drivers/usb/usb_hid.h"
 #include "../../shell/editor/editor.h"
 #include "../../shell/shell/shell.h"
 
@@ -71,6 +72,12 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
                 compositor_redraw();
             }
         }
+
+        // Real polled USB HID completion (Faza I point 9, item 16) - no
+        // PCI IRQ routed for UHCI (see kernel/drivers/usb/uhci.c's own
+        // top comment), so this existing timer tick is where a
+        // completed periodic transfer actually gets noticed.
+        usb_hid_poll();
 
         outb(0x20, 0x20);  // EOI before yield() might switch away
 

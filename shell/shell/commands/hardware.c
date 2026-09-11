@@ -5,6 +5,7 @@
 #include "../../../kernel/drivers/pci/pci.h"
 #include "../../../kernel/drivers/device_manager/device_manager.h"
 #include "../../../kernel/net/e1000/e1000.h"
+#include "../../../kernel/drivers/usb/usb_hid.h"
 
 void cmd_pci(void) {
     pci_enumerate();
@@ -94,4 +95,45 @@ void cmd_nic(void) {
     vga_print(" link_up=0x");
     serial_print(" link_up=0x");
     print_hex((u64) link_up);
+}
+
+// Real, hand-checkable window into kernel/drivers/usb/usb_hid.c's own
+// live, polled state - same role cmd_mouse (shell/shell/commands/gui.c)
+// plays for the PS/2 driver. Deliberately doesn't re-run uhci_init()/
+// usb_hid_init() - those already ran once at boot (kmain.c); this just
+// reports whatever they found.
+void cmd_usbinfo(void) {
+    vga_print("usb mouse present=0x");
+    serial_print("usb mouse present=0x");
+    print_hex((u64) g_usb_mouse_present);
+    vga_print(" x=0x");
+    serial_print(" x=0x");
+    print_hex((u64) g_usb_mouse_x);
+    vga_print(" y=0x");
+    serial_print(" y=0x");
+    print_hex((u64) g_usb_mouse_y);
+    vga_print(" buttons=0x");
+    serial_print(" buttons=0x");
+    print_hex((u64) g_usb_mouse_buttons);
+    vga_print(" reports=0x");
+    serial_print(" reports=0x");
+    print_hex((u64) g_usb_mouse_report_count);
+    vga_print("  usb keyboard present=0x");
+    serial_print("  usb keyboard present=0x");
+    print_hex((u64) g_usb_keyboard_present);
+    vga_print(" modifiers=0x");
+    serial_print(" modifiers=0x");
+    print_hex((u64) g_usb_key_modifiers);
+    vga_print(" keycodes=0x");
+    serial_print(" keycodes=0x");
+    int i = 0;
+    while (i < 6) {
+        print_hex((u64) g_usb_last_keycodes[i]);
+        vga_print(" ");
+        serial_print(" ");
+        i = i + 1;
+    }
+    vga_print("events=0x");
+    serial_print("events=0x");
+    print_hex((u64) g_usb_key_event_count);
 }
