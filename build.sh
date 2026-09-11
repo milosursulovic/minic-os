@@ -7,7 +7,7 @@
 # Usage: ./build.sh          # just build kernel.elf
 #        ./build.sh run      # build, then boot it in QEMU (curses display)
 #        ./build.sh iso      # build, then package a GRUB-bootable minic-os.iso
-#        ./build.sh disk     # (re)build disk.img from scratch
+#        ./build.sh disk     # (re)build disk.img + fat32.img from scratch
 
 set -e
 cd "$(dirname "$0")"

@@ -293,15 +293,38 @@ disk.img:
 	printf 'ATA PIO driver test signature sector' | \
 		dd of=disk.img bs=512 seek=1 conv=notrunc status=none
 
-.PHONY: disk
-disk:
-	rm -f disk.img
-	$(MAKE) disk.img
-	@echo "built disk.img"
+# Faza I point 6, item 15: a real, separate FAT32 volume (kernel/fs/fat32,
+# drive 1 = slave on the primary IDE channel) - created and seeded with
+# the host's own mkfs.vfat/mtools (already a documented project
+# dependency for the ISO build), so this kernel's own 100% hand-written
+# driver proves genuine interop reading a filesystem it didn't create.
+# 64MB - comfortably above the ~33MB floor below which mkfs.vfat silently
+# downgrades to FAT16 instead of honoring -F 32.
+FAT32_SEED_DIR := $(BUILD_DIR)/fat32_seed
 
-run: kernel.elf disk.img
+fat32.img:
+	dd if=/dev/zero of=fat32.img bs=1M count=64 status=none
+	mkfs.vfat -F 32 -n MINICFAT fat32.img >/dev/null
+	@mkdir -p $(FAT32_SEED_DIR)
+	printf 'hello from a real FAT32 volume, created by mkfs.vfat/mtools' > $(FAT32_SEED_DIR)/hello.txt
+	mmd -i fat32.img ::testdir
+	mcopy -i fat32.img $(FAT32_SEED_DIR)/hello.txt ::hello.txt
+
+.PHONY: disk fat32disk
+disk:
+	rm -f disk.img fat32.img
+	$(MAKE) disk.img fat32.img
+	@echo "built disk.img and fat32.img"
+
+fat32disk:
+	rm -f fat32.img
+	$(MAKE) fat32.img
+	@echo "built fat32.img"
+
+run: kernel.elf disk.img fat32.img
 	qemu-system-x86_64 -kernel kernel.elf -display curses \
-		-drive file=disk.img,format=raw,if=ide
+		-drive file=disk.img,format=raw,if=ide \
+		-drive file=fat32.img,format=raw,if=ide
 
 iso: kernel.elf
 	cp kernel.elf iso/boot/kernel.elf
@@ -310,4 +333,4 @@ iso: kernel.elf
 
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f kernel.elf minic-os.iso disk.img
+	rm -f kernel.elf minic-os.iso disk.img fat32.img

@@ -14,6 +14,13 @@ extern const u32 BACKEND_TMPFS;
 // fabricated volume concept). Read/write/stat/delete all refuse (false/
 // -1) - it's a listing, not a place files live.
 extern const u32 BACKEND_MOUNTS;
+// Faza I point 6, item 15: a real, separate hand-written FAT32 driver
+// (kernel/fs/fat32) - proves the VFS backend dispatch is genuinely
+// pluggable, not hardcoded to MiniFS. No owner/mode concept (real FAT32
+// has none on disk), so vfs_stat/vfs_delete/vfs_write's permission
+// checks never apply to it - not a gap, an honest reflection of the
+// format.
+extern const u32 BACKEND_FAT32;
 
 bool vfs_mount(const char* prefix, u32 backend);
 // Same as vfs_mount, but backend_root is a subdirectory *within* the

@@ -6,6 +6,7 @@
 #include "../devfs/devfs.h"
 #include "../procfs/procfs.h"
 #include "../tmpfs/tmpfs.h"
+#include "../fat32/fat32.h"
 #include "../../lib/strings.h"
 
 const u32 BACKEND_MINIFS = 1;
@@ -13,6 +14,7 @@ const u32 BACKEND_DEVICE = 2;
 const u32 BACKEND_PROCFS = 3;
 const u32 BACKEND_TMPFS = 4;
 const u32 BACKEND_MOUNTS = 5;
+const u32 BACKEND_FAT32 = 6;
 
 typedef struct {
     char prefix[16];
@@ -21,9 +23,9 @@ typedef struct {
     bool used;
 } mount;
 
-// 7: system/devices/processes/tmp/volumes/apps/users - the real Faza I
-// point 6 mount set (was 4, room for exactly the original 3 + nothing).
-static mount g_mounts[7];
+// 8: system/devices/processes/tmp/volumes/apps/users/fat32 - the real
+// Faza I point 6 mount set.
+static mount g_mounts[8];
 static int g_mount_count;
 
 static void copy_prefix(char* dst, const char* src) {
@@ -39,7 +41,7 @@ static void copy_prefix(char* dst, const char* src) {
 }
 
 bool vfs_mount_at(const char* prefix, u32 backend, const char* backend_root) {
-    if (g_mount_count >= 7) {
+    if (g_mount_count >= 8) {
         return false;
     }
     copy_prefix(g_mounts[g_mount_count].prefix, prefix);
@@ -129,6 +131,9 @@ int vfs_read(const char* path, u8* buf, u32 max_len, u8 caller_uid) {
     if (g_mounts[m].backend == BACKEND_TMPFS) {
         return tmpfs_read(rest, buf, max_len);
     }
+    if (g_mounts[m].backend == BACKEND_FAT32) {
+        return fat32_read_file(rest, buf, max_len);
+    }
     return -1;
 }
 
@@ -154,6 +159,9 @@ bool vfs_write(const char* path, u8* data, u32 len, u8 caller_uid) {
     }
     if (g_mounts[m].backend == BACKEND_TMPFS) {
         return tmpfs_write(rest, data, len);
+    }
+    if (g_mounts[m].backend == BACKEND_FAT32) {
+        return fat32_write_file(rest, data, len);
     }
     return false;
 }
@@ -208,6 +216,9 @@ bool vfs_list_entry(const char* dir_path, int index, char* name_out, u32* size_o
     if (g_mounts[m].backend == BACKEND_MOUNTS) {
         return list_mount_entries(index, name_out, size_out, is_dir_out);
     }
+    if (g_mounts[m].backend == BACKEND_FAT32) {
+        return fat32_list_entry(rest, index, name_out, size_out, is_dir_out);
+    }
     return false;
 }
 
@@ -228,6 +239,13 @@ bool vfs_stat(const char* path, u32* size_out, bool* is_dir_out, u8* owner_uid_o
         *owner_uid_out = 0;
         *mode_out = 0;
         return tmpfs_stat(rest, size_out, is_dir_out);
+    }
+    if (g_mounts[m].backend == BACKEND_FAT32) {
+        // No owner/mode concept on real FAT32 either - same honest
+        // defaults as tmpfs above.
+        *owner_uid_out = 0;
+        *mode_out = 0;
+        return fat32_stat_file(rest, size_out, is_dir_out);
     }
     return false;
 }
@@ -253,18 +271,27 @@ bool vfs_delete(const char* path, u8 caller_uid) {
     if (g_mounts[m].backend == BACKEND_TMPFS) {
         return tmpfs_delete(rest);
     }
+    if (g_mounts[m].backend == BACKEND_FAT32) {
+        return fat32_delete_file(rest);
+    }
     return false;
 }
 
 bool vfs_mkdir(const char* path) {
     int m = vfs_find_mount(path);
-    if (m < 0 || g_mounts[m].backend != BACKEND_MINIFS) {
+    if (m < 0) {
         return false;
     }
     const char* rest = vfs_strip_prefix(path, m);
-    char full[200];
-    combine_backend_path(full, g_mounts[m].backend_root, rest);
-    return fs_create_dir(full);
+    if (g_mounts[m].backend == BACKEND_MINIFS) {
+        char full[200];
+        combine_backend_path(full, g_mounts[m].backend_root, rest);
+        return fs_create_dir(full);
+    }
+    if (g_mounts[m].backend == BACKEND_FAT32) {
+        return fat32_create_dir(rest);
+    }
+    return false;
 }
 
 bool vfs_is_writable(const char* path) {
@@ -272,7 +299,8 @@ bool vfs_is_writable(const char* path) {
     if (m < 0) {
         return false;
     }
-    return g_mounts[m].backend == BACKEND_MINIFS || g_mounts[m].backend == BACKEND_TMPFS;
+    return g_mounts[m].backend == BACKEND_MINIFS || g_mounts[m].backend == BACKEND_TMPFS
+        || g_mounts[m].backend == BACKEND_FAT32;
 }
 
 bool vfs_resolve_minifs_path(const char* path, char* out) {

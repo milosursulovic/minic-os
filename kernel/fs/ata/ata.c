@@ -47,13 +47,16 @@ bool ata_wait_drq(void) {
     return false;
 }
 
-// Shared setup for read/write: selects primary master, LBA28 mode.
-static bool ata_setup(u32 lba, u8 sector_count) {
+// Shared setup for read/write: selects drive 0 (master) or 1 (slave) on
+// the primary channel, LBA28 mode.
+static bool ata_setup(u8 drive, u32 lba, u8 sector_count) {
     if (!ata_wait_ready()) {
         return false;
     }
-    // 0xE0: LBA mode + drive 0 (master), ORed with LBA bits 24-27.
-    outb(ATA_DRIVE_HEAD, (u8) (0xE0 | ((lba >> 24) & 0x0F)));
+    // 0xE0 (master) or 0xF0 (slave): LBA mode + drive-select bit, ORed
+    // with LBA bits 24-27.
+    u8 drive_bit = drive == 0 ? 0xE0 : 0xF0;
+    outb(ATA_DRIVE_HEAD, (u8) (drive_bit | ((lba >> 24) & 0x0F)));
     outb(ATA_SECTOR_COUNT, sector_count);
     outb(ATA_LBA_LOW, (u8) (lba & 0xFF));
     outb(ATA_LBA_MID, (u8) ((lba >> 8) & 0xFF));
@@ -62,8 +65,8 @@ static bool ata_setup(u32 lba, u8 sector_count) {
 }
 
 // Transfers 256 16-bit words - the ATA data port is 16 bits wide.
-bool ata_read_sector(u32 lba, u8* buffer) {
-    if (!ata_setup(lba, 1)) {
+bool ata_read_sector_drive(u8 drive, u32 lba, u8* buffer) {
+    if (!ata_setup(drive, lba, 1)) {
         return false;
     }
     outb(ATA_COMMAND, ATA_CMD_READ);
@@ -80,8 +83,8 @@ bool ata_read_sector(u32 lba, u8* buffer) {
 }
 
 // Flushes the write cache after writing so an immediate re-read sees fresh data.
-bool ata_write_sector(u32 lba, u8* buffer) {
-    if (!ata_setup(lba, 1)) {
+bool ata_write_sector_drive(u8 drive, u32 lba, u8* buffer) {
+    if (!ata_setup(drive, lba, 1)) {
         return false;
     }
     outb(ATA_COMMAND, ATA_CMD_WRITE);
@@ -96,4 +99,12 @@ bool ata_write_sector(u32 lba, u8* buffer) {
     }
     outb(ATA_COMMAND, ATA_CMD_FLUSH);
     return ata_wait_ready();
+}
+
+bool ata_read_sector(u32 lba, u8* buffer) {
+    return ata_read_sector_drive(0, lba, buffer);
+}
+
+bool ata_write_sector(u32 lba, u8* buffer) {
+    return ata_write_sector_drive(0, lba, buffer);
 }

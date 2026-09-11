@@ -20,6 +20,7 @@
 #include "kernel/lib/rand.h"
 #include "kernel/fs/vfs/vfs.h"
 #include "kernel/fs/minifs/minifs.h"
+#include "kernel/fs/fat32/fat32.h"
 #include "proc/ipc/object/object.h"
 #include "kernel/drivers/io_port_range/io_port_range.h"
 #include "shell/shell/shell.h"
@@ -140,6 +141,13 @@ void _start(void) {
         }
         users_i = users_i + 1;
     }
+
+    // Faza I point 6, item 15: a real, separate hand-written FAT32
+    // driver (kernel/fs/fat32) on its own drive (kernel/fs/ata's new
+    // drive-select support, drive 1 = slave) - proves the VFS backend
+    // dispatch is genuinely pluggable, not hardcoded to MiniFS.
+    fat32_init(1);
+    vfs_mount("/fat32", BACKEND_FAT32);
 
     // Registered (available to "service start hello_service"), not
     // auto-started - real service-manager semantics, matches init.c's own
