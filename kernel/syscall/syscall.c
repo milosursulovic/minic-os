@@ -25,6 +25,7 @@
 #include "handlers/directory.h"
 #include "handlers/users.h"
 #include "handlers/fork.h"
+#include "handlers/port_io.h"
 
 u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     u64 result;
@@ -47,5 +48,6 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     if (syscall_directory(num, a1, a2, a3, &result)) return result;
     if (syscall_users(num, a1, a2, a3, &result)) return result;
     if (syscall_fork(num, a1, a2, a3, &result)) return result;
+    if (syscall_port_io(num, a1, a2, a3, &result)) return result;
     return (u64) -1;  // unknown syscall
 }

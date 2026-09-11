@@ -32,6 +32,13 @@
 // g_tasks[], since device_entry already holds everything a Device
 // object needs to expose.
 #define OBJ_DEVICE 15
+// data_index is a slot index into g_io_port_ranges[] (kernel/drivers/
+// io_port_range/io_port_range.h) - a real capability-gated port I/O
+// grant (Faza I point 14, item 14: the CMOS RTC driver's own ring3
+// isolation proof of concept). RIGHT_READ = inb allowed, RIGHT_WRITE =
+// outb allowed, both checked against the port itself falling inside the
+// granted [port_start, port_end] range, not just handle possession.
+#define OBJ_IO_PORT_RANGE 16
 
 typedef struct {
     bool used;

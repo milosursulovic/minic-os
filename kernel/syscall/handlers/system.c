@@ -4,7 +4,6 @@
 #include "../../drivers/io/io.h"
 #include "../../fs/minifs/minifs.h"
 #include "../../mm/frames/frames.h"
-#include "../../drivers/rtc/rtc.h"
 #include "../../lib/rand.h"
 #include "../../../proc/process.h"
 
@@ -118,23 +117,12 @@ bool syscall_system(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         *result = (u64) proc_index;  // spawn_process's own -1-on-failure convention
         return true;
     }
-    if (num == 42) {
-        u8 hour;
-        u8 minute;
-        u8 second;
-        rtc_read_time(&hour, &minute, &second);
-        u64 packed = ((u64) hour << 16) | ((u64) minute << 8) | (u64) second;
-        *result = packed;
-        return true;
-    }
-    if (num == 43) {
-        u8 day;
-        u8 month;
-        u16 year;
-        rtc_read_date(&day, &month, &year);
-        u64 packed = ((u64) day << 24) | ((u64) month << 16) | (u64) year;
-        *result = packed;
-        return true;
-    }
+    // Syscalls 42/43 (direct kernel-side rtc_read_time/rtc_read_date)
+    // removed - Faza I point 14, item 14: real ring3 driver isolation.
+    // There is now exactly one way for a ring3 process to get wall-clock
+    // time, and it goes through the isolated driver (proc/drivers/
+    // rtc_driver/rtc_driver.c) - no raw-port bypass for an arbitrary
+    // process. The kernel's own internal need (kernel/lib/rand.c's ASLR
+    // seed) still calls rtc_read_time() directly, unaffected by this.
     return false;
 }

@@ -1,9 +1,12 @@
 #pragma once
 #include "core.h"
+#include "channel.h"
 
 // Ticks/time/date/term-scrollback/GUI-app-spawn wrappers - syscalls 35,
-// 36, 40 (sys_info lives in vfs.h), 41, 42, 43. Split out of the former
-// single gui_toolkit.h.
+// 36, 40 (sys_info lives in vfs.h), 41. Split out of the former single
+// gui_toolkit.h. time/date used to be syscalls 42/43 (direct kernel-side
+// CMOS reads) - Faza I point 14 item 14 removed that path entirely and
+// replaced it with real ring3 driver isolation (below).
 
 typedef struct __attribute__((packed)) {
     u64 since_pos;
@@ -17,22 +20,47 @@ static __attribute__((unused)) u64 gt_get_ticks(void) {
     return gt_syscall(35, 0, 0, 0);
 }
 
-// Real wall-clock time (always 24-hour), read from the CMOS RTC via
-// syscall 42 - kernel/drivers/rtc/rtc.c.
+// Real wall-clock time (always 24-hour) - Faza I point 14, item 14: no
+// longer a direct kernel syscall into kernel/drivers/rtc/rtc.c. Instead
+// a real request/response round trip to the isolated ring3 RTC driver
+// (proc/drivers/rtc_driver/rtc_driver.c) over two Channels
+// kmain.c wires up at spawn time - handle 1 = request (send), handle 2 =
+// response (receive). Only meaningful for a process kmain.c actually
+// granted those two handles to - currently only desktop_shell.c; a
+// general any-process broker (per-consumer response channels, or a real
+// connection protocol) is out of scope for this single-driver proof of
+// concept.
+#define RTC_REQUEST_HANDLE 1
+#define RTC_RESPONSE_HANDLE 2
+
+typedef struct {
+    bool is_date;
+    u8 v1;
+    u8 v2;
+    u16 v3;
+} gt_rtc_response;
+
 static __attribute__((unused)) void gt_get_time(u8* hour, u8* minute, u8* second) {
-    u64 packed = gt_syscall(42, 0, 0, 0);
-    *hour = (u8) ((packed >> 16) & 0xFF);
-    *minute = (u8) ((packed >> 8) & 0xFF);
-    *second = (u8) (packed & 0xFF);
+    u8 op = 0;
+    gt_channel_send_msg(RTC_REQUEST_HANDLE, &op, 1);
+    gt_rtc_response resp;
+    gt_channel_receive_msg(RTC_RESPONSE_HANDLE, &resp, sizeof(resp));
+    *hour = resp.v1;
+    *minute = resp.v2;
+    *second = (u8) resp.v3;
 }
 
 // Real date (day/month/year, year = 2000 + RTC's 2-digit year - no
-// century register read), read via syscall 43 - kernel/drivers/rtc/rtc.c.
+// century register read) - same isolated-driver round trip as
+// gt_get_time() above.
 static __attribute__((unused)) void gt_get_date(u8* day, u8* month, u16* year) {
-    u64 packed = gt_syscall(43, 0, 0, 0);
-    *day = (u8) ((packed >> 24) & 0xFF);
-    *month = (u8) ((packed >> 16) & 0xFF);
-    *year = (u16) (packed & 0xFFFF);
+    u8 op = 1;
+    gt_channel_send_msg(RTC_REQUEST_HANDLE, &op, 1);
+    gt_rtc_response resp;
+    gt_channel_receive_msg(RTC_RESPONSE_HANDLE, &resp, sizeof(resp));
+    *day = resp.v1;
+    *month = resp.v2;
+    *year = resp.v3;
 }
 
 // Spawns one of the fixed compiled-in GUI apps (0=terminal, 1=file_manager,

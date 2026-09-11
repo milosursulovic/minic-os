@@ -63,7 +63,7 @@ DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 ASM_SRCS := kernel/boot/boot.s kernel/isr/interrupts.s kernel/sched/switch.s kernel/syscall/usermode.s kernel/sched/fork_enter_ring3.s
 ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/ring3prog.c' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './.claude/*'))
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/ring3prog.c' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/drivers/rtc_driver/rtc_driver.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './.claude/*'))
 C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
 .PHONY: all run iso disk clean
@@ -134,6 +134,16 @@ $(BUILD_DIR)/proc/demo/hello_service/hello_service.bin: proc/demo/hello_service/
 		$(BUILD_DIR)/proc/demo/hello_service/hello_service_linked.elf $(BUILD_DIR)/proc/demo/hello_service/hello_service.bin
 
 -include $(BUILD_DIR)/proc/demo/hello_service/hello_service.d
+
+$(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver.bin: proc/drivers/rtc_driver/rtc_driver.c proc/ring3.ld
+	@mkdir -p $(BUILD_DIR)/proc/drivers/rtc_driver
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver.bin -MF $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver.d -S -o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver.gen.s proc/drivers/rtc_driver/rtc_driver.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_linked.elf $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_linked.elf $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver.bin
+
+-include $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver.d
 
 # The desktop shell - same shape again, auto-spawned by kmain.c alongside
 # init (not shell-triggered like ring3prog.c's demos).
@@ -224,6 +234,10 @@ $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o: proc/demo/hello_servi
 	@mkdir -p $(BUILD_DIR)/proc/demo/hello_service
 	cd proc/demo/hello_service && $(AS) --32 hello_service_blob.s -o ../../../$@
 
+$(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o: proc/drivers/rtc_driver/rtc_driver_blob.s $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver.bin
+	@mkdir -p $(BUILD_DIR)/proc/drivers/rtc_driver
+	cd proc/drivers/rtc_driver && $(AS) --32 rtc_driver_blob.s -o ../../../$@
+
 $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o: proc/apps/desktop_shell/desktop_shell_blob.s $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell.bin
 	@mkdir -p $(BUILD_DIR)/proc/apps/desktop_shell
 	cd proc/apps/desktop_shell && $(AS) --32 desktop_shell_blob.s -o ../../../$@
@@ -270,8 +284,8 @@ $(BUILD_DIR)/kernel/gfx/png/wallpaper_blob.o: kernel/gfx/png/wallpaper_blob.s as
 
 PNG_ASSET_BLOBS := $(BUILD_DIR)/kernel/gfx/png/cursor_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_stored_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o $(BUILD_DIR)/kernel/gfx/png/wallpaper_blob.o
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
-	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
+	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
 	@echo "built kernel.elf"
 
 disk.img:

@@ -20,6 +20,8 @@
 #include "kernel/lib/rand.h"
 #include "kernel/fs/vfs/vfs.h"
 #include "kernel/fs/minifs/minifs.h"
+#include "proc/ipc/object/object.h"
+#include "kernel/drivers/io_port_range/io_port_range.h"
 #include "shell/shell/shell.h"
 #include "shell/editor/editor.h"
 
@@ -32,6 +34,8 @@ extern u8 g_desktop_shell_prog_start;
 extern u8 g_desktop_shell_prog_end;
 extern u8 g_hello_service_prog_start;
 extern u8 g_hello_service_prog_end;
+extern u8 g_rtc_driver_prog_start;
+extern u8 g_rtc_driver_prog_end;
 #pragma GCC visibility pop
 
 void _start(void) {
@@ -146,6 +150,31 @@ void _start(void) {
     u64 init_load_vaddr = randomize_load_vaddr(0x80000000);
     spawn_process(&g_init_prog_start, &g_init_prog_end, init_load_vaddr, init_load_vaddr + 0x20000);
 
+    // Faza I point 14, item 14: real ring3 driver isolation proof of
+    // concept - the CMOS RTC's actual port I/O now happens in ring3, not
+    // kernel code (kernel/drivers/rtc/rtc.c stays as it is, used only for
+    // kernel/lib/rand.c's own tiny early-boot ASLR seed - an explicit,
+    // documented exception, not a contradiction: no ring3 process could
+    // exist yet at that point). Two channels for the request/response
+    // protocol; proc/drivers/rtc_driver/rtc_driver.c's own top comment
+    // has the full fixed-handle-layout story. Wired up here, before sti,
+    // the same no-preemption-yet window spawn_process()'s own
+    // handle-0-self wiring already relies on being atomic.
+    int rtc_request_channel = create_channel();
+    int rtc_response_channel = create_channel();
+    u64 rtc_driver_load_vaddr = randomize_load_vaddr(0x80000000);
+    int rtc_driver_proc = spawn_process(&g_rtc_driver_prog_start, &g_rtc_driver_prog_end,
+                                         rtc_driver_load_vaddr, rtc_driver_load_vaddr + 0x20000);
+    if (rtc_driver_proc >= 0) {
+        int io_slot = io_port_range_create(0x70, 0x71);
+        int io_obj = alloc_object(OBJ_IO_PORT_RANGE, io_slot);
+        alloc_handle(rtc_driver_proc, io_obj, RIGHT_READ | RIGHT_WRITE);  // handle 1
+        int req_obj = alloc_object(OBJ_CHANNEL, rtc_request_channel);
+        alloc_handle(rtc_driver_proc, req_obj, RIGHT_RECEIVE);            // handle 2
+        int resp_obj = alloc_object(OBJ_CHANNEL, rtc_response_channel);
+        alloc_handle(rtc_driver_proc, resp_obj, RIGHT_SEND);              // handle 3
+    }
+
     // Desktop shell: wallpaper + taskbar + launcher, runs forever from
     // boot (not shell-triggered like ring3prog.c's demos) - activates the
     // framebuffer/graphics mode unconditionally on every boot from here on.
@@ -154,8 +183,19 @@ void _start(void) {
     // (kernel/syscall/syscall.c's gui_app_bounds()), so only the shell
     // itself needs to exist at boot.
     u64 desktop_shell_load_vaddr = randomize_load_vaddr(0x80000000);
-    spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end,
+    int desktop_shell_proc = spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end,
                   desktop_shell_load_vaddr, desktop_shell_load_vaddr + 0x20000);
+    if (desktop_shell_proc >= 0) {
+        // gt_get_time()/gt_get_date() (proc/gui_toolkit/system.h) assume
+        // exactly this handle layout - handle 1 = request (send), handle
+        // 2 = response (receive). Only desktop_shell gets it; a general
+        // any-process broker is out of scope for this single-driver proof
+        // of concept (see system.h's own comment).
+        int req_obj2 = alloc_object(OBJ_CHANNEL, rtc_request_channel);
+        alloc_handle(desktop_shell_proc, req_obj2, RIGHT_SEND);     // handle 1
+        int resp_obj2 = alloc_object(OBJ_CHANNEL, rtc_response_channel);
+        alloc_handle(desktop_shell_proc, resp_obj2, RIGHT_RECEIVE); // handle 2
+    }
 
     __asm__ volatile("sti");
 
