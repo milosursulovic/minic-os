@@ -35,5 +35,6 @@ void cmd_ring3_fork(void);
 void cmd_ring3_guard(void);
 void cmd_ring3_wait(void);
 void cmd_ring3_posix2(void);
+void cmd_ring3_signfail(void);
 
 #pragma GCC visibility pop

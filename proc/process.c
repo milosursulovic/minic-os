@@ -7,6 +7,8 @@
 #include "../kernel/sched/task.h"
 #include "ipc/object/object.h"
 #include "../kernel/fs/vfs/vfs.h"
+#include "../kernel/security/exec_sign/exec_sign.h"
+#include "../kernel/security/sandbox/sandbox.h"
 
 #pragma GCC visibility push(hidden)
 extern void run_ring3_test(u64 entry, u64 user_stack);
@@ -52,7 +54,7 @@ void process_entry_trampoline(void) {
 // user stack, schedules a task entering ring3 at load_vaddr. Returns
 // the process index, or -1 on failure. Reuses an exited process slot
 // if one exists, else appends (bounded by 4).
-int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vaddr) {
+int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vaddr, bool sandboxed) {
     int proc_index = -1;
     int p = 0;
     while (p < g_process_count) {
@@ -140,6 +142,21 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
     int self_object = alloc_object(OBJ_PROCESS, proc_index);
     alloc_handle(proc_index, self_object, RIGHT_QUERY);
 
+    // Faza I point 14, item 17: granted here, inside the same protected
+    // section as the self-handle above, not after this function returns -
+    // otherwise the brand-new task (already schedulable the instant
+    // create_task_with_cr3() ran) could get preempted into and make a
+    // syscall before the restriction actually existed.
+    if (sandboxed) {
+        int policy_slot = sandbox_policy_create(sandbox_default_denied_low(), sandbox_default_denied_high());
+        if (policy_slot >= 0) {
+            int sandbox_object = alloc_object(OBJ_SANDBOX, policy_slot);
+            if (sandbox_object >= 0) {
+                alloc_handle(proc_index, sandbox_object, 0);
+            }
+        }
+    }
+
     restore_interrupts(saved_flags);
     return proc_index;
 }
@@ -157,10 +174,22 @@ int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vadd
 #define LOADED_IMAGE_BUF_SIZE 65536
 static u8 g_loaded_image_buf[LOADED_IMAGE_BUF_SIZE];
 
+// Faza I point 14, item 17: this is a real trust boundary - path can
+// point anywhere writable (/system, /apps, /fat32), so unlike every
+// direct spawn_process() call site above (all trusted builtins baked
+// into kernel.elf at link time), whatever this reads must carry a valid
+// kernel/security/exec_sign/ signature before a single byte of it runs.
+// A verified spawn is also automatically sandboxed (sandboxed=true) -
+// least-privilege by default for anything loaded from disk, no opt-out.
 int spawn_process_from_path(const char* path, u64 load_vaddr, u64 stack_vaddr) {
     int n = vfs_read(path, &g_loaded_image_buf[0], LOADED_IMAGE_BUF_SIZE, 0);  // out of item 7's scope - unchanged, fully-permissive spawn read
     if (n < 0) {
         return -1;
     }
-    return spawn_process(&g_loaded_image_buf[0], &g_loaded_image_buf[(u32) n], load_vaddr, stack_vaddr);
+    const u8* payload;
+    u32 payload_len;
+    if (!exec_sign_verify(&g_loaded_image_buf[0], (u32) n, &payload, &payload_len)) {
+        return -1;
+    }
+    return spawn_process((u8*) payload, (u8*) payload + payload_len, load_vaddr, stack_vaddr, true);
 }

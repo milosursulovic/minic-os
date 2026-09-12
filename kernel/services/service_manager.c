@@ -65,7 +65,7 @@ bool service_start(const char* name) {
     }
     u64 load_vaddr = randomize_load_vaddr(SERVICE_LOAD_BASE);
     int proc_index = spawn_process(g_services[slot].image_start, g_services[slot].image_end,
-                                    load_vaddr, load_vaddr + 0x20000);
+                                    load_vaddr, load_vaddr + 0x20000, false);
     if (proc_index < 0) {
         return false;
     }
@@ -140,7 +140,7 @@ void service_manager_worker_entry(void) {
                     // directly (kernel-side) instead of via syscall query.
                     u64 load_vaddr = randomize_load_vaddr(SERVICE_LOAD_BASE);
                     int proc_index = spawn_process(g_services[i].image_start, g_services[i].image_end,
-                                                    load_vaddr, load_vaddr + 0x20000);
+                                                    load_vaddr, load_vaddr + 0x20000, false);
                     if (proc_index >= 0) {
                         g_services[i].process_index = proc_index;
                         g_services[i].restart_count = g_services[i].restart_count + 1;

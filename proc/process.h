@@ -32,7 +32,14 @@ extern process g_processes[MAX_PROCESSES];
 extern int g_process_count;
 
 void process_entry_trampoline(void);
-int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vaddr);
+// sandboxed: Faza I point 14, item 17 - true atomically grants the new
+// process an OBJ_SANDBOX handle (kernel/security/sandbox/) with the
+// default-deny policy, inside the same disable_interrupts()-protected
+// registration section as the self-handle grant (closes the same class
+// of "schedulable before fully wired up" race this file's own comment
+// already documents for process_index). Every existing trusted builtin
+// call site passes false, unchanged from before this item existed.
+int spawn_process(u8* image_start, u8* image_end, u64 load_vaddr, u64 stack_vaddr, bool sandboxed);
 int spawn_process_from_path(const char* path, u64 load_vaddr, u64 stack_vaddr);
 
 #pragma GCC visibility pop

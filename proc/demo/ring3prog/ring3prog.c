@@ -375,6 +375,21 @@ static int posix_close(int fd) {
 // fire when a shell command explicitly asks for them.
 __attribute__((section(".text.start")))
 void _start(void) {
+    // Faza I point 14, item 17: an always-on, passive sandbox self-report
+    // - every fresh cold start of this binary (never a fork()/COW
+    // continuation, which resumes mid-function, not here) probes syscall
+    // 49 (setuid to its own current default, uid 0 - harmless either way)
+    // and prints the raw result. kmain.c's own boot spawn of this exact
+    // blob (spawn_process(..., sandboxed=false)) is unrestricted, so this
+    // prints 0x0 (allowed) there; the SAME binary spawned later via the
+    // shell's install-then-spawn demo (proc/process.c's
+    // spawn_process_from_path(), sandboxed=true after passing signature
+    // verification) prints 0xffffffffffffffff (denied) instead - real,
+    // observable proof the deny-bitmap actually fires, not just that
+    // OBJ_SANDBOX exists.
+    u64 sandbox_probe = do_syscall(49, 0, 0, 0);
+    do_syscall(1, (u64) "sandbox_setuid_probe (0x0=unsandboxed, -1=denied): 0x", sandbox_probe, 0);
+
     // Real cross-process SharedMemory round-trip child-role pre-check
     // (Faza I point 8, trigger 25) - if trigger 25's own parent already
     // atomically granted this fresh instance handles 1/2/3 (SharedMemory/
@@ -1294,6 +1309,20 @@ void _start(void) {
         int stat_after_unlink = stat(path, &st2);
         do_syscall(1, (u64) "stat(after unlink) result=0x", (u64) stat_after_unlink, 0);
         do_syscall(1, (u64) "errno=0x", (u64) errno, 0);
+    } else if (trigger_value == 35) {
+        // trigger 35 (ring3signfail) - Faza I point 14, item 17: the
+        // real, concrete NEGATIVE assertion the signature check needs -
+        // not just "a signed program runs" (already proven by the
+        // ordinary install-then-spawn shell demo), but that an UNSIGNED
+        // blob planted directly on writable storage is cleanly refused,
+        // not crashed on. Deliberately plain, unrelated bytes - no magic,
+        // no header, nothing that could coincidentally look signed.
+        const char* path = "/system/unsigned_test.bin";
+        const char* garbage = "this is not a signed executable, just plain bytes";
+        u64 write_ok = do_syscall(5, (u64) path, (u64) garbage, 51);
+        do_syscall(1, (u64) "ring3signfail: raw write ok=0x", write_ok, 0);
+        u64 spawn_result = do_syscall(6, (u64) path, 0x80000000, 0x80020000);
+        do_syscall(1, (u64) "ring3signfail: spawn of unsigned blob result=0x", spawn_result, 0);
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

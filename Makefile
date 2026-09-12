@@ -63,10 +63,10 @@ DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 ASM_SRCS := kernel/boot/boot.s kernel/isr/interrupts.s kernel/sched/switch.s kernel/syscall/usermode.s kernel/sched/fork_enter_ring3.s
 ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/ring3prog.c' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/drivers/rtc_driver/rtc_driver.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './.claude/*'))
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/ring3prog.c' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/drivers/rtc_driver/rtc_driver.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './.claude/*' -not -path './tools/*'))
 C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
-.PHONY: all run iso disk clean
+.PHONY: all run iso disk clean sign_exec
 
 all: kernel.elf
 
@@ -330,6 +330,24 @@ iso: kernel.elf
 	cp kernel.elf iso/boot/kernel.elf
 	grub-mkrescue -o minic-os.iso iso
 	@echo "built minic-os.iso"
+
+# Faza I point 14, item 17: host-side signing tool. Plain gcc/libc build
+# (NOT the freestanding -m64/-mgeneral-regs-only/-fPIC pipeline every
+# other rule in this file uses) - it links the exact same
+# kernel/security/{hash,exec_sign} sources the kernel itself compiles
+# freestanding, so the host tool and the kernel's own verifier are
+# provably the same code, never a hand-duplicated copy.
+sign_exec: build/tools/sign_exec
+
+build/tools/sign_exec: tools/sign_exec.c \
+                        kernel/security/exec_sign/exec_sign.c kernel/security/exec_sign/exec_sign.h \
+                        kernel/security/exec_sign/signing_key.h \
+                        kernel/security/hash/sha256.c kernel/security/hash/hmac_sha256.c
+	@mkdir -p build/tools
+	gcc -O2 -Wall -Wextra -I. -o build/tools/sign_exec \
+		tools/sign_exec.c kernel/security/exec_sign/exec_sign.c \
+		kernel/security/hash/sha256.c kernel/security/hash/hmac_sha256.c
+	@echo "built build/tools/sign_exec"
 
 clean:
 	rm -rf $(BUILD_DIR)

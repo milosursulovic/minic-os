@@ -107,7 +107,7 @@ void _start(void) {
     // - error_code=0x15 - into a not-present fault - error_code=0x6 -
     // silently testing the wrong thing). stack_vaddr keeps the same
     // 128KB gap every call site here already relied on.
-    spawn_process(&g_test_prog_start, &g_test_prog_end, 0x80000000, 0x80020000);
+    spawn_process(&g_test_prog_start, &g_test_prog_end, 0x80000000, 0x80020000, false);
     create_isolated_task(&proc_receiver_entry);
     vfs_mount("/system", BACKEND_MINIFS);
     vfs_mount("/devices", BACKEND_DEVICE);
@@ -166,7 +166,7 @@ void _start(void) {
 
     // init process: spawns proc/demo/hello_service.c via spawn_builtin once running.
     u64 init_load_vaddr = randomize_load_vaddr(0x80000000);
-    spawn_process(&g_init_prog_start, &g_init_prog_end, init_load_vaddr, init_load_vaddr + 0x20000);
+    spawn_process(&g_init_prog_start, &g_init_prog_end, init_load_vaddr, init_load_vaddr + 0x20000, false);
 
     // Faza I point 14, item 14: real ring3 driver isolation proof of
     // concept - the CMOS RTC's actual port I/O now happens in ring3, not
@@ -182,7 +182,7 @@ void _start(void) {
     int rtc_response_channel = create_channel();
     u64 rtc_driver_load_vaddr = randomize_load_vaddr(0x80000000);
     int rtc_driver_proc = spawn_process(&g_rtc_driver_prog_start, &g_rtc_driver_prog_end,
-                                         rtc_driver_load_vaddr, rtc_driver_load_vaddr + 0x20000);
+                                         rtc_driver_load_vaddr, rtc_driver_load_vaddr + 0x20000, false);
     if (rtc_driver_proc >= 0) {
         int io_slot = io_port_range_create(0x70, 0x71);
         int io_obj = alloc_object(OBJ_IO_PORT_RANGE, io_slot);
@@ -202,7 +202,7 @@ void _start(void) {
     // itself needs to exist at boot.
     u64 desktop_shell_load_vaddr = randomize_load_vaddr(0x80000000);
     int desktop_shell_proc = spawn_process(&g_desktop_shell_prog_start, &g_desktop_shell_prog_end,
-                  desktop_shell_load_vaddr, desktop_shell_load_vaddr + 0x20000);
+                  desktop_shell_load_vaddr, desktop_shell_load_vaddr + 0x20000, false);
     if (desktop_shell_proc >= 0) {
         // gt_get_time()/gt_get_date() (proc/gui_toolkit/system.h) assume
         // exactly this handle layout - handle 1 = request (send), handle

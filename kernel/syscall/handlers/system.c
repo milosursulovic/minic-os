@@ -113,7 +113,7 @@ bool syscall_system(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             return true;
         }
         u64 load_vaddr = randomize_load_vaddr(BUILTIN_LOAD_BASE);
-        int proc_index = spawn_process(start, end, load_vaddr, load_vaddr + 0x20000);
+        int proc_index = spawn_process(start, end, load_vaddr, load_vaddr + 0x20000, false);
         *result = (u64) proc_index;  // spawn_process's own -1-on-failure convention
         return true;
     }

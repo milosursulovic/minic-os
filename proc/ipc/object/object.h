@@ -39,6 +39,17 @@
 // outb allowed, both checked against the port itself falling inside the
 // granted [port_start, port_end] range, not just handle possession.
 #define OBJ_IO_PORT_RANGE 16
+// data_index is a slot index into g_sandbox_policies[] (kernel/security/
+// sandbox/sandbox.h) - Faza I point 14, item 17's own generalized
+// sandboxing, directly extending OBJ_IO_PORT_RANGE's shape above. One
+// real inversion from every other type here, worth restating: RIGHT_*
+// bits everywhere else GRANT permission; possessing an OBJ_SANDBOX handle
+// instead RESTRICTS (denies whichever syscalls the referenced policy's
+// bitmap marks) - no RIGHT_* bits are used on this handle type,
+// possession alone is the restriction. See sandbox.h for the full design
+// note and kernel/security/exec_sign/ for how a handle of this type gets
+// automatically granted to every signature-verified executable.
+#define OBJ_SANDBOX 17
 
 typedef struct {
     bool used;

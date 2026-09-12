@@ -8,6 +8,7 @@
 #include "../../../proc/ipc/channel/channel.h"
 #include "../../../kernel/fs/vfs/vfs.h"
 #include "../../../kernel/security/users/users.h"
+#include "../../../kernel/security/exec_sign/exec_sign.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_test_prog_start;
@@ -106,9 +107,38 @@ void cmd_objs(void) {
     }
 }
 
+// Faza I point 14, item 17: spawn_process_from_path() now refuses
+// anything that doesn't carry a valid kernel/security/exec_sign/
+// signature - self-sign this one builtin demo blob in-kernel (reusing
+// the exact same exec_sign_produce()/hmac_sha256() the kernel's own
+// verifier uses, no host tool needed for this path) so the existing
+// install-then-spawn shell demo keeps working end-to-end through the
+// new verification gate.
+#define INSTALL_SIGN_BUF_SIZE 65536
+static u8 g_install_sign_buf[INSTALL_SIGN_BUF_SIZE];
+
 void cmd_install(void) {
     u32 len = (u32) ((u64) &g_test_prog_end - (u64) &g_test_prog_start);
-    bool ok = vfs_write("/system/testprog.bin", &g_test_prog_start, len, 0);  // shell acts as root
+    if (sizeof(exec_sign_header) + (u64) len > INSTALL_SIGN_BUF_SIZE) {
+        vga_print("install failed - blob too large to sign");
+        serial_print("install failed - blob too large to sign");
+        return;
+    }
+    exec_sign_header header;
+    exec_sign_produce(&g_test_prog_start, len, &header);
+    u8* dst = &g_install_sign_buf[0];
+    u32 i = 0;
+    while (i < sizeof(exec_sign_header)) {
+        dst[i] = ((u8*) &header)[i];
+        i = i + 1;
+    }
+    u32 j = 0;
+    while (j < len) {
+        dst[sizeof(exec_sign_header) + j] = (&g_test_prog_start)[j];
+        j = j + 1;
+    }
+    u32 signed_len = (u32) sizeof(exec_sign_header) + len;
+    bool ok = vfs_write("/system/testprog.bin", dst, signed_len, 0);  // shell acts as root
     if (!ok) {
         vga_print("install failed");
         serial_print("install failed");
@@ -116,9 +146,9 @@ void cmd_install(void) {
     }
     vga_print("installed /system/testprog.bin, 0x");
     serial_print("installed /system/testprog.bin, 0x");
-    print_hex((u64) len);
-    vga_print(" bytes");
-    serial_print(" bytes");
+    print_hex((u64) signed_len);
+    vga_print(" bytes (signed)");
+    serial_print(" bytes (signed)");
 }
 
 void cmd_spawn(void) {

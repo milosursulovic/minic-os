@@ -6,6 +6,7 @@
 #include "../../fs/vfs/vfs.h"
 #include "../../mm/paging/paging.h"
 #include "../../lib/rand.h"
+#include "../../security/exec_sign/exec_sign.h"
 
 #pragma GCC visibility push(hidden)
 extern u8 g_hello_service_prog_start;
@@ -142,7 +143,14 @@ bool syscall_process(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             return true;
         }
         u64 load_vaddr = randomize_load_vaddr(BUILTIN_LOAD_BASE);
-        int proc_index = spawn_process(start, end, load_vaddr, load_vaddr + 0x20000);
+        // Faza I point 14, item 17: index 0 is the one fixed compile-time
+        // entry (trusted builtin, unsandboxed, same as every other
+        // kmain.c-spawned program). Indices 1+ are runtime-registered
+        // slots that already passed exec_sign_verify() at registration
+        // time (syscall 14, below) - sandbox them, same as any other
+        // signature-verified spawn.
+        bool sandboxed = (int) a1 != 0;
+        int proc_index = spawn_process(start, end, load_vaddr, load_vaddr + 0x20000, sandboxed);
         if (proc_index < 0) {
             *result = (u64) -1;
             return true;
@@ -199,8 +207,26 @@ bool syscall_process(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             *result = (u64) -1;
             return true;
         }
+        // Faza I point 14, item 17: this is a real trust boundary (path
+        // was read from writable storage) - verify once, here, at
+        // registration time, so spawn_builtin (syscall 11, above) never
+        // has to re-check on every later spawn. Overwrite the buffer
+        // with just the verified payload (post-header), stripping the
+        // signature header out before it's ever treated as executable
+        // bytes.
+        const u8* payload;
+        u32 payload_len;
+        if (!exec_sign_verify(&g_registered_service_buf[slot][0], (u32) n, &payload, &payload_len)) {
+            *result = (u64) -1;
+            return true;
+        }
+        u32 j = 0;
+        while (j < payload_len) {
+            g_registered_service_buf[slot][j] = payload[j];
+            j = j + 1;
+        }
         g_registered_service_used[slot] = true;
-        g_registered_service_len[slot] = (u32) n;
+        g_registered_service_len[slot] = payload_len;
         *result = (u64) (slot + 1);  // index 0 stays reserved for the compile-time entry
         return true;
     }

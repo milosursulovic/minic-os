@@ -470,3 +470,21 @@ void cmd_ring3_posix2(void) {
     vga_print("sent ring3 posix2 trigger");
     serial_print("sent ring3 posix2 trigger");
 }
+
+// Faza I point 14, item 17: signed executable / sandboxing - the real
+// negative assertion (an unsigned blob planted on writable storage is
+// refused, not crashed on) - see ring3prog.c trigger 35. The positive
+// case and the sandbox deny-bitmap proof are both covered passively by
+// every process's own unconditional startup probe (ring3prog.c's
+// _start(), no separate trigger needed) - compare its printed result
+// after a plain boot vs. after `install` then `spawn`.
+void cmd_ring3_signfail(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 35);
+    if (!ok) {
+        vga_print("ring3signfail failed - channel full");
+        serial_print("ring3signfail failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 signfail trigger");
+    serial_print("sent ring3 signfail trigger");
+}

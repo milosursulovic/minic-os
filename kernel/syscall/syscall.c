@@ -6,6 +6,8 @@
 // recognizes num, else false, so the next handler gets a turn.
 
 #include "syscall.h"
+#include "../sched/task.h"
+#include "../security/sandbox/sandbox.h"
 #include "handlers/core.h"
 #include "handlers/process.h"
 #include "handlers/vfs.h"
@@ -28,6 +30,13 @@
 #include "handlers/port_io.h"
 
 u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
+    // Faza I point 14, item 17: a sandboxed process (holding an
+    // OBJ_SANDBOX handle - see kernel/security/sandbox/sandbox.h) is
+    // refused before any handler even sees the call. Checked here, once,
+    // at the real single choke point every syscall passes through.
+    if (sandbox_denies(g_tasks[g_current_task].process_index, num)) {
+        return (u64) -1;
+    }
     u64 result;
     if (syscall_core(num, a1, a2, a3, &result)) return result;
     if (syscall_process(num, a1, a2, a3, &result)) return result;
