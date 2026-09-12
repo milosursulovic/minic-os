@@ -25,8 +25,29 @@ static const u16 VBE_DISPI_DISABLED = 0x00;
 static const u16 VBE_DISPI_ENABLED = 0x01;
 static const u16 VBE_DISPI_LFB_ENABLED = 0x40;
 
-// Below this, port 0x1CE/0x1CF isn't a real DISPI interface.
+// Below this, port 0x1CE/0x1CF isn't a real DISPI interface. NOT
+// sufficient on its own though - an unassigned real I/O port typically
+// reads back as 0xFFFF (floating bus), which is >= this threshold and
+// would pass the check on real hardware even though no DISPI interface
+// exists there at all. See the real vendor/device ID check in
+// find_vga_device() below, added after this exact false positive let
+// vbe_init() proceed on a real Intel HD Graphics laptop, map that GPU's
+// real MMIO register aperture (its PCI BAR0, discovered as a genuine
+// class-0x03 VGA device) as if it were a Bochs-style linear framebuffer,
+// and blast raw pixel writes into real display-controller registers -
+// breaking the physical display within seconds. Real hardware simply
+// does not implement this Bochs/QEMU-specific "DISPI" register
+// interface; only emulated/paravirtualized VGA adapters do.
 static const u16 VBE_DISPI_ID_MIN = 0xB0C0;
+
+// The only VGA-class devices known to implement the Bochs DISPI register
+// interface this driver relies on: QEMU/Bochs standard VGA (vendor
+// 0x1234 - the well-known "Plex86/Bochs VGA" ID QEMU's `-vga std` uses)
+// and VirtualBox's VBoxVGA (vendor 0x80EE), which emulates the same
+// DISPI registers for compatibility. Any other vendor (Intel/AMD/Nvidia
+// real hardware included) is real silicon this driver must never touch.
+static const u16 VBE_VENDOR_QEMU_BOCHS = 0x1234;
+static const u16 VBE_VENDOR_VIRTUALBOX = 0x80EE;
 
 static const u64 FB_VADDR = 0x70000000;
 
@@ -56,7 +77,9 @@ static bool find_vga_device(u8* bus_out, u8* device_out, u8* function_out) {
     pci_enumerate();
     int i = 0;
     while (i < g_pci_device_count) {
-        if (g_pci_devices[i].class_code == 0x03) {
+        if (g_pci_devices[i].class_code == 0x03
+            && (g_pci_devices[i].vendor_id == VBE_VENDOR_QEMU_BOCHS
+                || g_pci_devices[i].vendor_id == VBE_VENDOR_VIRTUALBOX)) {
             *bus_out = g_pci_devices[i].bus;
             *device_out = g_pci_devices[i].device;
             *function_out = g_pci_devices[i].function;

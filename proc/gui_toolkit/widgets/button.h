@@ -72,7 +72,7 @@ static __attribute__((unused)) void button_init(button* self, int window_id, u32
 // focus/z-order too; that's still point 18's open "focus" item, not this
 // widget's job.
 static __attribute__((unused)) bool button_poll(button* self) {
-    // TEMPORARY diagnostic guard - see gt_debug_print's own comment
+    // Diagnostic guard - see gt_debug_print's own comment
     // (proc/gui_toolkit/core.h) and [[project_button_poll_crash_bug]]. A
     // real button is always a static/local variable's address within
     // this program's own private region - real ASLR (kernel/lib/rand.h)

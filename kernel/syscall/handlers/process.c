@@ -166,7 +166,13 @@ bool syscall_process(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
             }
             restore_interrupts(saved_flags);
         }
+        // Same protection as the block above - used=false is shared
+        // scheduler state yield()'s round-robin scan reads, so it needs
+        // the identical disable_interrupts()/restore_interrupts() guard
+        // even though it's outside the caller_process>=0 branch.
+        u64 saved_flags2 = disable_interrupts();
         g_tasks[g_current_task].used = false;
+        restore_interrupts(saved_flags2);
         yield();
         *result = 0;  // never actually reached - yield() never switches back to an exited task
         return true;

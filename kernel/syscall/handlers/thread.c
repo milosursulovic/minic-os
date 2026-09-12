@@ -123,7 +123,12 @@ bool syscall_thread(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         // while a spawned thread is still alive is a stated, out-of-scope
         // limitation for this first pass, same category as the already-
         // tracked stuck-respawn bug.
+        // Same disable_interrupts() protection as the block above (and
+        // syscall 12's own exit path) - used=false is shared scheduler
+        // state yield()'s round-robin scan reads.
+        u64 saved_flags = disable_interrupts();
         g_tasks[g_current_task].used = false;
+        restore_interrupts(saved_flags);
         yield();
         *result = 0;  // never actually reached
         return true;

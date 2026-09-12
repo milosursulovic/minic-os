@@ -185,12 +185,20 @@ void thread_join(int target_task_index) {
 
 // Blocks until the event is signaled - reuses yield()'s existing
 // waiting_on convention (wakes when *waiting_on becomes true), same shape
-// channel_receive()/io_request_wait() already use.
+// channel_receive()/io_request_wait() already use. The blocked+waiting_on
+// pair is disable_interrupts()-protected for the same reason yield()'s own
+// critical section is (see its comment): a timer IRQ landing between the
+// two writes would re-enter yield() with this task already marked blocked
+// but still pointing at a STALE waiting_on from a previous, different
+// wait - the wrap-around self-scan case in yield() could then read that
+// stale pointer and wake this task prematurely/incorrectly.
 void event_wait(int index) {
     while (index >= 0 && index < EVENT_SLOTS && !g_events[index].signaled) {
+        u64 saved_flags = disable_interrupts();
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_on = &g_events[index].signaled;
+        restore_interrupts(saved_flags);
         yield();
     }
 }
@@ -231,29 +239,37 @@ void mutex_unlock(int index) {
 // wake_tick blocking path sleep_ticks() already uses (waiting_on stays
 // NULL, yield() compares g_tick_count itself), just against a real
 // object's stored deadline instead of a fresh relative one.
+// disable_interrupts()-protected blocked/waiting_on/wake_tick writes - see
+// event_wait()'s own comment above for why.
 void timer_wait(int index) {
     if (index < 0 || index >= TIMER_SLOTS) {
         return;
     }
+    u64 saved_flags = disable_interrupts();
     task* self = &g_tasks[g_current_task];
     self->blocked = true;
     self->waiting_on = NULL;
     self->wake_tick = g_timers[index].wake_tick;
+    restore_interrupts(saved_flags);
     yield();
 }
 
 void sleep_ticks(u64 ticks) {
+    u64 saved_flags = disable_interrupts();
     task* self = &g_tasks[g_current_task];
     self->blocked = true;
     self->wake_tick = g_tick_count + ticks;
+    restore_interrupts(saved_flags);
     yield();
 }
 
 u64 channel_receive(int channel_index) {
     while (!channel_has_message(channel_index)) {
+        u64 saved_flags = disable_interrupts();
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_on = &g_channels[channel_index].full;
+        restore_interrupts(saved_flags);
         yield();
     }
     u64 value = 0;
@@ -266,9 +282,11 @@ u64 channel_receive(int channel_index) {
 // interpreting it as one u64.
 u32 channel_receive_msg(int channel_index, void* buf, u32 max_len) {
     while (!channel_has_message(channel_index)) {
+        u64 saved_flags = disable_interrupts();
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_on = &g_channels[channel_index].full;
+        restore_interrupts(saved_flags);
         yield();
     }
     return channel_take_msg(channel_index, buf, max_len);
@@ -276,27 +294,33 @@ u32 channel_receive_msg(int channel_index, void* buf, u32 max_len) {
 
 void io_request_wait(int slot_index) {
     while (!g_io_requests[slot_index].done) {
+        u64 saved_flags = disable_interrupts();
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_on = &g_io_requests[slot_index].done;
+        restore_interrupts(saved_flags);
         yield();
     }
 }
 
 void net_ping_request_wait(int slot_index) {
     while (!g_net_ping_requests[slot_index].done) {
+        u64 saved_flags = disable_interrupts();
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_on = &g_net_ping_requests[slot_index].done;
+        restore_interrupts(saved_flags);
         yield();
     }
 }
 
 void net_tcp_request_wait(int slot_index) {
     while (!g_net_tcp_requests[slot_index].done) {
+        u64 saved_flags = disable_interrupts();
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_on = &g_net_tcp_requests[slot_index].done;
+        restore_interrupts(saved_flags);
         yield();
     }
 }
