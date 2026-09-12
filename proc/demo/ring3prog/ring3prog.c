@@ -416,7 +416,6 @@ void _start(void) {
             break;
         }
     }
-    do_syscall(1, (u64) "shmsync_child_check=0x", (u64) shmsync_child_check, 0);
     if (shmsync_child_check) {
         gt_mutex_lock(3);
         char* dst = (char*) SHM_SYNC_VADDR;
