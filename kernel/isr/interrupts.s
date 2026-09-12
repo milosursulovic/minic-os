@@ -57,13 +57,32 @@ irq12:
     jmp isr_common_stub
 
 # Stack on entry: [vector, error_code, RIP, CS, RFLAGS, RSP, SS] (CPU pushed
-# the last five; the stub above pushed the first two). Read vector/
-# error_code/RIP into the SysV arg registers before any push touches them.
+# the last five; the stub above pushed the first two).
+#
+# Real bug fixed here (self-ptr-0x20 / stuck-respawn Part 2, ROOT CAUSE -
+# found via QEMU record/replay + stepi, 2026-09-12): this used to read
+# vector/error_code/RIP into rdi/rsi/rdx *before* pushing the interrupted
+# code's own register state - clobbering whatever the interrupted code
+# actually had in rdi/rsi/rdx at that exact instant, since the `push
+# rdi`/`push rsi`/`push rdx` below then saved these OVERWRITTEN values
+# instead of the originals. A timer IRQ (vector 32 = 0x20) landing between
+# a `mov %rax,%rdi` and the following `call` - completely ordinary,
+# unpreventable timing, not any kind of race - would silently replace the
+# interrupted code's live `rdi` with the literal vector number, restored
+# via `pop rdi` once the ISR returned. This is exactly why the corrupted
+# value was always small (a real IDT vector number: 0x20 for the timer,
+# matching this kernel's own IRQ0 remap) and why it could show up in
+# *any* of rdi/rsi/rdx depending on which one the interrupted code
+# happened to be using at that instant (self, a mouse_x/y pointer, RIP
+# itself via rdx feeding a later jump/return) - not a scheduler race, not
+# ASLR, not stack corruption; a plain register-clobber in the ISR entry
+# stub itself. Push everything FIRST (preserving the original live
+# registers exactly, same as `isr_syscall` below already correctly
+# does), then read vector/error_code/RIP from their known stack slots
+# *below* the 15 just-pushed registers (offset 15*8=120 onward) for
+# interrupt_handler's own arguments - this is the only correctness-
+# critical ordering; the ISR path is not itself timing-sensitive.
 isr_common_stub:
-    mov rdi, [rsp]
-    mov rsi, [rsp + 8]
-    mov rdx, [rsp + 16]
-
     push rax
     push rbx
     push rcx
@@ -79,6 +98,10 @@ isr_common_stub:
     push r13
     push r14
     push r15
+
+    mov rdi, [rsp + 120]
+    mov rsi, [rsp + 128]
+    mov rdx, [rsp + 136]
 
     call interrupt_handler
 
