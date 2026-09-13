@@ -63,7 +63,7 @@ DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 ASM_SRCS := kernel/boot/boot.s kernel/isr/interrupts.s kernel/sched/switch.s kernel/syscall/usermode.s kernel/sched/fork_enter_ring3.s
 ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/ring3prog.c' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/drivers/rtc_driver/rtc_driver.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './.claude/*' -not -path './tools/*'))
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/*' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/drivers/rtc_driver/rtc_driver.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './.claude/*' -not -path './tools/*'))
 C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
 .PHONY: all run iso disk clean sign_exec
@@ -103,15 +103,36 @@ $(C_OBJS): $(BUILD_DIR)/%.o: %.c
 # whole loader depends on. Every intermediate here (.gen.s, _raw.o,
 # _linked.elf, and the final .bin, read by .incbin below) goes into
 # build/proc/ - nothing generated lands in proc/ itself anymore.
-$(BUILD_DIR)/proc/demo/ring3prog/ring3prog.bin: proc/demo/ring3prog/ring3prog.c proc/ring3.ld
+# ring3prog.c used to be 1380 lines, everything in one file - split (same
+# reason/shape as gui_toolkit.h/syscall.c/shell.c's own earlier splits)
+# into ring3prog.c (entry point + dispatch) plus ring3prog_{security,io,
+# gui,ipc}.c (the trigger bodies, grouped by subsystem), sharing
+# ring3prog_common.h. Unlike those three, THIS build is not a plain glob
+# member of kernel.elf's own many-.c link - it's a separate, standalone
+# per-program link (see the comment above) - so splitting the source
+# means compiling each piece through the same freestanding pipeline
+# individually, then linking all of them together via proc/ring3.ld
+# (which already collects sections generically - *(.text.start) from
+# whichever one file defines _start, then *(.text) from every input
+# object - so link order across these doesn't matter).
+RING3PROG_SRCS := proc/demo/ring3prog/ring3prog.c \
+                   proc/demo/ring3prog/ring3prog_security.c \
+                   proc/demo/ring3prog/ring3prog_io.c \
+                   proc/demo/ring3prog/ring3prog_gui.c \
+                   proc/demo/ring3prog/ring3prog_ipc.c
+RING3PROG_OBJS := $(patsubst proc/demo/ring3prog/%.c,$(BUILD_DIR)/proc/demo/ring3prog/%_raw.o,$(RING3PROG_SRCS))
+
+$(BUILD_DIR)/proc/demo/ring3prog/%_raw.o: proc/demo/ring3prog/%.c proc/demo/ring3prog/ring3prog_common.h
 	@mkdir -p $(BUILD_DIR)/proc/demo/ring3prog
-	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.bin -MF $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.d -S -o $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.gen.s proc/demo/ring3prog/ring3prog.c
-	{ echo ".code64"; cat $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/demo/ring3prog/ring3prog_raw.o
-	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/demo/ring3prog/ring3prog_linked.elf $(BUILD_DIR)/proc/demo/ring3prog/ring3prog_raw.o
+	$(CC) $(CFLAGS) -MMD -MP -MT $@ -MF $(BUILD_DIR)/proc/demo/ring3prog/$*.d -S -o $(BUILD_DIR)/proc/demo/ring3prog/$*.gen.s proc/demo/ring3prog/$*.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/demo/ring3prog/$*.gen.s; } | $(AS) --32 -o $@
+
+$(BUILD_DIR)/proc/demo/ring3prog/ring3prog.bin: $(RING3PROG_OBJS) proc/ring3.ld
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/demo/ring3prog/ring3prog_linked.elf $(RING3PROG_OBJS)
 	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
 		$(BUILD_DIR)/proc/demo/ring3prog/ring3prog_linked.elf $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.bin
 
--include $(BUILD_DIR)/proc/demo/ring3prog/ring3prog.d
+-include $(RING3PROG_OBJS:_raw.o=.d)
 
 # Two more standalone-linked ring3 programs (init, and the trivial
 # service it spawns) - same shape as ring3prog.bin above, just two more.
