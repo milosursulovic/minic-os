@@ -135,7 +135,17 @@ static const u8 TX_STATUS_DD = 0x01;
 // Standard full-duplex config values from Intel's datasheet.
 static const u32 E1000_TCTL_VALUE = 0x014000FA;
 static const u32 E1000_TIPG_VALUE = 0x0060200A;
-static const u32 E1000_RCTL_VALUE = 0x0400800A;
+// Bit 4 (MPE, multicast promiscuous) added on top of the original
+// 0x0400800A (Faza I point 10, networking-completion arc item 3: IPv6's
+// Neighbor Discovery/Router Advertisement rely entirely on multicast
+// destination addresses - without MPE the NIC hardware itself silently
+// drops every one of those frames before the driver ever sees them, a
+// real and easy-to-miss total-failure cause). UPE (bit 3, unicast
+// promiscuous) was already set, broader than a correctly filtered
+// receive path would strictly need - MPE matches that same already-
+// permissive style rather than implementing Intel's real multicast hash
+// filter table.
+static const u32 E1000_RCTL_VALUE = 0x0400801A;
 
 static tx_descriptor* g_tx_ring;
 static u32 g_tx_tail;

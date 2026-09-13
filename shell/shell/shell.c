@@ -151,7 +151,7 @@ bool split_two_args(char* args, char* first_out, char** second_out) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 101
+#define SHELL_COMMAND_COUNT 103
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -207,6 +207,8 @@ static void shell_commands_init(void) {
     g_shell_commands[98] = "ring3posix2";
     g_shell_commands[99] = "usbinfo";
     g_shell_commands[100] = "ring3signfail";
+    g_shell_commands[101] = "ipv6config";
+    g_shell_commands[102] = "ping6";
     g_shell_commands_initialized = true;
 }
 
@@ -588,6 +590,10 @@ void run_command(void) {
         cmd_ping();
     } else if (streq(g_line_buffer, "ipconfig")) {
         cmd_ipconfig();
+    } else if (streq(g_line_buffer, "ipv6config")) {
+        cmd_ipv6config();
+    } else if (streq(g_line_buffer, "ping6") || starts_with(g_line_buffer, "ping6 ")) {
+        cmd_ping6();
     } else if (streq(g_line_buffer, "dns")) {
         cmd_dns();
     } else if (streq(g_line_buffer, "tcp")) {

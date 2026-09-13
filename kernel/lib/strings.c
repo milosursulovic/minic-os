@@ -173,3 +173,111 @@ bool parse_ip(const char* s, u8* out) {
     }
     return octet == 4;
 }
+
+bool parse_ip6(const char* s, u8* out) {
+    u16 groups[8];
+    int group_count = 0;
+    int compress_at = -1;
+
+    int i = 0;
+    int value = 0;
+    int hex_digits = 0;
+    bool have_value = false;
+
+    while (true) {
+        char c = s[i];
+        bool is_hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        if (is_hex) {
+            int digit;
+            if (c >= '0' && c <= '9') {
+                digit = c - '0';
+            } else if (c >= 'a' && c <= 'f') {
+                digit = c - 'a' + 10;
+            } else {
+                digit = c - 'A' + 10;
+            }
+            value = value * 16 + digit;
+            hex_digits = hex_digits + 1;
+            have_value = true;
+            if (hex_digits > 4 || group_count >= 8) {
+                return false;
+            }
+        } else if (c == ':') {
+            if (s[i + 1] == ':') {
+                if (compress_at >= 0) {
+                    return false;  // only one "::" allowed per address
+                }
+                if (have_value) {
+                    groups[group_count] = (u16) value;
+                    group_count = group_count + 1;
+                    value = 0;
+                    hex_digits = 0;
+                    have_value = false;
+                }
+                compress_at = group_count;
+                i = i + 2;
+                continue;
+            }
+            if (!have_value) {
+                return false;  // a bare ':' with nothing before it (and not part of "::")
+            }
+            groups[group_count] = (u16) value;
+            group_count = group_count + 1;
+            value = 0;
+            hex_digits = 0;
+            have_value = false;
+        } else if (c == '\0') {
+            if (have_value) {
+                if (group_count >= 8) {
+                    return false;
+                }
+                groups[group_count] = (u16) value;
+                group_count = group_count + 1;
+            }
+            break;
+        } else {
+            return false;  // anything else means "not a literal IPv6 address"
+        }
+        i = i + 1;
+    }
+
+    if (compress_at < 0) {
+        if (group_count != 8) {
+            return false;
+        }
+        int g = 0;
+        while (g < 8) {
+            out[g * 2] = (u8) (groups[g] >> 8);
+            out[g * 2 + 1] = (u8) (groups[g] & 0xFF);
+            g = g + 1;
+        }
+        return true;
+    }
+
+    if (group_count >= 8) {
+        return false;  // "::" must compress at least one group
+    }
+    int zeros_needed = 8 - group_count;
+    int out_idx = 0;
+    int g = 0;
+    while (g < compress_at) {
+        out[out_idx * 2] = (u8) (groups[g] >> 8);
+        out[out_idx * 2 + 1] = (u8) (groups[g] & 0xFF);
+        out_idx = out_idx + 1;
+        g = g + 1;
+    }
+    int z = 0;
+    while (z < zeros_needed) {
+        out[out_idx * 2] = 0;
+        out[out_idx * 2 + 1] = 0;
+        out_idx = out_idx + 1;
+        z = z + 1;
+    }
+    while (g < group_count) {
+        out[out_idx * 2] = (u8) (groups[g] >> 8);
+        out[out_idx * 2 + 1] = (u8) (groups[g] & 0xFF);
+        out_idx = out_idx + 1;
+        g = g + 1;
+    }
+    return out_idx == 8;
+}

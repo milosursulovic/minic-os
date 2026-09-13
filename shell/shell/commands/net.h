@@ -7,6 +7,8 @@ void cmd_netconns(void);
 void cmd_arp(void);
 void cmd_ping(void);
 void cmd_ipconfig(void);
+void cmd_ipv6config(void);
+void cmd_ping6(void);
 void cmd_dns(void);
 void cmd_tcp(void);
 

@@ -9,6 +9,9 @@
 #include "../../../kernel/net/icmp/icmp.h"
 #include "../../../kernel/net/dns/dns.h"
 #include "../../../kernel/net/tcp/tcp.h"
+#include "../../../kernel/net/ipv6/ipv6.h"
+#include "../../../kernel/net/ndp/ndp.h"
+#include "../../../kernel/net/icmp6/icmp6.h"
 
 void print_mac(u8* mac) {
     int i = 0;
@@ -34,6 +37,23 @@ static void print_ip(u8* ip) {
             serial_print(".");
         }
         i = i + 1;
+    }
+}
+
+// Colon-hex, one 16-bit group at a time, no zero-run "::" compression
+// (RFC 5952's compression is a display nicety, not required for the
+// address to be unambiguous or correct - kept simple, same "correctness
+// over cleverness" spirit as every other hand-written primitive here).
+static void print_ip6(u8* ip6) {
+    int i = 0;
+    while (i < 16) {
+        u16 group = (((u16) ip6[i]) << 8) | ((u16) ip6[i + 1]);
+        print_hex((u64) group);
+        if (i < 14) {
+            vga_print(":");
+            serial_print(":");
+        }
+        i = i + 2;
     }
 }
 
@@ -229,6 +249,114 @@ void cmd_ipconfig(void) {
     serial_print("  LINK: ");
     vga_print(e1000_link_up() ? "UP" : "DOWN");
     serial_print(e1000_link_up() ? "UP" : "DOWN");
+}
+
+// Faza I point 10, networking-completion arc item 3: real IPv6. Link-local
+// is always deterministic (no network needed); the global address (SLAAC,
+// via a real Router Advertisement) is best-effort - shown only if one was
+// actually obtained, same "don't claim what isn't real" honesty
+// ensure_ip_configured()'s DHCP fallback already established.
+void cmd_ipv6config(void) {
+    arp_init();  // brings the NIC up if needed - same call kernel/net/tcp/tcp.c's tcp_listen() already uses with no IP available yet
+    ipv6_init_link_local();
+    bool got_slaac = ndp_do_slaac();
+
+    vga_print("LINK-LOCAL: ");
+    serial_print("LINK-LOCAL: ");
+    print_ip6(&g_my_ipv6_link_local[0]);
+
+    if (got_slaac && g_ipv6_global_valid) {
+        vga_print("  GLOBAL: ");
+        serial_print("  GLOBAL: ");
+        print_ip6(&g_my_ipv6_global[0]);
+        vga_print("  ROUTER: ");
+        serial_print("  ROUTER: ");
+        print_ip6(&g_ipv6_default_router[0]);
+    } else {
+        vga_print("  GLOBAL: (no Router Advertisement received)");
+        serial_print("  GLOBAL: (no Router Advertisement received)");
+    }
+}
+
+// Real ICMPv6 echo (ping6), same real-shaped output cmd_ping()'s own IPv4
+// version gives. With no argument, pings kernel/net/ipv6/ipv6.h's own
+// g_ipv6_default_router (the SLAAC Router Advertisement's source) -
+// avoids requiring the user to type a colon-hex literal at this kernel's
+// shift-less console keyboard for the primary verification path, while
+// still accepting a real typed address for anything else.
+#define PING6_COUNT 4
+#define PING6_IDENTIFIER 0x5678
+void cmd_ping6(void) {
+    // "ping6" alone (bare, no trailing space) and "ping6 <address>" both
+    // reach here (shell.c's own dispatch matches both) - g_line_buffer[5]
+    // is either '\0' (bare) or ' ' (an address follows at [6]).
+    char* arg = (g_line_buffer[5] == ' ') ? &g_line_buffer[6] : &g_line_buffer[5];
+    u8 target_ip6[16];
+
+    if (arg[0] == '\0') {
+        if (!g_ipv6_global_valid) {
+            arp_init();
+            ipv6_init_link_local();
+            ndp_do_slaac();
+        }
+        if (!g_ipv6_global_valid) {
+            vga_print("ping6: no address given and no default router known (run ipv6config first)");
+            serial_print("ping6: no address given and no default router known (run ipv6config first)");
+            return;
+        }
+        int i = 0;
+        while (i < 16) {
+            target_ip6[i] = g_ipv6_default_router[i];
+            i = i + 1;
+        }
+    } else if (!parse_ip6(arg, target_ip6)) {
+        vga_print("usage: ping6 [address]");
+        serial_print("usage: ping6 [address]");
+        return;
+    }
+
+    vga_print("PING6 ");
+    serial_print("PING6 ");
+    print_ip6(target_ip6);
+    vga_print("  ");
+    serial_print("  ");
+
+    int received = 0;
+    int seq = 1;
+    while (seq <= PING6_COUNT) {
+        u64 start_tick = g_tick_count;
+        bool ok = icmp6_ping(target_ip6, PING6_IDENTIFIER, (u16) seq);
+        u64 elapsed = g_tick_count - start_tick;
+
+        if (ok) {
+            received = received + 1;
+            vga_print("bytes from ");
+            serial_print("bytes from ");
+            print_ip6(target_ip6);
+            vga_print(": icmp6_seq=");
+            serial_print(": icmp6_seq=");
+            print_decimal((u64) seq);
+            vga_print(" time=~");
+            serial_print(" time=~");
+            print_decimal(elapsed * 10);
+            vga_print("ms  ");
+            serial_print("ms  ");
+        } else {
+            vga_print("Request timeout for icmp6_seq=");
+            serial_print("Request timeout for icmp6_seq=");
+            print_decimal((u64) seq);
+            vga_print("  ");
+            serial_print("  ");
+        }
+        seq = seq + 1;
+    }
+
+    print_decimal((u64) PING6_COUNT);
+    vga_print(" transmitted, ");
+    serial_print(" transmitted, ");
+    print_decimal((u64) received);
+    vga_print(" received");
+    serial_print(" received");
 }
 
 void cmd_dns(void) {

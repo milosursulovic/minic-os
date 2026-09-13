@@ -24,5 +24,9 @@ void print_decimal(u64 value);
 // caller like cmd_ping tells "was I given a literal IP or a name to
 // resolve" apart.
 bool parse_ip(const char* s, u8* out);
+// Parses a colon-hex IPv6 literal (RFC 5952 textual form, including one
+// "::" zero-run compression) into out[0..15]. Faza I point 10,
+// networking-completion arc item 3.
+bool parse_ip6(const char* s, u8* out);
 
 #pragma GCC visibility pop
