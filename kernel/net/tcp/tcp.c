@@ -1,6 +1,9 @@
-// TCP client only: no listening side, no retransmission/congestion
-// control. A real connection table (below) gives each concurrent fetch
-// its own local port, so two connections no longer collide.
+// Real client-side retransmission (Faza I point 10, networking-completion
+// arc item 1) via tcp_send_reliable() below - the listening/server side
+// (tcp_listen/tcp_accept/tcp_server_send/tcp_server_receive) is explicitly
+// NOT covered by this item, a stated scope boundary, not an oversight.
+// Still no congestion control. A real connection table (below) gives each
+// concurrent fetch its own local port, so two connections no longer collide.
 //
 // Off-subnet hosts are reached by sending the frame to the gateway's MAC
 // (ARP-resolved) while the IP header's destination is the real remote host -
@@ -13,6 +16,8 @@
 #include "../dns/dns.h"
 #include "../../isr/isr.h"
 #include "../../sched/task.h"
+#include "../../drivers/io/io.h"
+#include "../../lib/strings.h"
 
 static const u8 IP_PROTOCOL_TCP = 6;
 
@@ -150,6 +155,16 @@ typedef struct {
     u16 payload_offset;   // into the caller's own receive buffer
 } tcp_segment_info;
 
+// TEMPORARY test hook (Faza I point 10, networking-completion arc item 1:
+// retransmission) - when nonzero, the next otherwise-valid match in
+// tcp_wait_segment() below is silently discarded (as if it never arrived)
+// and this counter is decremented, simulating one real lost packet
+// without needing actual network-level packet loss. Lets tcp_send_reliable()'s
+// retry path be verified for real (a genuine second attempt firing),
+// not just that the zero-loss happy path still works. Remove before this
+// item is considered fully done, unless kept as a permanent debug knob.
+u32 g_tcp_debug_drop_count;
+
 // Tick-bounded poll for a segment genuinely from target_ip:target_port to local_port.
 static bool tcp_wait_segment(u8* target_ip, u16 target_port, u16 local_port, u64 timeout_ticks,
                               u8* buf, u16 buf_len, tcp_segment_info* info_out) {
@@ -179,6 +194,10 @@ static bool tcp_wait_segment(u8* target_ip, u16 target_port, u16 local_port, u64
         if (src_port != target_port || dst_port != local_port) {
             continue;
         }
+        if (g_tcp_debug_drop_count > 0) {
+            g_tcp_debug_drop_count = g_tcp_debug_drop_count - 1;
+            continue;
+        }
         u32 seq = (((u32) buf[38]) << 24) | (((u32) buf[39]) << 16) | (((u32) buf[40]) << 8) | ((u32) buf[41]);
         u32 ack = (((u32) buf[42]) << 24) | (((u32) buf[43]) << 16) | (((u32) buf[44]) << 8) | ((u32) buf[45]);
         u8 flags = buf[47];
@@ -191,6 +210,44 @@ static bool tcp_wait_segment(u8* target_ip, u16 target_port, u16 local_port, u64
         info_out->payload_len = payload_len;
         info_out->payload_offset = (u16) (34 + tcp_header_len);
         return true;
+    }
+    return false;
+}
+
+#define TCP_RTO_TICKS 200
+#define TCP_MAX_ATTEMPTS 5
+
+// Real retransmission (Faza I point 10, networking-completion arc item 1):
+// resends the IDENTICAL segment via tcp_send_segment() every TCP_RTO_TICKS
+// while waiting for the peer's reply, instead of a single fire-and-forget
+// send + one bounded wait. Tick-bounded, not count-bounded - same timing
+// discipline proc/demo/ring3prog.c's own shmsync-check retry already
+// established for this codebase's cooperative scheduler (a count-bounded
+// loop can burn through many iterations inside one timer tick with zero
+// real elapsed time). Returns exactly what tcp_wait_segment() would have -
+// true the moment ANY matching segment arrives (the caller still does its
+// own flag/ack-number validation on it, exactly as before this item);
+// false only once every attempt is exhausted. This targets real packet
+// loss (no reply at all within one RTO) - an unexpected/wrong reply
+// arriving is a separate, much rarer case and stays the caller's own
+// problem to validate, unchanged from before this item.
+static bool tcp_send_reliable(u8* gateway_mac, u8* target_ip, u16 target_port, u16 local_port,
+                               u32 seq, u32 ack, u8 flags, u8* payload, u16 payload_len,
+                               u8* recv_buf, tcp_segment_info* info_out) {
+    int attempt = 0;
+    while (attempt < TCP_MAX_ATTEMPTS) {
+        if (!tcp_send_segment(gateway_mac, target_ip, target_port, local_port, seq, ack, flags, payload, payload_len)) {
+            return false;  // real send failure (e1000 TX ring stuck) - not worth retrying
+        }
+        if (tcp_wait_segment(target_ip, target_port, local_port, TCP_RTO_TICKS, recv_buf, 1500, info_out)) {
+            if (attempt > 0) {
+                serial_print("tcp_send_reliable: succeeded on attempt 0x");
+                print_hex((u64) (attempt + 1));
+                serial_print("\n");
+            }
+            return true;
+        }
+        attempt = attempt + 1;
     }
     return false;
 }
@@ -211,10 +268,8 @@ static bool tcp_fetch_conn(u16 local_port, u8* target_ip, u16 target_port, const
     tcp_segment_info seg;
 
     // --- Three-way handshake ---
-    if (!tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, 0, TCP_FLAG_SYN, NULL, 0)) {
-        return false;
-    }
-    if (!tcp_wait_segment(target_ip, target_port, local_port, 3000, &recv_buf[0], 1500, &seg)) {
+    if (!tcp_send_reliable(&gateway_mac[0], target_ip, target_port, local_port, my_seq, 0, TCP_FLAG_SYN, NULL, 0,
+                            &recv_buf[0], &seg)) {
         return false;
     }
     if ((seg.flags & TCP_FLAG_RST) != 0) {
@@ -231,18 +286,50 @@ static bool tcp_fetch_conn(u16 local_port, u8* target_ip, u16 target_port, const
     // Handshake complete - ESTABLISHED.
 
     // --- Send the real request as one data segment ---
-    if (!tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq,
-                           TCP_FLAG_PSH | TCP_FLAG_ACK, (u8*) request, request_len)) {
+    bool peer_finished = false;
+    u32 total_received = 0;
+    if (!tcp_send_reliable(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq,
+                            TCP_FLAG_PSH | TCP_FLAG_ACK, (u8*) request, request_len,
+                            &recv_buf[0], &seg)) {
         return false;
     }
     my_seq = my_seq + request_len;
+    // tcp_send_reliable() just consumed the peer's first reply into `seg`
+    // (needed internally to know the data segment was actually acked,
+    // not lost) - a real server commonly fuses its response payload onto
+    // that same reply rather than sending a bare ACK first, so apply it
+    // here with the exact same accounting the receive loop below uses,
+    // instead of silently dropping whatever tcp_send_reliable() already
+    // consumed.
+    if (seg.payload_len > 0) {
+        u32 copy_len = seg.payload_len;
+        if (copy_len > max_response_len) {
+            copy_len = max_response_len;
+        }
+        u32 i = 0;
+        while (i < copy_len) {
+            response_out[i] = recv_buf[seg.payload_offset + i];
+            i = i + 1;
+        }
+        total_received = copy_len;
+        peer_seq = peer_seq + seg.payload_len;
+    }
+    bool acked_something_new = seg.payload_len > 0;
+    if ((seg.flags & TCP_FLAG_FIN) != 0) {
+        peer_seq = peer_seq + 1;
+        peer_finished = true;
+        acked_something_new = true;
+    }
+    if (acked_something_new) {
+        // A bare ACK (no payload, no FIN) needs no reply here - the peer
+        // was just acking OUR data segment, nothing of its own to ack back.
+        tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq, TCP_FLAG_ACK, NULL, 0);
+    }
 
     // Receive across as many segments as arrive within the budget, ACKing each,
     // until the peer sends FIN or the buffer fills.
-    bool peer_finished = false;
-    u32 total_received = 0;
     u64 recv_deadline = g_tick_count + 3000;
-    while (g_tick_count < recv_deadline && total_received < max_response_len) {
+    while (!peer_finished && g_tick_count < recv_deadline && total_received < max_response_len) {
         if (!tcp_wait_segment(target_ip, target_port, local_port, recv_deadline - g_tick_count,
                                &recv_buf[0], 1500, &seg)) {
             break;   // timed out - stop with whatever arrived
@@ -272,18 +359,22 @@ static bool tcp_fetch_conn(u16 local_port, u8* target_ip, u16 target_port, const
     }
     *response_len_out = total_received;
 
-    // Best-effort close; a timeout here doesn't flip the overall return value.
+    // Best-effort close; a timeout here doesn't flip the overall return
+    // value. Uses tcp_send_reliable() too now - a lost FIN no longer just
+    // silently relies on the peer's own retransmit (real TCP stacks do
+    // retransmit their own unacked FIN, but there's no reason to depend on
+    // that when this side can just resend it directly).
     if (!peer_finished) {
-        tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
-        if (tcp_wait_segment(target_ip, target_port, local_port, 500, &recv_buf[0], 1500, &seg)) {
+        if (tcp_send_reliable(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq,
+                               TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0, &recv_buf[0], &seg)) {
             if ((seg.flags & TCP_FLAG_FIN) != 0) {
                 peer_seq = seg.seq + 1;
                 tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq + 1, peer_seq, TCP_FLAG_ACK, NULL, 0);
             }
         }
     } else {
-        tcp_send_segment(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
-        tcp_wait_segment(target_ip, target_port, local_port, 500, &recv_buf[0], 1500, &seg);   // best-effort final ACK, result unused
+        tcp_send_reliable(&gateway_mac[0], target_ip, target_port, local_port, my_seq, peer_seq,
+                           TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0, &recv_buf[0], &seg);   // best-effort final ACK, result unused
     }
 
     return total_received > 0;

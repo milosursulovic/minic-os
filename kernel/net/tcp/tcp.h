@@ -29,6 +29,12 @@ typedef struct {
 
 extern tcp_connection g_tcp_connections[TCP_CONNECTION_SLOTS];
 
+// TEMPORARY test hook - see kernel/net/tcp/tcp.c's own comment. Set
+// nonzero right before a tcp_fetch()/tcp_send_reliable() call to
+// deliberately simulate one lost packet and prove the retry path fires
+// for real.
+extern u32 g_tcp_debug_drop_count;
+
 // Real server side: kernel/net/tcp/tcp.c's tcp_send_segment()/
 // tcp_wait_segment() (already generic - plain destination MAC + target
 // ip/port + seq/ack/flags, nothing client-specific baked in) are reused
