@@ -106,6 +106,27 @@ int format_hex(u64 value, u8* out) {
     return len;
 }
 
+int format_decimal(u64 value, u8* out) {
+    char buf[20];
+    if (value == 0) {
+        out[0] = (u8) '0';
+        return 1;
+    }
+    int i = 19;
+    while (value > 0 && i >= 0) {
+        buf[i] = (char) ('0' + (value % 10));
+        value = value / 10;
+        i = i - 1;
+    }
+    int len = 19 - i;
+    int j = 0;
+    while (j < len) {
+        out[j] = (u8) buf[i + 1 + j];
+        j = j + 1;
+    }
+    return len;
+}
+
 void join_path(char* out, const char* base, const char* name) {
     int i = 0;
     while (base[i] != '\0') {
@@ -290,4 +311,44 @@ bool parse_ip6(const char* s, u8* out) {
         g = g + 1;
     }
     return out_idx == 8;
+}
+
+int find_bytes(const u8* haystack, int haystack_len, const char* needle) {
+    int needle_len = strlen_(needle);
+    if (needle_len == 0 || needle_len > haystack_len) {
+        return -1;
+    }
+    int i = 0;
+    while (i <= haystack_len - needle_len) {
+        int j = 0;
+        while (j < needle_len && haystack[i + j] == (u8) needle[j]) {
+            j = j + 1;
+        }
+        if (j == needle_len) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+static char to_lower_ascii(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return (char) (c - 'A' + 'a');
+    }
+    return c;
+}
+
+bool streq_ci_n(const char* a, const char* b, int len) {
+    int i = 0;
+    while (i < len) {
+        if (b[i] == '\0') {
+            return false;
+        }
+        if (to_lower_ascii(a[i]) != to_lower_ascii(b[i])) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return b[len] == '\0';
 }

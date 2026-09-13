@@ -13,6 +13,7 @@
 #include "../../../kernel/net/ndp/ndp.h"
 #include "../../../kernel/net/icmp6/icmp6.h"
 #include "../../../kernel/net/tls/tls.h"
+#include "../../../kernel/net/http/http.h"
 
 void print_mac(u8* mac) {
     int i = 0;
@@ -373,137 +374,118 @@ void cmd_dns(void) {
     print_hex(elapsed);
 }
 
+// Real HTTP/1.1 client (kernel/net/http/http.c) - a genuinely parsed
+// status line/headers/body (Content-Length OR chunked, both handled),
+// not just "first 4 response bytes == HTTP". example.com's real response
+// actually uses `Transfer-Encoding: chunked` (confirmed live via `curl`
+// during this item's own planning), so `was_chunked` below is a real,
+// meaningful assertion, not a hypothetical.
 void cmd_tcp(void) {
-    u8 ip[4];
-    if (!dns_resolve_a("example.com", &ip[0])) {
-        vga_print("tcp: could not resolve example.com");
-        serial_print("tcp: could not resolve example.com");
-        return;
-    }
-    vga_print("resolved example.com -> 0x");
-    serial_print("resolved example.com -> 0x");
-    print_hex(ip[0]);
-    vga_print(".0x");
-    serial_print(".0x");
-    print_hex(ip[1]);
-    vga_print(".0x");
-    serial_print(".0x");
-    print_hex(ip[2]);
-    vga_print(".0x");
-    serial_print(".0x");
-    print_hex(ip[3]);
-
-    const char* request = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
-    u8 response[512];
-    u32 response_len = 0;
+    u8 response[2048];
+    http_response_t resp;
     u64 start_tick = g_tick_count;
-    bool ok = tcp_fetch(&ip[0], 80, request, (u16) strlen_(request), &response[0], 512, &response_len);
+    bool ok = http_fetch("http://example.com/", &response[0], (u32) sizeof(response), &resp);
     u64 elapsed = g_tick_count - start_tick;
 
-    vga_print(" tcp_fetch_ok=0x");
-    serial_print(" tcp_fetch_ok=0x");
+    vga_print("http_fetch_ok=0x");
+    serial_print("http_fetch_ok=0x");
     print_hex((u64) ok);
-    vga_print(" response_len=0x");
-    serial_print(" response_len=0x");
-    print_hex((u64) response_len);
     vga_print(" elapsed_ticks=0x");
     serial_print(" elapsed_ticks=0x");
     print_hex(elapsed);
 
-    bool got_http_status = response_len >= 4
-        && response[0] == 'H' && response[1] == 'T' && response[2] == 'T' && response[3] == 'P';
-    vga_print(" got_http_status=0x");
-    serial_print(" got_http_status=0x");
-    print_hex((u64) got_http_status);
+    if (ok) {
+        vga_print(" status_code=0x");
+        serial_print(" status_code=0x");
+        print_hex((u64) resp.status_code);
+        vga_print(" body_len=0x");
+        serial_print(" body_len=0x");
+        print_hex((u64) resp.body_len);
+
+        const http_header_t* te = http_find_header(&resp, "Transfer-Encoding");
+        bool was_chunked = te != NULL && te->value_len >= 7 && streq_ci_n(te->value, "chunked", 7);
+        vga_print(" was_chunked=0x");
+        serial_print(" was_chunked=0x");
+        print_hex((u64) was_chunked);
+    }
 }
 
-// Real hand-written TLS 1.2 client (kernel/net/tls/tls.c) - RSA key
-// exchange, AES-128-CBC, HMAC-SHA256, trust-on-first-use. No argument
-// defaults to a local test server (10.0.2.2:8443 - QEMU SLIRP's own
-// gateway address, which reaches services on the HOST's own loopback,
-// e.g. `openssl s_server -accept 8443 -cipher AES128-SHA256 -tls1_2`) -
+// Real HTTP-over-TLS fetch (kernel/net/http/http.c dispatches to
+// kernel/net/tls/tls.c for an "https://" URL). No argument defaults to a
+// local test server (10.0.2.2:8443 - QEMU SLIRP's own gateway address,
+// which reaches services on the HOST's own loopback, e.g. `openssl
+// s_server -accept 8443 -cipher AES128-SHA256 -tls1_2`) -
 // TLS_RSA_WITH_AES_128_CBC_SHA256 has been dropped by most real internet
 // hosts (no forward secrecy), so a real, independent local peer is this
 // item's own decisive interop proof, same spirit as the TCP server
 // milestone's own "verified with a real external client" precedent.
 void cmd_tlsfetch(void) {
     char* arg = (g_line_buffer[8] == ' ') ? &g_line_buffer[9] : &g_line_buffer[8];
+    const char* url = (arg[0] != '\0') ? arg : "https://10.0.2.2:8443/";
 
-    u8 ip[4];
-    ip[0] = 10; ip[1] = 0; ip[2] = 2; ip[3] = 2;
-    u32 port = 8443;
-
-    if (arg[0] != '\0') {
-        char ip_buf[32];
-        int i = 0;
-        while (arg[i] != '\0' && arg[i] != ' ' && i < 31) {
-            ip_buf[i] = arg[i];
-            i = i + 1;
-        }
-        ip_buf[i] = '\0';
-        if (!parse_ip(ip_buf, ip)) {
-            vga_print("tlsfetch: usage: tlsfetch [ip] [port]");
-            serial_print("tlsfetch: usage: tlsfetch [ip] [port]");
-            return;
-        }
-        if (arg[i] == ' ') {
-            port = parse_decimal_u32(&arg[i + 1]);
-        }
-    }
-
-    vga_print("tlsfetch: connecting to ");
-    serial_print("tlsfetch: connecting to ");
-    print_ip(ip);
-    vga_print(":");
-    serial_print(":");
-    print_decimal((u64) port);
-    vga_print("\n");
-    serial_print("\n");
-
-    tls_conn_t conn;
+    u8 response[2048];
+    http_response_t resp;
     u64 start_tick = g_tick_count;
-    bool handshake_ok = tls_connect(ip, (u16) port, &conn);
-    u64 handshake_ticks = g_tick_count - start_tick;
+    bool ok = http_fetch(url, &response[0], (u32) sizeof(response), &resp);
+    u64 elapsed = g_tick_count - start_tick;
 
-    vga_print("tls_connect_ok=0x");
-    serial_print("tls_connect_ok=0x");
-    print_hex((u64) handshake_ok);
+    vga_print("http_fetch_ok=0x");
+    serial_print("http_fetch_ok=0x");
+    print_hex((u64) ok);
     vga_print(" elapsed_ticks=0x");
     serial_print(" elapsed_ticks=0x");
-    print_hex(handshake_ticks);
-    vga_print("\n");
-    serial_print("\n");
+    print_hex(elapsed);
 
-    if (!handshake_ok) {
+    if (ok) {
+        vga_print(" status_code=0x");
+        serial_print(" status_code=0x");
+        print_hex((u64) resp.status_code);
+        vga_print(" body_len=0x");
+        serial_print(" body_len=0x");
+        print_hex((u64) resp.body_len);
+    }
+}
+
+// Real HTTP server (kernel/net/http.c's http_serve_request()) on top of
+// the socket-listen API added several milestones ago (kernel/net/tcp/tcp.c's
+// tcp_listen/tcp_accept/tcp_server_*) - proven once via the `ring3tcpserver`
+// echo demo but never used for anything real since. Bounded to a fixed
+// number of accepted connections so this shell command actually returns,
+// same "bounded demo loop" precedent as `ring3tcpserver` itself.
+#define HTTPSERVE_PORT 8080
+#define HTTPSERVE_MAX_CONNECTIONS 5
+void cmd_httpserve(void) {
+    int listener = tcp_listen(HTTPSERVE_PORT);
+    if (listener < 0) {
+        vga_print("httpserve: tcp_listen failed");
+        serial_print("httpserve: tcp_listen failed");
         return;
     }
-
-    const char* request = "GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n";
-    bool sent = tls_send(&conn, (const u8*) request, (u16) strlen_(request));
-    vga_print("tls_send_ok=0x");
-    serial_print("tls_send_ok=0x");
-    print_hex((u64) sent);
-
-    u8 response[512];
-    u16 response_len = 0;
-    bool received = false;
-    if (sent) {
-        received = tls_receive(&conn, &response[0], (u16) sizeof(response), 3000, &response_len);
-    }
-    vga_print(" tls_receive_ok=0x");
-    serial_print(" tls_receive_ok=0x");
-    print_hex((u64) received);
-    vga_print(" response_len=0x");
-    serial_print(" response_len=0x");
-    print_hex((u64) response_len);
-
-    bool got_http_status = response_len >= 4
-        && response[0] == 'H' && response[1] == 'T' && response[2] == 'T' && response[3] == 'P';
-    vga_print(" got_http_status=0x");
-    serial_print(" got_http_status=0x");
-    print_hex((u64) got_http_status);
+    vga_print("httpserve: listening on port 0x");
+    serial_print("httpserve: listening on port 0x");
+    print_hex((u64) HTTPSERVE_PORT);
     vga_print("\n");
     serial_print("\n");
 
-    tls_close(&conn);
+    int served = 0;
+    while (served < HTTPSERVE_MAX_CONNECTIONS) {
+        u8 remote_ip[4];
+        u16 remote_port;
+        int conn_slot = tcp_accept(listener, 6000, &remote_ip[0], &remote_port);
+        if (conn_slot < 0) {
+            vga_print("httpserve: accept timed out, stopping\n");
+            serial_print("httpserve: accept timed out, stopping\n");
+            break;
+        }
+        vga_print("httpserve: request from ");
+        serial_print("httpserve: request from ");
+        print_ip(remote_ip);
+        bool ok = http_serve_request(conn_slot);
+        vga_print(" served_ok=0x");
+        serial_print(" served_ok=0x");
+        print_hex((u64) ok);
+        vga_print("\n");
+        serial_print("\n");
+        served = served + 1;
+    }
 }

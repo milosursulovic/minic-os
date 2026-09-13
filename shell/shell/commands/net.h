@@ -12,6 +12,7 @@ void cmd_ping6(void);
 void cmd_dns(void);
 void cmd_tcp(void);
 void cmd_tlsfetch(void);
+void cmd_httpserve(void);
 
 // Shared with commands/hardware.c's cmd_nic - both print a 6-byte MAC in
 // the same colon-hex form.
