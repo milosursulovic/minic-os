@@ -174,6 +174,16 @@ bool parse_ip(const char* s, u8* out) {
     return octet == 4;
 }
 
+u32 parse_decimal_u32(const char* s) {
+    u32 value = 0;
+    int i = 0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        value = value * 10 + (u32) (s[i] - '0');
+        i = i + 1;
+    }
+    return value;
+}
+
 bool parse_ip6(const char* s, u8* out) {
     u16 groups[8];
     int group_count = 0;

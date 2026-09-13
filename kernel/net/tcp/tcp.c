@@ -393,6 +393,172 @@ bool tcp_fetch(u8* target_ip, u16 target_port, const char* request, u16 request_
     return ok;
 }
 
+// --- Real interactive client stream (see tcp.h's own comment) ---
+
+bool tcp_stream_open(u8* ip, u16 port, tcp_conn_t* conn) {
+    ensure_ip_configured();
+    if (!arp_resolve(&g_gateway_ip[0], &conn->gateway_mac[0])) {
+        return false;
+    }
+    int slot = tcp_conn_open(ip, port);
+    if (slot < 0) {
+        return false;
+    }
+    conn->pool_slot = slot;
+    conn->local_port = g_tcp_connections[slot].local_port;
+    int i = 0;
+    while (i < 4) {
+        conn->target_ip[i] = ip[i];
+        i = i + 1;
+    }
+    conn->target_port = port;
+    conn->pending_len = 0;
+    conn->peer_finished = false;
+
+    u32 my_seq = 0x10000 + (u32) g_tick_count;
+    u8 recv_buf[1500];
+    tcp_segment_info seg;
+    if (!tcp_send_reliable(&conn->gateway_mac[0], &conn->target_ip[0], conn->target_port, conn->local_port,
+                            my_seq, 0, TCP_FLAG_SYN, NULL, 0, &recv_buf[0], &seg)) {
+        tcp_conn_close(slot);
+        return false;
+    }
+    if ((seg.flags & TCP_FLAG_RST) != 0
+        || (seg.flags & TCP_FLAG_SYN) == 0 || (seg.flags & TCP_FLAG_ACK) == 0 || seg.ack != my_seq + 1) {
+        tcp_conn_close(slot);
+        return false;
+    }
+    conn->my_seq = my_seq + 1;
+    conn->peer_seq = seg.seq + 1;
+    tcp_send_segment(&conn->gateway_mac[0], &conn->target_ip[0], conn->target_port, conn->local_port,
+                      conn->my_seq, conn->peer_seq, TCP_FLAG_ACK, NULL, 0);
+    return true;
+}
+
+bool tcp_stream_send(tcp_conn_t* conn, const u8* data, u16 len) {
+    u8 recv_buf[1500];
+    tcp_segment_info seg;
+    if (!tcp_send_reliable(&conn->gateway_mac[0], &conn->target_ip[0], conn->target_port, conn->local_port,
+                            conn->my_seq, conn->peer_seq, TCP_FLAG_PSH | TCP_FLAG_ACK,
+                            (u8*) data, len, &recv_buf[0], &seg)) {
+        return false;
+    }
+    conn->my_seq = conn->my_seq + len;
+
+    bool acked_something_new = false;
+    if (seg.payload_len > 0) {
+        u16 space = (u16) (TCP_STREAM_PENDING_BUF_LEN - conn->pending_len);
+        u16 copy_len = seg.payload_len;
+        if (copy_len > space) {
+            copy_len = space;  // shouldn't happen with this codebase's small handshake/app messages
+        }
+        int i = 0;
+        while (i < (int) copy_len) {
+            conn->pending_buf[conn->pending_len + i] = recv_buf[seg.payload_offset + i];
+            i = i + 1;
+        }
+        conn->pending_len = (u16) (conn->pending_len + copy_len);
+        conn->peer_seq = conn->peer_seq + seg.payload_len;
+        acked_something_new = true;
+    }
+    if ((seg.flags & TCP_FLAG_FIN) != 0) {
+        conn->peer_seq = conn->peer_seq + 1;
+        conn->peer_finished = true;
+        acked_something_new = true;
+    }
+    if (acked_something_new) {
+        tcp_send_segment(&conn->gateway_mac[0], &conn->target_ip[0], conn->target_port, conn->local_port,
+                          conn->my_seq, conn->peer_seq, TCP_FLAG_ACK, NULL, 0);
+    }
+    return true;
+}
+
+bool tcp_stream_receive(tcp_conn_t* conn, u8* buf, u16 max_len, u64 timeout_ticks, u16* len_out) {
+    if (conn->pending_len > 0) {
+        u16 copy_len = conn->pending_len;
+        if (copy_len > max_len) {
+            copy_len = max_len;
+        }
+        int i = 0;
+        while (i < (int) copy_len) {
+            buf[i] = conn->pending_buf[i];
+            i = i + 1;
+        }
+        u16 remaining = (u16) (conn->pending_len - copy_len);
+        i = 0;
+        while (i < (int) remaining) {
+            conn->pending_buf[i] = conn->pending_buf[copy_len + i];
+            i = i + 1;
+        }
+        conn->pending_len = remaining;
+        *len_out = copy_len;
+        return true;
+    }
+    if (conn->peer_finished) {
+        *len_out = 0;
+        return false;
+    }
+
+    tcp_segment_info seg;
+    u8 recv_buf[1500];
+    if (!tcp_wait_segment(&conn->target_ip[0], conn->target_port, conn->local_port, timeout_ticks,
+                           &recv_buf[0], 1500, &seg)) {
+        *len_out = 0;
+        return false;
+    }
+    u16 copy_len = seg.payload_len;
+    if (copy_len > max_len) {
+        copy_len = max_len;
+    }
+    int i = 0;
+    while (i < (int) copy_len) {
+        buf[i] = recv_buf[seg.payload_offset + i];
+        i = i + 1;
+    }
+    // Any bytes the caller didn't have room for aren't lost - stash them in
+    // the pending buffer (known empty here, since the branch above already
+    // drains it first) so the next tcp_stream_receive() call picks them up.
+    u16 leftover = (u16) (seg.payload_len - copy_len);
+    if (leftover > 0 && leftover <= TCP_STREAM_PENDING_BUF_LEN) {
+        i = 0;
+        while (i < (int) leftover) {
+            conn->pending_buf[i] = recv_buf[seg.payload_offset + copy_len + i];
+            i = i + 1;
+        }
+        conn->pending_len = leftover;
+    }
+    conn->peer_seq = conn->peer_seq + seg.payload_len;
+    if ((seg.flags & TCP_FLAG_FIN) != 0) {
+        conn->peer_seq = conn->peer_seq + 1;
+        conn->peer_finished = true;
+    }
+    tcp_send_segment(&conn->gateway_mac[0], &conn->target_ip[0], conn->target_port, conn->local_port,
+                      conn->my_seq, conn->peer_seq, TCP_FLAG_ACK, NULL, 0);
+    *len_out = copy_len;
+    return true;
+}
+
+void tcp_stream_close(tcp_conn_t* conn) {
+    u8 recv_buf[1500];
+    tcp_segment_info seg;
+    if (!conn->peer_finished) {
+        if (tcp_send_reliable(&conn->gateway_mac[0], &conn->target_ip[0], conn->target_port, conn->local_port,
+                               conn->my_seq, conn->peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0,
+                               &recv_buf[0], &seg)) {
+            if ((seg.flags & TCP_FLAG_FIN) != 0) {
+                conn->peer_seq = seg.seq + 1;
+                tcp_send_segment(&conn->gateway_mac[0], &conn->target_ip[0], conn->target_port, conn->local_port,
+                                  conn->my_seq + 1, conn->peer_seq, TCP_FLAG_ACK, NULL, 0);
+            }
+        }
+    } else {
+        tcp_send_reliable(&conn->gateway_mac[0], &conn->target_ip[0], conn->target_port, conn->local_port,
+                           conn->my_seq, conn->peer_seq, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0,
+                           &recv_buf[0], &seg);  // best-effort final ACK, result unused
+    }
+    tcp_conn_close(conn->pool_slot);
+}
+
 // --- Real server side: listen/accept ---
 
 tcp_listener g_tcp_listeners[TCP_LISTENER_SLOTS];

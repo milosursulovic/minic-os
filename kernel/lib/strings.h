@@ -28,5 +28,9 @@ bool parse_ip(const char* s, u8* out);
 // "::" zero-run compression) into out[0..15]. Faza I point 10,
 // networking-completion arc item 3.
 bool parse_ip6(const char* s, u8* out);
+// Plain base-10 unsigned parser (e.g. a port number typed at the shell) -
+// non-digit characters end the parse, same "stop at the first thing that
+// doesn't fit" tolerance as parse_hex.
+u32 parse_decimal_u32(const char* s);
 
 #pragma GCC visibility pop

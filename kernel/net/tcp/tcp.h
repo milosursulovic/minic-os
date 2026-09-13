@@ -29,6 +29,41 @@ typedef struct {
 
 extern tcp_connection g_tcp_connections[TCP_CONNECTION_SLOTS];
 
+// Real interactive (multi-round-trip) client stream, unlike tcp_fetch()'s
+// single-shot request/response - needed by anything that has to hold a
+// live connection open across several separate sends/receives (a TLS
+// handshake's many messages, a future HTTP keep-alive connection). Thin
+// wrappers around this file's own existing tcp_conn_open/tcp_send_reliable/
+// tcp_send_segment/tcp_wait_segment/tcp_conn_close - no logic duplicated,
+// same handshake/close sequence tcp_fetch_conn() already uses.
+#define TCP_STREAM_PENDING_BUF_LEN 1500
+
+typedef struct {
+    int pool_slot;
+    u8 gateway_mac[6];
+    u8 target_ip[4];
+    u16 target_port;
+    u16 local_port;
+    u32 my_seq;
+    u32 peer_seq;
+    bool peer_finished;
+    // A send can have the peer's reply fused onto its own ACK (a real,
+    // fast-replying peer commonly does this) - tcp_stream_send() stashes
+    // that payload here instead of discarding it, so the next
+    // tcp_stream_receive() call drains it before waiting on the wire.
+    u8 pending_buf[TCP_STREAM_PENDING_BUF_LEN];
+    u16 pending_len;
+} tcp_conn_t;
+
+bool tcp_stream_open(u8* ip, u16 port, tcp_conn_t* conn);
+bool tcp_stream_send(tcp_conn_t* conn, const u8* data, u16 len);
+// Tick-bounded poll for the next chunk of incoming bytes (drains any
+// already-pending fused payload first, with no wait). Returns true with
+// *len_out > 0 on data, false on timeout or once the peer has sent FIN
+// with nothing left pending.
+bool tcp_stream_receive(tcp_conn_t* conn, u8* buf, u16 max_len, u64 timeout_ticks, u16* len_out);
+void tcp_stream_close(tcp_conn_t* conn);
+
 // TEMPORARY test hook - see kernel/net/tcp/tcp.c's own comment. Set
 // nonzero right before a tcp_fetch()/tcp_send_reliable() call to
 // deliberately simulate one lost packet and prove the retry path fires

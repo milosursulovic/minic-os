@@ -12,6 +12,7 @@
 #include "../../../kernel/net/ipv6/ipv6.h"
 #include "../../../kernel/net/ndp/ndp.h"
 #include "../../../kernel/net/icmp6/icmp6.h"
+#include "../../../kernel/net/tls/tls.h"
 
 void print_mac(u8* mac) {
     int i = 0;
@@ -414,4 +415,95 @@ void cmd_tcp(void) {
     vga_print(" got_http_status=0x");
     serial_print(" got_http_status=0x");
     print_hex((u64) got_http_status);
+}
+
+// Real hand-written TLS 1.2 client (kernel/net/tls/tls.c) - RSA key
+// exchange, AES-128-CBC, HMAC-SHA256, trust-on-first-use. No argument
+// defaults to a local test server (10.0.2.2:8443 - QEMU SLIRP's own
+// gateway address, which reaches services on the HOST's own loopback,
+// e.g. `openssl s_server -accept 8443 -cipher AES128-SHA256 -tls1_2`) -
+// TLS_RSA_WITH_AES_128_CBC_SHA256 has been dropped by most real internet
+// hosts (no forward secrecy), so a real, independent local peer is this
+// item's own decisive interop proof, same spirit as the TCP server
+// milestone's own "verified with a real external client" precedent.
+void cmd_tlsfetch(void) {
+    char* arg = (g_line_buffer[8] == ' ') ? &g_line_buffer[9] : &g_line_buffer[8];
+
+    u8 ip[4];
+    ip[0] = 10; ip[1] = 0; ip[2] = 2; ip[3] = 2;
+    u32 port = 8443;
+
+    if (arg[0] != '\0') {
+        char ip_buf[32];
+        int i = 0;
+        while (arg[i] != '\0' && arg[i] != ' ' && i < 31) {
+            ip_buf[i] = arg[i];
+            i = i + 1;
+        }
+        ip_buf[i] = '\0';
+        if (!parse_ip(ip_buf, ip)) {
+            vga_print("tlsfetch: usage: tlsfetch [ip] [port]");
+            serial_print("tlsfetch: usage: tlsfetch [ip] [port]");
+            return;
+        }
+        if (arg[i] == ' ') {
+            port = parse_decimal_u32(&arg[i + 1]);
+        }
+    }
+
+    vga_print("tlsfetch: connecting to ");
+    serial_print("tlsfetch: connecting to ");
+    print_ip(ip);
+    vga_print(":");
+    serial_print(":");
+    print_decimal((u64) port);
+    vga_print("\n");
+    serial_print("\n");
+
+    tls_conn_t conn;
+    u64 start_tick = g_tick_count;
+    bool handshake_ok = tls_connect(ip, (u16) port, &conn);
+    u64 handshake_ticks = g_tick_count - start_tick;
+
+    vga_print("tls_connect_ok=0x");
+    serial_print("tls_connect_ok=0x");
+    print_hex((u64) handshake_ok);
+    vga_print(" elapsed_ticks=0x");
+    serial_print(" elapsed_ticks=0x");
+    print_hex(handshake_ticks);
+    vga_print("\n");
+    serial_print("\n");
+
+    if (!handshake_ok) {
+        return;
+    }
+
+    const char* request = "GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n";
+    bool sent = tls_send(&conn, (const u8*) request, (u16) strlen_(request));
+    vga_print("tls_send_ok=0x");
+    serial_print("tls_send_ok=0x");
+    print_hex((u64) sent);
+
+    u8 response[512];
+    u16 response_len = 0;
+    bool received = false;
+    if (sent) {
+        received = tls_receive(&conn, &response[0], (u16) sizeof(response), 3000, &response_len);
+    }
+    vga_print(" tls_receive_ok=0x");
+    serial_print(" tls_receive_ok=0x");
+    print_hex((u64) received);
+    vga_print(" response_len=0x");
+    serial_print(" response_len=0x");
+    print_hex((u64) response_len);
+
+    bool got_http_status = response_len >= 4
+        && response[0] == 'H' && response[1] == 'T' && response[2] == 'T' && response[3] == 'P';
+    vga_print(" got_http_status=0x");
+    serial_print(" got_http_status=0x");
+    print_hex((u64) got_http_status);
+    vga_print("\n");
+    serial_print("\n");
+
+    tls_close(&conn);
 }
