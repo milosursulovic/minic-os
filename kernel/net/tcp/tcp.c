@@ -254,7 +254,7 @@ static bool tcp_send_reliable(u8* gateway_mac, u8* target_ip, u16 target_port, u
 
 static bool tcp_fetch_conn(u16 local_port, u8* target_ip, u16 target_port, const char* request, u16 request_len,
                             u8* response_out, u32 max_response_len, u32* response_len_out) {
-    ip_init();  // must run before reading g_gateway_ip below, not after
+    ensure_ip_configured();  // real DHCP now - must run before reading g_gateway_ip below, not after
     u8 gateway_mac[6];
     if (!arp_resolve(&g_gateway_ip[0], &gateway_mac[0])) {
         return false;

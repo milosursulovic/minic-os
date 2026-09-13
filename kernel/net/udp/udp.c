@@ -58,7 +58,7 @@ bool udp_send(u8* target_ip, u16 dst_port, u16 src_port, u8* payload, u16 payloa
     if (!arp_resolve(target_ip, &dest_mac[0])) {
         return false;
     }
-    ip_init();
+    ensure_ip_configured();
     u8 src_mac[6];
     e1000_get_mac(&src_mac[0]);
 

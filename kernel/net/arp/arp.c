@@ -1,5 +1,7 @@
 // ARP resolver (client only, no responder) with a fixed-size cache and no eviction/TTL.
-// Our own IP (net/ip.c's g_my_ip) is a fixed static assumption, not DHCP-negotiated.
+// Our own IP (net/ip.c's g_my_ip) is now real DHCP-negotiated (kernel/net/dhcp/),
+// with ip_init()'s old hardcoded value surviving only as ensure_ip_configured()'s
+// fallback if DHCP genuinely fails.
 
 #include "arp.h"
 #include "../e1000/e1000.h"
@@ -74,7 +76,8 @@ static void arp_cache_insert(u8* ip, u8* mac) {
 }
 
 // Builds and sends one Ethernet+ARP request frame for target_ip.
-// ip_init() is idempotent, called here to guarantee g_my_ip is valid.
+// ensure_ip_configured() (real DHCP now, kernel/net/dhcp/) is idempotent,
+// called here to guarantee g_my_ip is valid.
 static void arp_send_request(u8* target_ip) {
     u8 mac[6];
     e1000_get_mac(&mac[0]);
@@ -110,7 +113,7 @@ static void arp_send_request(u8* target_ip) {
         frame[22 + i] = mac[i];
         i = i + 1;
     }
-    ip_init();
+    ensure_ip_configured();
     i = 0;
     while (i < 4) {
         frame[28 + i] = g_my_ip[i];

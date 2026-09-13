@@ -14,7 +14,7 @@ static const u8 IP_PROTOCOL_ICMP = 1;
 // Resolves target_ip's MAC, sends an echo request, and polls (tick-bounded)
 // for a reply matching EtherType/protocol/source IP/type/identifier/sequence.
 bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
-    ip_init();  // must run before reading g_gateway_ip below, not after
+    ensure_ip_configured();  // real DHCP now - must run before reading g_gateway_ip below, not after
 
     // Real routing, not a direct ARP for target_ip: that only ever worked
     // for QEMU SLIRP's own fake local hosts (10.0.2.2/10.0.2.3, which

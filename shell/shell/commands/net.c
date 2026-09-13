@@ -72,7 +72,7 @@ void cmd_netconns(void) {
 // Resolves the gateway, resolves it again (cache hit), resolves the DNS
 // proxy, and resolves an unreachable address (must fail cleanly).
 void cmd_arp(void) {
-    ip_init();  // must run before reading g_gateway_ip/g_dns_server_ip below
+    ensure_ip_configured();  // real DHCP now - must run before reading g_gateway_ip/g_dns_server_ip below
 
     u8 mac[6];
     u64 t0 = g_tick_count;
@@ -199,11 +199,14 @@ void cmd_ping(void) {
 }
 
 void cmd_ipconfig(void) {
-    ip_init();  // must run before reading g_my_ip/g_gateway_ip/g_dns_server_ip
+    ensure_ip_configured();  // real DHCP now (kernel/net/dhcp/) - must run before reading the globals below
 
     vga_print("IP: ");
     serial_print("IP: ");
     print_ip(g_my_ip);
+    vga_print("  MASK: ");
+    serial_print("  MASK: ");
+    print_ip(g_subnet_mask);
     vga_print("  GATEWAY: ");
     serial_print("  GATEWAY: ");
     print_ip(g_gateway_ip);

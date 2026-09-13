@@ -1,11 +1,18 @@
-// IPv4 layer: header construction, RFC 791 checksum, and g_my_ip - still
-// static/hardcoded (QEMU SLIRP's default guest address), not DHCP-obtained.
+// IPv4 layer: header construction, RFC 791 checksum, and g_my_ip. Real
+// DHCP added (Faza I point 10, networking-completion arc item 2,
+// kernel/net/dhcp/) - ip_init()'s hardcoded QEMU SLIRP defaults below now
+// serve only as ensure_ip_configured()'s fallback if a real lease can't
+// be obtained.
 
 #include "ip.h"
+#include "../dhcp/dhcp.h"
 
 u8 g_my_ip[4];
 u8 g_gateway_ip[4];
 u8 g_dns_server_ip[4];
+u8 g_subnet_mask[4];
+
+static bool g_ip_configured;
 
 void ip_init(void) {
     g_my_ip[0] = 10;
@@ -22,6 +29,21 @@ void ip_init(void) {
     g_dns_server_ip[1] = 0;
     g_dns_server_ip[2] = 2;
     g_dns_server_ip[3] = 3;
+
+    g_subnet_mask[0] = 255;
+    g_subnet_mask[1] = 255;
+    g_subnet_mask[2] = 255;
+    g_subnet_mask[3] = 0;
+}
+
+void ensure_ip_configured(void) {
+    if (g_ip_configured) {
+        return;
+    }
+    g_ip_configured = true;
+    if (!dhcp_client()) {
+        ip_init();  // DHCP genuinely failed (no NIC/no server/timeout) - static fallback
+    }
 }
 
 // Sum 16-bit words (odd trailing byte zero-padded), fold carry, one's complement.

@@ -1,5 +1,7 @@
 // Minimal DNS client: single question, A records only, no compression on
-// encode. Queries QEMU SLIRP's built-in DNS proxy at 10.0.2.3.
+// encode. Queries kernel/net/ip/ip.h's g_dns_server_ip - real DHCP now
+// (kernel/net/dhcp/), QEMU SLIRP's built-in DNS proxy at 10.0.2.3 only as
+// ensure_ip_configured()'s static fallback.
 
 #include "dns.h"
 #include "../udp/udp.h"
@@ -62,21 +64,17 @@ static u16 dns_build_query(u8* out, u16 transaction_id, char* hostname) {
 
 // Verifies the reply's transaction ID matches, QR bit set, and answer_count > 0.
 bool dns_query(char* hostname) {
-    u8 dns_proxy_ip[4];
-    dns_proxy_ip[0] = 10;
-    dns_proxy_ip[1] = 0;
-    dns_proxy_ip[2] = 2;
-    dns_proxy_ip[3] = 3;
+    ensure_ip_configured();  // real DHCP now - must run before reading g_dns_server_ip below
 
     u8 query[96];
     u16 query_len = dns_build_query(&query[0], 0xABCD, hostname);
 
-    if (!udp_send(&dns_proxy_ip[0], DNS_PORT, DNS_SRC_PORT, &query[0], query_len)) {
+    if (!udp_send(&g_dns_server_ip[0], DNS_PORT, DNS_SRC_PORT, &query[0], query_len)) {
         return false;
     }
 
     u8 reply[160];
-    u16 reply_len = udp_receive(&dns_proxy_ip[0], DNS_PORT, DNS_SRC_PORT, &reply[0], 160);
+    u16 reply_len = udp_receive(&g_dns_server_ip[0], DNS_PORT, DNS_SRC_PORT, &reply[0], 160);
     if (reply_len < 12) {
         return false;
     }
@@ -110,21 +108,17 @@ static u16 dns_skip_name(u8* buf, u16 offset) {
 // Parses the answer section and returns the first TYPE=1 (A) record's address -
 // skips non-A records since a real resolver may lead with a CNAME.
 bool dns_resolve_a(char* hostname, u8* ip_out) {
-    u8 dns_proxy_ip[4];
-    dns_proxy_ip[0] = 10;
-    dns_proxy_ip[1] = 0;
-    dns_proxy_ip[2] = 2;
-    dns_proxy_ip[3] = 3;
+    ensure_ip_configured();  // real DHCP now - must run before reading g_dns_server_ip below
 
     u8 query[96];
     u16 query_len = dns_build_query(&query[0], 0xBEEF, hostname);
 
-    if (!udp_send(&dns_proxy_ip[0], DNS_PORT, DNS_SRC_PORT, &query[0], query_len)) {
+    if (!udp_send(&g_dns_server_ip[0], DNS_PORT, DNS_SRC_PORT, &query[0], query_len)) {
         return false;
     }
 
     u8 reply[256];
-    u16 reply_len = udp_receive(&dns_proxy_ip[0], DNS_PORT, DNS_SRC_PORT, &reply[0], 256);
+    u16 reply_len = udp_receive(&g_dns_server_ip[0], DNS_PORT, DNS_SRC_PORT, &reply[0], 256);
     if (reply_len < 12) {
         return false;
     }
