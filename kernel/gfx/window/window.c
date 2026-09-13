@@ -20,7 +20,7 @@ int g_window_zorder[WINDOW_SLOTS];
 int g_window_zorder_count;
 u32 g_window_content[WINDOW_SLOTS][WINDOW_CONTENT_MAX_WIDTH * WINDOW_CONTENT_MAX_HEIGHT];
 
-static char g_window_key_queue[WINDOW_KEY_QUEUE_SIZE];
+static input_event_t g_window_event_queue[WINDOW_KEY_QUEUE_SIZE];
 static int g_window_key_head;
 static int g_window_key_tail;
 
@@ -34,29 +34,38 @@ bool window_focus(int id) {
 
 // Real ring-buffer push, same shape as proc/apps/terminal/terminal.c's
 // own g_term_scrollback convention - silently drops the oldest unread
-// key on overflow (a real, honest choice for a 16-slot demo queue, not
-// a full flow-controlled input pipe) rather than blocking the keyboard
-// IRQ handler.
-bool window_push_key(char c) {
+// event on overflow (a real, honest choice for a 16-slot demo queue, not
+// a full flow-controlled input pipe) rather than blocking an IRQ handler.
+bool window_push_event(input_event_t evt) {
     int next_tail = (g_window_key_tail + 1) % WINDOW_KEY_QUEUE_SIZE;
     if (next_tail == g_window_key_head) {
         g_window_key_head = (g_window_key_head + 1) % WINDOW_KEY_QUEUE_SIZE;
     }
-    g_window_key_queue[g_window_key_tail] = c;
+    g_window_event_queue[g_window_key_tail] = evt;
     g_window_key_tail = next_tail;
     return true;
 }
 
-int window_pop_key(int window_id) {
+bool window_pop_event(int window_id, input_event_t* out) {
     if (window_id != g_focused_window_id) {
-        return -1;
+        return false;
     }
     if (g_window_key_head == g_window_key_tail) {
-        return -1;
+        return false;
     }
-    char c = g_window_key_queue[g_window_key_head];
+    *out = g_window_event_queue[g_window_key_head];
     g_window_key_head = (g_window_key_head + 1) % WINDOW_KEY_QUEUE_SIZE;
-    return (int) c;
+    return true;
+}
+
+int window_pop_key(int window_id) {
+    input_event_t evt;
+    while (window_pop_event(window_id, &evt)) {
+        if (evt.type == INPUT_EVENT_KEY_DOWN) {
+            return (int) evt.ascii;
+        }
+    }
+    return -1;
 }
 
 // Off-screen composite buffer, sized to the one mode this kernel ever

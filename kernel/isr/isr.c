@@ -14,6 +14,7 @@
 #include "../drivers/usb/usb_hid.h"
 #include "../../shell/editor/editor.h"
 #include "../../shell/shell/shell.h"
+#include "../syscall/handlers/system.h"
 
 u64 g_tick_count;
 
@@ -23,6 +24,26 @@ u64 g_tick_count;
 // arrive as consecutive interrupts, nothing else runs on this task in
 // between (task 0's own scheduling invariant, see CLAUDE.md).
 static bool g_extended_prefix;
+
+// Real Shift/Ctrl/Alt tracking (Faza II point 17) - previously nothing
+// tracked modifier state at all, so a shifted character (uppercase, `:`,
+// etc) could never be typed anywhere, and a real modifier+key hotkey had
+// nothing to check against. Left/right variants of Ctrl/Alt are treated
+// identically (a real, honest simplification - this driver has never
+// distinguished sides for anything).
+bool g_shift_down;
+bool g_ctrl_down;
+bool g_alt_down;
+// Guards the Ctrl+Alt+T hotkey below against firing once per BIOS/PS2
+// key-repeat tick while T is held - reset on T's own release.
+static bool g_hotkey_t_fired;
+
+// Previous mouse button state, used only to detect real press/release
+// EDGES for the input event queue below - kernel/gfx/window/window.c's
+// own compositor_handle_mouse() tracks its own separate edge state for
+// window-drag purposes; this is a second, independent edge detector
+// feeding the focused window's event queue instead.
+static u8 g_prev_mouse_buttons;
 
 // Drives the mouse cursor's on-screen redraw (kernel/gfx/window.c's draw_cursor(),
 // composited last in every compositor_redraw() call) independent of
@@ -63,6 +84,49 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
             // active drag would be the same redraw-storm bug class
             // already fixed twice elsewhere this session.
             bool wm_changed = compositor_handle_mouse();
+
+            // Real mouse-button-edge + wheel events into the focused
+            // window's input event queue (Faza II point 17) - a second,
+            // independent edge detector from compositor_handle_mouse()'s
+            // own (that one drives window drag/resize/click, this one
+            // feeds a real app-facing event stream). Deliberately only
+            // while a window is focused, same gating the keyboard side
+            // already uses - an unfocused desktop has nothing to deliver
+            // these to.
+            if (g_focused_window_id >= 0) {
+                u8 buttons_now = g_mouse_buttons;
+                u8 changed_buttons = (u8) (buttons_now ^ g_prev_mouse_buttons);
+                int bit = 0;
+                while (bit < 3) {
+                    if ((changed_buttons & (1 << bit)) != 0) {
+                        input_event_t evt;
+                        evt.type = INPUT_EVENT_MOUSE_BUTTON;
+                        evt.ascii = 0;
+                        evt.scancode = 0;
+                        evt.modifiers = 0;
+                        evt.button = (u8) bit;
+                        evt.pressed = (buttons_now & (1 << bit)) != 0;
+                        evt.wheel_delta = 0;
+                        window_push_event(evt);
+                    }
+                    bit = bit + 1;
+                }
+                g_prev_mouse_buttons = buttons_now;
+
+                i32 wheel = mouse_take_wheel_delta();
+                if (wheel != 0) {
+                    input_event_t evt;
+                    evt.type = INPUT_EVENT_MOUSE_WHEEL;
+                    evt.ascii = 0;
+                    evt.scancode = 0;
+                    evt.modifiers = 0;
+                    evt.button = 0;
+                    evt.pressed = false;
+                    evt.wheel_delta = wheel;
+                    window_push_event(evt);
+                }
+            }
+
             bool cursor_moved = (g_mouse_x != g_cursor_last_drawn_x || g_mouse_y != g_cursor_last_drawn_y);
             if (g_tick_count - g_cursor_last_redraw_tick >= CURSOR_REDRAW_TICK_INTERVAL
                 && (cursor_moved || wm_changed)) {
@@ -99,26 +163,80 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
         bool extended = g_extended_prefix;
         g_extended_prefix = false;
 
-        // Real keyboard-to-window routing (Faza II point 18) - a GUI
-        // window has focus, so real keystrokes go to its own key queue
-        // instead of the console shell/editor below, which stays 100%
-        // unchanged when nothing is focused (g_focused_window_id == -1,
-        // the default, and everything this project tested before this
-        // existed). Deliberately minimal: extended keys (arrows/Delete)
-        // are ignored here - no GUI widget needs them yet - and only a
-        // real key-press scancode (top bit clear) is translated, same
-        // g_scancode_table every console keystroke already uses, plus a
-        // real Backspace (0x0E has no g_scancode_table entry - the
-        // console handles it via its own dedicated branch below, so a
-        // focused window needs the same explicit case).
+        // Real Shift/Ctrl/Alt tracking (Faza II point 17) - checked on
+        // BOTH the make (press) and break (release, top bit set) code,
+        // unlike every scancode below which only ever looks at the
+        // press. Must run before anything discards release codes, and
+        // regardless of focus - modifier state is global, like a real OS.
+        u8 base_scancode = (u8) (scancode & 0x7F);
+        bool is_release = (scancode & 0x80) != 0;
+        if (base_scancode == 0x2A || base_scancode == 0x36) {  // Shift (left/right)
+            g_shift_down = !is_release;
+            outb(0x20, 0x20);
+            return;
+        }
+        if (base_scancode == 0x1D) {  // Ctrl (left non-extended, right extended - treated the same)
+            g_ctrl_down = !is_release;
+            outb(0x20, 0x20);
+            return;
+        }
+        if (base_scancode == 0x38) {  // Alt (left non-extended, right extended - treated the same)
+            g_alt_down = !is_release;
+            outb(0x20, 0x20);
+            return;
+        }
+
+        // Real system-wide hotkey (Faza II point 17): Ctrl+Alt+T spawns
+        // the Terminal app, reusing the exact same spawn path syscall 41
+        // already uses (kernel/syscall/handlers/system.c's
+        // spawn_gui_app_index() - no duplicated logic). Checked before
+        // focus/console routing below, like a real OS hotkey - but only
+        // actually intercepts the keystroke when both modifiers are
+        // genuinely held, so plain 't' is completely unaffected otherwise.
+        if (!extended && base_scancode == 0x14 && g_ctrl_down && g_alt_down) {
+            if (!is_release && !g_hotkey_t_fired) {
+                g_hotkey_t_fired = true;
+                spawn_gui_app_index(0);
+            }
+            if (is_release) {
+                g_hotkey_t_fired = false;
+            }
+            outb(0x20, 0x20);
+            return;
+        }
+
+        // Real keyboard-to-window routing (Faza II point 18, event queue
+        // generalized in point 17) - a GUI window has focus, so real
+        // keystrokes go to its own event queue instead of the console
+        // shell/editor below, which stays 100% unchanged when nothing is
+        // focused (g_focused_window_id == -1, the default, and everything
+        // this project tested before this existed). Deliberately minimal:
+        // extended keys (arrows/Delete) are ignored here - no GUI widget
+        // needs them yet - and only a real key-press scancode (top bit
+        // clear) is translated, same shift-aware table every console
+        // keystroke below now uses too, plus a real Backspace (0x0E has
+        // no g_scancode_table entry - the console handles it via its own
+        // dedicated branch below, so a focused window needs the same
+        // explicit case).
         if (g_focused_window_id >= 0) {
             if (!extended && scancode < 0x80) {
+                input_event_t evt;
+                evt.type = INPUT_EVENT_KEY_DOWN;
+                evt.scancode = scancode;
+                evt.modifiers = (u8) ((g_shift_down ? INPUT_MODIFIER_SHIFT : 0)
+                    | (g_ctrl_down ? INPUT_MODIFIER_CTRL : 0)
+                    | (g_alt_down ? INPUT_MODIFIER_ALT : 0));
+                evt.button = 0;
+                evt.pressed = false;
+                evt.wheel_delta = 0;
                 if (scancode == 0x0E) {
-                    window_push_key((char) 0x08);
+                    evt.ascii = (char) 0x08;
+                    window_push_event(evt);
                 } else {
-                    char c = g_scancode_table[scancode];
+                    char c = g_shift_down ? g_scancode_table_shifted[scancode] : g_scancode_table[scancode];
                     if (c != '\0') {
-                        window_push_key(c);
+                        evt.ascii = c;
+                        window_push_event(evt);
                     }
                 }
             }
@@ -235,7 +353,7 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
             } else if (scancode == 0x0F) {  // Tab - shell/shell.c owns command/argument completion
                 shell_tab_complete();
             } else {
-                char c = g_scancode_table[scancode];
+                char c = g_shift_down ? g_scancode_table_shifted[scancode] : g_scancode_table[scancode];
                 if (c == '\n') {
                     // A trailing space (e.g. Tab-completing a no-argument
                     // command, which appends one ready for a next argument

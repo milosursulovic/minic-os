@@ -67,17 +67,58 @@ extern int g_terminal_window_id;
 extern int g_focused_window_id;
 bool window_focus(int id);
 
-// A single shared keystroke queue for whichever window currently has
+// A single shared input event queue for whichever window currently has
 // focus - one queue, not per-window, since only one window can ever be
-// focused at a time. Populated by kernel/isr/isr.c's keyboard IRQ
-// handler only while g_focused_window_id >= 0 (the console/editor path
-// is completely unchanged otherwise). window_pop_key() refuses to
+// focused at a time. Populated by kernel/isr/isr.c's keyboard/mouse IRQ
+// handlers only while g_focused_window_id >= 0 (the console/editor path
+// is completely unchanged otherwise). window_pop_event() refuses to
 // return anything to a caller whose window_id isn't the currently
-// focused one - a window can only ever read keys typed while IT was
+// focused one - a window can only ever read events raised while IT was
 // focused, never another window's or the console's.
+//
+// Faza II point 17 (real input event queue, replacing ad hoc global-state
+// polling): a real tagged event, not just a bare character - carries the
+// raw scancode + live modifier state (for a hotkey-style consumer) and
+// real mouse button press/release edges + wheel notches alongside
+// keystrokes, all through the one queue.
+typedef enum {
+    INPUT_EVENT_KEY_DOWN,
+    INPUT_EVENT_MOUSE_BUTTON,
+    INPUT_EVENT_MOUSE_WHEEL
+} input_event_type;
+
+// modifiers bit0=shift bit1=ctrl bit2=alt
+#define INPUT_MODIFIER_SHIFT 0x01
+#define INPUT_MODIFIER_CTRL 0x02
+#define INPUT_MODIFIER_ALT 0x04
+
+// Packed so its layout is byte-identical to proc/gui_toolkit/window.h's
+// own mirrored gt_input_event_t - this struct crosses the syscall 100
+// boundary by raw pointer (a ring3-supplied buffer the kernel writes
+// into directly, same pattern every other *_args struct here already
+// uses), so both sides must agree on field offsets exactly. `type` is a
+// plain u8 (an input_event_type value), not the enum itself - no other
+// struct in this codebase puts a C enum directly in a boundary-crossing
+// struct, and a fixed-width field sidesteps relying on both independently
+// compiled sides picking the identical enum backing size.
+typedef struct __attribute__((packed)) {
+    u8 type;              // an input_event_type value
+    char ascii;        // KEY_DOWN: shift-aware mapped character (0 if non-printable)
+    u8 scancode;        // KEY_DOWN: raw scancode
+    u8 modifiers;        // KEY_DOWN: live modifier bits at press time
+    u8 button;            // MOUSE_BUTTON: 0=left 1=right 2=middle
+    bool pressed;        // MOUSE_BUTTON: true=press false=release (a real edge, not polled state)
+    i32 wheel_delta;    // MOUSE_WHEEL: signed notch count (positive = up)
+} input_event_t;
+
 #define WINDOW_KEY_QUEUE_SIZE 16
-bool window_push_key(char c);
-int window_pop_key(int window_id);  // returns the char, or -1 if not focused/empty
+bool window_push_event(input_event_t evt);
+bool window_pop_event(int window_id, input_event_t* out);  // false if not focused/empty
+// Compatibility wrapper over window_pop_event() for callers that only
+// want keystrokes (proc/gui_toolkit's text_box, gt_read_key) - silently
+// skips any non-KEY_DOWN event at the front of the queue and returns the
+// next real key's ascii, or -1 if not focused/empty.
+int window_pop_key(int window_id);
 
 extern window g_windows[WINDOW_SLOTS];
 extern int g_window_zorder[WINDOW_SLOTS];

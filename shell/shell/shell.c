@@ -151,7 +151,7 @@ bool split_two_args(char* args, char* first_out, char** second_out) {
 // kernel/gfx/cursor_image.h documents for g_cursor_image.pixels). Fixed
 // the same way: assign every pointer at runtime instead (real `lea`/`mov`
 // instructions, which -fPIC handles fine), lazily on first use.
-#define SHELL_COMMAND_COUNT 105
+#define SHELL_COMMAND_COUNT 106
 static const char* g_shell_commands[SHELL_COMMAND_COUNT];
 static bool g_shell_commands_initialized;
 
@@ -211,6 +211,7 @@ static void shell_commands_init(void) {
     g_shell_commands[102] = "ping6";
     g_shell_commands[103] = "tlsfetch";
     g_shell_commands[104] = "httpserve";
+    g_shell_commands[105] = "ring3inputevents";
     g_shell_commands_initialized = true;
 }
 
@@ -602,6 +603,8 @@ void run_command(void) {
         cmd_tlsfetch();
     } else if (streq(g_line_buffer, "httpserve")) {
         cmd_httpserve();
+    } else if (streq(g_line_buffer, "ring3inputevents")) {
+        cmd_ring3_input_events();
     } else if (streq(g_line_buffer, "tcp")) {
         cmd_tcp();
     } else if (starts_with(g_line_buffer, "echo ")) {

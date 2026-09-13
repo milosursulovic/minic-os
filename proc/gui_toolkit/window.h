@@ -115,10 +115,45 @@ static __attribute__((unused)) bool gt_focus_window(int window_id) {
 
 // Returns the next queued keystroke for window_id if it's the currently
 // focused window, else -1 - wraps syscall 70. Real ASCII: printable
-// chars via the same g_scancode_table every console keystroke uses,
-// '\n' for Enter, 0x08 for Backspace.
+// chars via the same shift-aware scancode tables every console keystroke
+// uses, '\n' for Enter, 0x08 for Backspace. Skips (drops) any real mouse
+// event ahead of it in the shared queue - a caller that wants those too
+// should use gt_read_event() below instead.
 static __attribute__((unused)) int gt_read_key(int window_id) {
     return (int) gt_syscall(70, (u64) window_id, 0, 0);
+}
+
+// Real input event queue (Faza II point 17) - mirrors kernel/gfx/window/
+// window.h's own input_event_t field-for-field (packed on both sides, see
+// that header's own comment on why). Carries real key-down (ascii+raw
+// scancode+live modifiers), mouse button press/release edges, and mouse
+// wheel notches through the one focused-window queue gt_read_key() above
+// only sees the keystroke slice of.
+typedef enum {
+    GT_INPUT_EVENT_KEY_DOWN = 0,
+    GT_INPUT_EVENT_MOUSE_BUTTON = 1,
+    GT_INPUT_EVENT_MOUSE_WHEEL = 2
+} gt_input_event_type;
+
+#define GT_INPUT_MODIFIER_SHIFT 0x01
+#define GT_INPUT_MODIFIER_CTRL 0x02
+#define GT_INPUT_MODIFIER_ALT 0x04
+
+typedef struct __attribute__((packed)) {
+    u8 type;              // a gt_input_event_type value
+    char ascii;
+    u8 scancode;
+    u8 modifiers;
+    u8 button;
+    bool pressed;
+    i32 wheel_delta;
+} gt_input_event_t;
+
+// Pops the next real input event for window_id into *out - wraps syscall
+// 100. Returns false if window_id isn't currently focused or the queue is
+// empty (matches gt_read_key()'s own focus-gating exactly).
+static __attribute__((unused)) bool gt_read_event(int window_id, gt_input_event_t* out) {
+    return gt_syscall(100, (u64) window_id, (u64) out, 0) != 0;
 }
 
 // Draws the real embedded default wallpaper image (kernel/gfx/wallpaper/)

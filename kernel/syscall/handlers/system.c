@@ -66,6 +66,21 @@ static bool gui_app_bounds(int app_id, u8** start_out, u8** end_out) {
     return false;
 }
 
+// Real shared spawn path for a compiled-in GUI app by id - was inlined
+// into syscall 41's own handler; pulled out so kernel/isr/isr.c's real
+// Ctrl+Alt+T hotkey (Faza II point 17) can spawn the exact same way a
+// ring3 caller's syscall does, with zero duplicated logic. Returns the
+// new process index, or -1 (spawn_process's own convention) on failure.
+int spawn_gui_app_index(int app_id) {
+    u8* start;
+    u8* end;
+    if (!gui_app_bounds(app_id, &start, &end)) {
+        return -1;
+    }
+    u64 load_vaddr = randomize_load_vaddr(BUILTIN_LOAD_BASE);
+    return spawn_process(start, end, load_vaddr, load_vaddr + 0x20000, false);
+}
+
 bool syscall_system(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
     (void) a2;
     (void) a3;
@@ -106,15 +121,7 @@ bool syscall_system(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         return true;
     }
     if (num == 41) {
-        u8* start;
-        u8* end;
-        if (!gui_app_bounds((int) a1, &start, &end)) {
-            *result = (u64) -1;
-            return true;
-        }
-        u64 load_vaddr = randomize_load_vaddr(BUILTIN_LOAD_BASE);
-        int proc_index = spawn_process(start, end, load_vaddr, load_vaddr + 0x20000, false);
-        *result = (u64) proc_index;  // spawn_process's own -1-on-failure convention
+        *result = (u64) spawn_gui_app_index((int) a1);  // spawn_process's own -1-on-failure convention
         return true;
     }
     // Syscalls 42/43 (direct kernel-side rtc_read_time/rtc_read_date)

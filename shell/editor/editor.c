@@ -1,18 +1,19 @@
 // A small full-screen text editor (Faza II follow-up) - `edit <name>` takes
 // over the whole VGA console until Esc, showing an existing file's content
-// (if any) and letting you keep typing from there. No cursor-addressable
-// movement back into already-typed text - the keyboard driver
-// (kernel/drivers/keyboard.c) has no shift/ctrl/arrow-key handling at all,
-// only lowercase letters/digits/space/enter, so real nano-style in-place
-// editing is out of scope (a deliberate, user-confirmed limitation, not an
-// oversight). What this still gives you: load a file, see it, keep writing
-// real multi-line content, save it back - genuinely more than a bare
-// append-only `cat >> file` since it does show you what's already there.
+// (if any) and letting you keep typing from there. Real Shift-awareness
+// (uppercase/shifted symbols) was added in Faza II point 17, but no
+// cursor-addressable movement back into already-typed text - arrow-key
+// in-place editing is still out of scope (a deliberate, user-confirmed
+// limitation, not an oversight). What this still gives you: load a file,
+// see it, keep writing real multi-line content, save it back - genuinely
+// more than a bare append-only `cat >> file` since it does show you
+// what's already there.
 
 #include "editor.h"
 #include "../shell/shell.h"
 #include "../../kernel/drivers/io/io.h"
 #include "../../kernel/drivers/keyboard/keyboard.h"
+#include "../../kernel/isr/isr.h"
 #include "../../kernel/fs/minifs/minifs.h"
 #include "../../kernel/lib/strings.h"
 
@@ -135,7 +136,7 @@ void editor_handle_scancode(u8 scancode) {
         return;
     }
 
-    char c = g_scancode_table[scancode];
+    char c = g_shift_down ? g_scancode_table_shifted[scancode] : g_scancode_table[scancode];
     if (c == '\n') {
         if (g_editor_len < EDITOR_MAX_SIZE) {
             g_editor_buffer[g_editor_len] = '\n';

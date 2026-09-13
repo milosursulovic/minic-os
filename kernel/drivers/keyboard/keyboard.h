@@ -5,6 +5,12 @@
 #pragma GCC visibility push(hidden)
 
 extern char g_scancode_table[128];
+// Shifted (uppercase letters + real shifted symbols) counterpart of
+// g_scancode_table - Faza II point 17: real Shift tracking. Only covers
+// the same key set g_scancode_table already does (no full 101-key layout
+// - matches this codebase's existing "letters/digits/space/enter/./ only"
+// scope, just doubled for the shifted case).
+extern char g_scancode_table_shifted[128];
 
 extern char g_line_buffer[128];
 extern int g_line_len;

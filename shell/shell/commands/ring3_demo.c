@@ -488,3 +488,17 @@ void cmd_ring3_signfail(void) {
     vga_print("sent ring3 signfail trigger");
     serial_print("sent ring3 signfail trigger");
 }
+
+// Real input event queue (Faza II point 17, see ring3prog.c trigger 36) -
+// a SEPARATE trigger/window from ring3focus/ring3widgets, same reasoning:
+// this one grabs real keyboard focus too.
+void cmd_ring3_input_events(void) {
+    bool ok = channel_send(g_ring3_channel_demo, 36);
+    if (!ok) {
+        vga_print("ring3inputevents failed - channel full");
+        serial_print("ring3inputevents failed - channel full");
+        return;
+    }
+    vga_print("sent ring3 input events trigger");
+    serial_print("sent ring3 input events trigger");
+}

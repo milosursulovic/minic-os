@@ -164,6 +164,15 @@ bool syscall_window(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
         *result = (u64) key;
         return true;
     }
+    if (num == 100) {
+        // Real richer input event (Faza II point 17) - a2 points at the
+        // caller's own input_event_t buffer; a1 is the window id, same
+        // focus-gating window_pop_key() (syscall 70) already enforces.
+        input_event_t* out = (input_event_t*) a2;
+        bool ok = window_pop_event((int) a1, out);
+        *result = (u64) ok;
+        return true;
+    }
     if (num == 94) {
         bool ok = window_draw_wallpaper((int) a1);
         *result = (u64) ok;

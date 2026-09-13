@@ -1,7 +1,8 @@
 // PS/2 mouse, same 8042 controller the keyboard already sits on (aux
-// device, IRQ12/vector 44 vs. the keyboard's IRQ1/vector 33). Standard
-// 3-byte packet protocol, no scroll wheel (that needs a separate
-// vendor-extension init sequence - deliberately out of scope for now).
+// device, IRQ12/vector 44 vs. the keyboard's IRQ1/vector 33). Real
+// IntelliMouse wheel negotiation (Faza II point 17) - a real 3-step magic
+// sample-rate sequence followed by an ID re-read, not assumed/faked; the
+// packet size only grows to 4 bytes if the mouse actually confirms it.
 
 #include "mouse.h"
 #include "../io/io.h"
@@ -16,8 +17,10 @@ volatile i32 g_mouse_x = 400;  // starts centered in the fb milestone's 800x600 
 volatile i32 g_mouse_y = 300;
 volatile u8 g_mouse_buttons;
 volatile u32 g_mouse_packet_count;
+bool g_mouse_has_wheel;
+static volatile i32 g_mouse_wheel_delta;
 
-static u8 g_packet[3];
+static u8 g_packet[4];
 static int g_packet_index;
 
 // bit1 of the status register: 1 = input buffer full, not safe to write yet.
@@ -93,6 +96,32 @@ void mouse_init(void) {
     // single-byte output buffer.
     mouse_write(0xF6);  // set defaults
     data_read();         // ACK (0xFA)
+
+    // Real IntelliMouse wheel negotiation - three "set sample rate" (0xF3)
+    // commands with these exact magic values, back to back, then re-read
+    // the device ID (0xF2). A real wheel mouse switches its own reported
+    // ID from 0x00 to 0x03 in response; anything else (including a plain
+    // non-wheel mouse, or QEMU's own default emulated mouse if it doesn't
+    // implement this) leaves g_mouse_has_wheel false and packets stay
+    // 3 bytes - this must run before 0xF4 enables streaming below, or the
+    // report stream could interleave with these polled command/ACK pairs.
+    mouse_write(0xF3);
+    data_read();
+    mouse_write(200);
+    data_read();
+    mouse_write(0xF3);
+    data_read();
+    mouse_write(100);
+    data_read();
+    mouse_write(0xF3);
+    data_read();
+    mouse_write(80);
+    data_read();
+    mouse_write(0xF2);  // get device ID
+    data_read();          // ACK
+    u8 device_id = data_read();
+    g_mouse_has_wheel = (device_id == 0x03);
+
     mouse_write(0xF4);  // enable data reporting
     data_read();         // ACK (0xFA)
 
@@ -121,7 +150,8 @@ void mouse_handle_byte(u8 byte) {
     }
     g_packet[g_packet_index] = byte;
     g_packet_index = g_packet_index + 1;
-    if (g_packet_index < 3) {
+    int packet_size = g_mouse_has_wheel ? 4 : 3;
+    if (g_packet_index < packet_size) {
         return;
     }
     g_packet_index = 0;
@@ -152,5 +182,15 @@ void mouse_handle_byte(u8 byte) {
     }
 
     g_mouse_buttons = flags & 0x07;
+    if (g_mouse_has_wheel) {
+        i8 wheel_raw = (i8) g_packet[3];
+        g_mouse_wheel_delta = g_mouse_wheel_delta + (i32) wheel_raw;
+    }
     g_mouse_packet_count = g_mouse_packet_count + 1;
+}
+
+i32 mouse_take_wheel_delta(void) {
+    i32 delta = g_mouse_wheel_delta;
+    g_mouse_wheel_delta = 0;
+    return delta;
 }

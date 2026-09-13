@@ -224,6 +224,12 @@ void cmd_mouse(void) {
     vga_print(" rawbytes=0x");
     serial_print(" rawbytes=0x");
     print_hex((u64) g_mouse_raw_byte_count);
+    vga_print(" has_wheel=0x");
+    serial_print(" has_wheel=0x");
+    print_hex((u64) g_mouse_has_wheel);
+    vga_print(" wheel_delta=0x");
+    serial_print(" wheel_delta=0x");
+    print_hex((u64) mouse_take_wheel_delta());
 }
 
 // A real window table + Z-order compositor demo: 2 overlapping windows plus

@@ -1323,6 +1323,37 @@ void _start(void) {
         do_syscall(1, (u64) "ring3signfail: raw write ok=0x", write_ok, 0);
         u64 spawn_result = do_syscall(6, (u64) path, 0x80000000, 0x80020000);
         do_syscall(1, (u64) "ring3signfail: spawn of unsigned blob result=0x", spawn_result, 0);
+    } else if (trigger_value == 36) {
+        // trigger 36 (ring3inputevents): real input event queue (Faza II
+        // point 17) - a SEPARATE window/trigger from ring3focus (22)/
+        // ring3widgets (21), same reasoning as those: grabbing focus here
+        // would divert the keyboard away from whatever else needs it.
+        // Polls gt_read_event() (syscall 100) and prints every field of
+        // every KEY_DOWN/MOUSE_BUTTON/MOUSE_WHEEL event it receives - a
+        // real, decisive per-field check (scancode/modifiers/button id/
+        // wheel sign), not just "an event arrived."
+        window ie;
+        bool created_ie = window_create(&ie, 450, 200, 250, 100, 0x00303030, 0x00222222);
+        do_syscall(1, (u64) "window_create(ie) ok=0x", (u64) created_ie, 0);
+
+        bool focused_ie = gt_focus_window(ie.id);
+        do_syscall(1, (u64) "gt_focus_window(ie) ok=0x", (u64) focused_ie, 0);
+
+        for (;;) {
+            gt_input_event_t evt;
+            if (gt_read_event(ie.id, &evt)) {
+                if (evt.type == GT_INPUT_EVENT_KEY_DOWN) {
+                    do_syscall(1, (u64) "KEY_DOWN scancode=0x", (u64) evt.scancode, 0);
+                    do_syscall(1, (u64) "KEY_DOWN modifiers=0x", (u64) evt.modifiers, 0);
+                    do_syscall(1, (u64) "KEY_DOWN ascii=0x", (u64) evt.ascii, 0);
+                } else if (evt.type == GT_INPUT_EVENT_MOUSE_BUTTON) {
+                    do_syscall(1, (u64) "MOUSE_BUTTON button=0x", (u64) evt.button, 0);
+                    do_syscall(1, (u64) "MOUSE_BUTTON pressed=0x", (u64) evt.pressed, 0);
+                } else if (evt.type == GT_INPUT_EVENT_MOUSE_WHEEL) {
+                    do_syscall(1, (u64) "MOUSE_WHEEL delta=0x", (u64) evt.wheel_delta, 0);
+                }
+            }
+        }
     } else {
         process child_image;
         child_image.path = "/system/testprog.bin";

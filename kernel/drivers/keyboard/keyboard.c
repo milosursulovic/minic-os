@@ -4,6 +4,7 @@
 #include "keyboard.h"
 
 char g_scancode_table[128];
+char g_scancode_table_shifted[128];
 
 char g_line_buffer[128];
 int g_line_len;
@@ -30,4 +31,31 @@ void init_scancode_table(void) {
 
     g_scancode_table[0x34] = '.';
     g_scancode_table[0x35] = '/';
+
+    g_scancode_table_shifted[0x1E] = 'A'; g_scancode_table_shifted[0x30] = 'B'; g_scancode_table_shifted[0x2E] = 'C';
+    g_scancode_table_shifted[0x20] = 'D'; g_scancode_table_shifted[0x12] = 'E'; g_scancode_table_shifted[0x21] = 'F';
+    g_scancode_table_shifted[0x22] = 'G'; g_scancode_table_shifted[0x23] = 'H'; g_scancode_table_shifted[0x17] = 'I';
+    g_scancode_table_shifted[0x24] = 'J'; g_scancode_table_shifted[0x25] = 'K'; g_scancode_table_shifted[0x26] = 'L';
+    g_scancode_table_shifted[0x32] = 'M'; g_scancode_table_shifted[0x31] = 'N'; g_scancode_table_shifted[0x18] = 'O';
+    g_scancode_table_shifted[0x19] = 'P'; g_scancode_table_shifted[0x10] = 'Q'; g_scancode_table_shifted[0x13] = 'R';
+    g_scancode_table_shifted[0x1F] = 'S'; g_scancode_table_shifted[0x14] = 'T'; g_scancode_table_shifted[0x16] = 'U';
+    g_scancode_table_shifted[0x2F] = 'V'; g_scancode_table_shifted[0x11] = 'W'; g_scancode_table_shifted[0x2D] = 'X';
+    g_scancode_table_shifted[0x15] = 'Y'; g_scancode_table_shifted[0x2C] = 'Z';
+    g_scancode_table_shifted[0x39] = ' ';
+    g_scancode_table_shifted[0x1C] = '\n';
+
+    g_scancode_table_shifted[0x02] = '!'; g_scancode_table_shifted[0x03] = '@'; g_scancode_table_shifted[0x04] = '#';
+    g_scancode_table_shifted[0x05] = '$'; g_scancode_table_shifted[0x06] = '%'; g_scancode_table_shifted[0x07] = '^';
+    g_scancode_table_shifted[0x08] = '&'; g_scancode_table_shifted[0x09] = '*'; g_scancode_table_shifted[0x0A] = '(';
+    g_scancode_table_shifted[0x0B] = ')';
+
+    g_scancode_table_shifted[0x34] = '>';
+    g_scancode_table_shifted[0x35] = '?';
+
+    // The colon-hex/8.3-uppercase real pain points this fixes (a previous
+    // session found and worked around both): 0x27 is the physical
+    // semicolon/colon key (unshifted ';', shifted ':') - not previously
+    // in g_scancode_table at all, so add both here.
+    g_scancode_table[0x27] = ';';
+    g_scancode_table_shifted[0x27] = ':';
 }
