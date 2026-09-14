@@ -2,6 +2,7 @@
 
 #include "usb_hid.h"
 #include "../device_manager/device_manager.h"
+#include "usbhc.h"
 
 volatile i32 g_usb_mouse_x;
 volatile i32 g_usb_mouse_y;
@@ -14,8 +15,8 @@ volatile u8 g_usb_last_keycodes[6];
 volatile u32 g_usb_key_event_count;
 volatile bool g_usb_keyboard_present;
 
-static usb_device_info g_mouse_dev;
-static usb_device_info g_kbd_dev;
+static usbhc_device_info g_mouse_dev;
+static usbhc_device_info g_kbd_dev;
 static u8 g_mouse_buf[8];
 static u8 g_kbd_buf[8];
 
@@ -33,7 +34,7 @@ static u8 g_kbd_buf[8];
 // own updated recipe) - confirmed via QEMU's own `info usb` monitor
 // command that this puts both devices directly on root ports 1/2 with
 // no hub in between.
-static void classify_and_arm(usb_device_info* info) {
+static void classify_and_arm(usbhc_device_info* info) {
     bool as_mouse = info->interface_protocol == 2;
     bool as_keyboard = info->interface_protocol == 1;
     if (as_mouse && !g_usb_mouse_present) {
@@ -41,27 +42,23 @@ static void classify_and_arm(usb_device_info* info) {
         g_usb_mouse_x = 400;  // same starting point PS/2 mouse.c already uses
         g_usb_mouse_y = 300;
         g_usb_mouse_present = true;
-        uhci_arm_periodic(0, g_mouse_dev.address, g_mouse_dev.endpoint, g_mouse_dev.max_packet_size, g_mouse_buf);
+        usbhc_arm_periodic(0, &g_mouse_dev, g_mouse_buf);
         device_manager_register("USB Mouse", DEVICE_CATEGORY_INPUT, (u32) info->vendor_id << 16 | info->product_id);
     } else if (as_keyboard && !g_usb_keyboard_present) {
         g_kbd_dev = *info;
         g_usb_keyboard_present = true;
-        uhci_arm_periodic(1, g_kbd_dev.address, g_kbd_dev.endpoint, g_kbd_dev.max_packet_size, g_kbd_buf);
+        usbhc_arm_periodic(1, &g_kbd_dev, g_kbd_buf);
         device_manager_register("USB Keyboard", DEVICE_CATEGORY_INPUT, (u32) info->vendor_id << 16 | info->product_id);
     }
 }
 
 void usb_hid_init(void) {
-    // Real, sequential root-hub enumeration - port 1 gets address 1,
-    // port 2 gets address 2 (addresses must differ so both devices can
-    // coexist on the bus at once).
-    usb_device_info info1;
-    if (uhci_enumerate_port(1, 1, &info1) && info1.valid) {
-        classify_and_arm(&info1);
-    }
-    usb_device_info info2;
-    if (uhci_enumerate_port(2, 2, &info2) && info2.valid) {
-        classify_and_arm(&info2);
+    // Real enumeration across BOTH controllers (kernel/drivers/usb/usbhc.c) -
+    // keeps trying ports until a mouse AND a keyboard are both found, or
+    // every port on every present controller has been tried.
+    usbhc_device_info info;
+    while ((!g_usb_mouse_present || !g_usb_keyboard_present) && usbhc_enumerate_next(&info)) {
+        classify_and_arm(&info);
     }
 }
 
@@ -71,7 +68,7 @@ void usb_hid_poll(void) {
     // do here than parse whatever real data actually came back.
     if (g_usb_mouse_present) {
         u32 len;
-        if (uhci_poll_periodic(0, &len) && len >= 3) {
+        if (usbhc_poll_periodic(0, &len) && len >= 3) {
             u8 buttons = g_mouse_buf[0];
             i32 dx = (i32) (i8) g_mouse_buf[1];
             i32 dy = (i32) (i8) g_mouse_buf[2];
@@ -83,7 +80,7 @@ void usb_hid_poll(void) {
     }
     if (g_usb_keyboard_present) {
         u32 len;
-        if (uhci_poll_periodic(1, &len) && len >= 1) {
+        if (usbhc_poll_periodic(1, &len) && len >= 1) {
             g_usb_key_modifiers = g_kbd_buf[0];
             int i = 0;
             while (i < 6) {

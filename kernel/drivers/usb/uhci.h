@@ -1,24 +1,15 @@
 #pragma once
 
 #include "../../../types.h"
+#include "usb_descriptor.h"
 
 #pragma GCC visibility push(hidden)
 
 // Real, hand-written UHCI (USB 1.1 host controller) driver - Faza I
 // point 9, item 16. See kernel/drivers/usb/uhci.c's own top comment for
 // the design story and documented scope limits (polling not IRQ-driven,
-// one flat QH chain, boot-protocol HID only).
-
-typedef struct {
-    bool valid;
-    u16 vendor_id;
-    u16 product_id;
-    u8 device_class;
-    u8 address;
-    u8 interface_protocol;  // 1=keyboard, 2=mouse (HID boot protocol), 0=unknown
-    u8 endpoint;             // interrupt IN endpoint number
-    u8 max_packet_size;      // of the interrupt endpoint (report size cap)
-} usb_device_info;
+// one flat QH chain, boot-protocol HID only). usb_device_info now lives
+// in usb_descriptor.h, shared with kernel/drivers/usb/xhci.c.
 
 // Finds the controller via PCI (class 0x0C, subclass 0x03), resets it,
 // builds the frame list + fixed QH chain, starts it. Returns false if no

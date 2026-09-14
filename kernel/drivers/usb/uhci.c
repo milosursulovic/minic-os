@@ -20,6 +20,7 @@
 #include "uhci.h"
 #include "../io/io.h"
 #include "../pci/pci.h"
+#include "usb_descriptor.h"
 
 // ---- UHCI I/O register offsets (from the PCI BAR4 I/O base) ----
 #define REG_USBCMD 0x00
@@ -135,7 +136,8 @@ static bool find_uhci_controller(u8* bus_out, u8* device_out, u8* function_out) 
     pci_enumerate();
     int i = 0;
     while (i < g_pci_device_count) {
-        if (g_pci_devices[i].class_code == 0x0C && g_pci_devices[i].subclass == 0x03) {
+        if (g_pci_devices[i].class_code == 0x0C && g_pci_devices[i].subclass == 0x03
+            && g_pci_devices[i].prog_if == 0x00) {
             *bus_out = g_pci_devices[i].bus;
             *device_out = g_pci_devices[i].device;
             *function_out = g_pci_devices[i].function;
@@ -398,26 +400,7 @@ bool uhci_enumerate_port(int port, u8 new_address, usb_device_info* out) {
     u8 config_value = buf[5];
     out->interface_protocol = 0;
     out->endpoint = 0;
-    u8 pending_protocol = 0;
-    int pos = 0;
-    while (pos + 1 < got) {
-        u8 desc_len = buf[pos];
-        u8 desc_type = buf[pos + 1];
-        if (desc_len == 0) {
-            break;
-        }
-        if (desc_type == 0x04 && pos + 7 < got) {  // INTERFACE descriptor
-            pending_protocol = buf[pos + 7];  // bInterfaceProtocol
-        } else if (desc_type == 0x05 && pos + 6 < got) {  // ENDPOINT descriptor
-            u8 ep_addr = buf[pos + 2];
-            u8 ep_attr = buf[pos + 3];
-            if ((ep_addr & 0x80) != 0 && (ep_attr & 0x03) == 0x03 && out->endpoint == 0) {
-                out->endpoint = (u8) (ep_addr & 0x0F);
-                out->interface_protocol = pending_protocol;
-            }
-        }
-        pos = pos + desc_len;
-    }
+    parse_hid_endpoint(buf, got, &out->endpoint, &out->interface_protocol);
 
     build_setup(setup, 0x00, REQ_SET_CONFIGURATION, config_value, 0, 0);
     uhci_control_transfer(new_address, max_packet_size, setup, NULL, 0, true);

@@ -6,7 +6,7 @@
 #include "kernel/drivers/interrupts_init/interrupts_init.h"
 #include "kernel/drivers/keyboard/keyboard.h"
 #include "kernel/drivers/device_manager/device_manager.h"
-#include "kernel/drivers/usb/uhci.h"
+#include "kernel/drivers/usb/usbhc.h"
 #include "kernel/drivers/usb/usb_hid.h"
 #include "kernel/mm/frames/frames.h"
 #include "kernel/mm/paging/paging.h"
@@ -66,19 +66,26 @@ void _start(void) {
     // probes for its own presence.
     device_manager_register("CMOS RTC", DEVICE_CATEGORY_PLATFORM, 0);
 
-    // Real hand-written UHCI USB driver (Faza I point 9, item 16) - a
-    // real, honest no-op if no UHCI controller exists, or nothing is
-    // attached to its root hub, matching every other driver's own
-    // "lazily reflects what's really there" convention.
-    if (uhci_init()) {
-        usb_hid_init();
-    }
-
     idt_init();
     pic_remap();
     pit_init();
     frames_init();
     read_pml4();
+
+    // Real hand-written UHCI + xHCI USB drivers (Faza I point 9, item
+    // 16, extended by the real-hardware driver arc's item 4) - a real,
+    // honest no-op if neither controller exists, or nothing is attached
+    // to any root hub, matching every other driver's own "lazily
+    // reflects what's really there" convention. Must run after
+    // frames_init()/read_pml4() above: unlike UHCI (static arrays, no
+    // paging calls at all), xHCI's real MMIO register interface needs a
+    // working alloc_frame()/map_page() - g_pml4_phys is still 0 before
+    // read_pml4() runs, which silently wrote through a bogus "PML4" at
+    // physical address 0 and corrupted real low memory (a genuine,
+    // found-during-testing ordering bug - the first driver in this
+    // codebase's own boot sequence to need paging this early).
+    usbhc_init();
+    usb_hid_init();
 
     // Must run before `sti` - the timer ISR calls yield(), which divides by g_task_count.
     scheduler_init();

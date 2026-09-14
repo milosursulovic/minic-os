@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../../types.h"
-#include "uhci.h"
+#include "usbhc.h"
 
 #pragma GCC visibility push(hidden)
 
@@ -26,8 +26,9 @@ extern volatile u8 g_usb_last_keycodes[6];
 extern volatile u32 g_usb_key_event_count;
 extern volatile bool g_usb_keyboard_present;
 
-// Enumerates whatever's actually attached on UHCI's two root-hub ports
-// (uhci_init() must already have succeeded) and arms their periodic
+// Enumerates whatever's actually attached across every port of every
+// present host controller (kernel/drivers/usb/usbhc.c - UHCI and/or
+// xHCI, usbhc_init() must already have run) and arms their periodic
 // transfers. A port with nothing attached, or a device that isn't a
 // boot-protocol mouse/keyboard, is a real, honest no-op - matches every
 // other driver's own "lazily reflects what's really there" convention.
