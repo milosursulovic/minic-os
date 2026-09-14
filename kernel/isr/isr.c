@@ -37,6 +37,8 @@ bool g_alt_down;
 // Guards the Ctrl+Alt+T hotkey below against firing once per BIOS/PS2
 // key-repeat tick while T is held - reset on T's own release.
 static bool g_hotkey_t_fired;
+// Same press-edge guard, for the F11 fullscreen-toggle hotkey below.
+static bool g_hotkey_f11_fired;
 
 // Previous mouse button state, used only to detect real press/release
 // EDGES for the input event queue below - kernel/gfx/window/window.c's
@@ -200,6 +202,33 @@ void interrupt_handler(u64 vector, u64 error_code, u64 saved_rip) {
             }
             if (is_release) {
                 g_hotkey_t_fired = false;
+            }
+            outb(0x20, 0x20);
+            return;
+        }
+
+        // Real system-wide F11 hotkey (Faza II point 18) - toggles
+        // fullscreen on whichever window currently has focus, real
+        // desktop convention (no modifiers, unlike Ctrl+Alt+T above -
+        // F11 is never a printable-character key so there's no plain-
+        // typing case to protect against). A no-op when nothing is
+        // focused (g_focused_window_id == -1, e.g. the console shell/
+        // editor owns the keyboard) - matches real desktops.
+        if (!extended && base_scancode == 0x57) {
+            if (!is_release && !g_hotkey_f11_fired) {
+                g_hotkey_f11_fired = true;
+                if (g_focused_window_id >= 0 && g_fb_enabled) {
+                    // Real, immediate redraw - unlike compositor_redraw()'s
+                    // usual call site (kernel/isr/isr.c's own timer tick,
+                    // throttled to real mouse-driven changes), this
+                    // keyboard-triggered toggle has no other path that
+                    // would ever pick it up, so it draws right here.
+                    window_fullscreen_toggle(g_focused_window_id);
+                    compositor_redraw();
+                }
+            }
+            if (is_release) {
+                g_hotkey_f11_fired = false;
             }
             outb(0x20, 0x20);
             return;

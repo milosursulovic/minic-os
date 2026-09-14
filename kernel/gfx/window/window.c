@@ -135,11 +135,11 @@ static bool fits_on_screen(i32 x, i32 y, u32 width, u32 height) {
 // goes through these two instead, so bordered-window behavior is
 // unchanged and borderless windows fall out of the same code paths.
 static u32 window_body_height(window* w) {
-    return w->borderless ? w->height : w->height - TITLEBAR_HEIGHT;
+    return (w->borderless || w->fullscreen) ? w->height : w->height - TITLEBAR_HEIGHT;
 }
 
 static u32 window_body_screen_y(window* w) {
-    return w->borderless ? (u32) w->y : (u32) w->y + TITLEBAR_HEIGHT;
+    return (w->borderless || w->fullscreen) ? (u32) w->y : (u32) w->y + TITLEBAR_HEIGHT;
 }
 
 // A freshly created window can land on a REUSED slot (window_close() only
@@ -199,6 +199,7 @@ int window_create(i32 x, i32 y, u32 width, u32 height, u32 body_color, u32 title
     g_windows[id].borderless = false;
     g_windows[id].minimized = false;
     g_windows[id].maximized = false;
+    g_windows[id].fullscreen = false;
     clear_window_content(id);
 
     g_window_zorder[g_window_zorder_count] = id;
@@ -236,6 +237,7 @@ int window_create_borderless(i32 x, i32 y, u32 width, u32 height, u32 body_color
     g_windows[id].borderless = true;
     g_windows[id].minimized = false;
     g_windows[id].maximized = false;
+    g_windows[id].fullscreen = false;
     clear_window_content(id);
 
     g_window_zorder[g_window_zorder_count] = id;
@@ -271,7 +273,7 @@ bool window_resize(int id, u32 width, u32 height) {
     if (id < 0 || id >= WINDOW_SLOTS || !g_windows[id].used) {
         return false;
     }
-    if (g_windows[id].maximized) {
+    if (g_windows[id].maximized || g_windows[id].fullscreen) {
         return false;
     }
     if (g_windows[id].borderless) {
@@ -524,7 +526,7 @@ void compositor_redraw(void) {
     while (i < g_window_zorder_count) {
         int id = g_window_zorder[i];
         window* w = &g_windows[id];
-        if (!w->borderless) {
+        if (!w->borderless && !w->fullscreen) {
             u32 titlebar_color = (id == g_focused_window_id) ? FOCUSED_TITLEBAR_COLOR : w->title_color;
             bb_fill_rect((u32) w->x, (u32) w->y, w->width, TITLEBAR_HEIGHT, titlebar_color);
             draw_titlebar_icons(w);
@@ -582,6 +584,43 @@ static u8 g_wm_prev_buttons;
 #define WM_MIN_WIDTH 100
 #define WM_MIN_HEIGHT (TITLEBAR_HEIGHT + 40)
 
+// Real desktop fullscreen (Faza II point 18) - same shape as
+// maximize_toggle() below, sharing its restore_x/y/width/height fields
+// (never both states at once). If entering fullscreen while already
+// maximized, restore_* already holds the real pre-maximize bounds from
+// whenever maximize was first toggled - reused as-is rather than
+// captured again, so `maximized` just clears; a real, stated
+// simplification: exiting fullscreen afterward returns to the normal
+// windowed size, not back to maximized.
+bool window_fullscreen_toggle(int id) {
+    if (id < 0 || id >= WINDOW_SLOTS || !g_windows[id].used) {
+        return false;
+    }
+    window* w = &g_windows[id];
+    if (!w->fullscreen) {
+        if (w->maximized) {
+            w->maximized = false;
+        } else {
+            w->restore_x = w->x;
+            w->restore_y = w->y;
+            w->restore_width = w->width;
+            w->restore_height = w->height;
+        }
+        w->x = 0;
+        w->y = 0;
+        w->width = g_fb_width;
+        w->height = g_fb_height;
+        w->fullscreen = true;
+    } else {
+        w->x = w->restore_x;
+        w->y = w->restore_y;
+        w->width = w->restore_width;
+        w->height = w->restore_height;
+        w->fullscreen = false;
+    }
+    return true;
+}
+
 static void maximize_toggle(window* w) {
     if (!w->maximized) {
         w->restore_x = w->x;
@@ -615,7 +654,7 @@ bool compositor_handle_mouse(void) {
         while (zi >= 0) {
             int id = g_window_zorder[zi];
             window* w = &g_windows[id];
-            if (!w->borderless) {
+            if (!w->borderless && !w->fullscreen) {
                 i32 icon_x, icon_y;
                 icon_rect(w, 0, &icon_x, &icon_y);
                 if (point_in_box(g_mouse_x, g_mouse_y, icon_x, icon_y, TITLEBAR_ICON_SIZE, TITLEBAR_ICON_SIZE)) {

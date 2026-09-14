@@ -44,6 +44,14 @@ typedef struct {
     // Filling the screen (minus the taskbar) - restore_x/y/width/height
     // hold the pre-maximize bounds, meaningful only while true.
     bool maximized;
+    // Filling the ENTIRE screen (no taskbar notch, no titlebar drawn or
+    // reserved) - real desktop fullscreen semantics (Faza II point 18),
+    // toggled via the F11 hotkey (kernel/isr/isr.c), never by mouse (no
+    // titlebar exists to click while fullscreen). Shares restore_x/y/
+    // width/height with `maximized` above - a window is never both at
+    // once (window_fullscreen_toggle() clears `maximized` on entry
+    // instead of stacking a second restore point; see its own comment).
+    bool fullscreen;
     i32 restore_x;
     i32 restore_y;
     u32 restore_width;
@@ -147,6 +155,13 @@ bool window_resize(int id, u32 width, u32 height);
 bool window_close(int id);
 // Moves id to the top of the z-order - the compositor draws it last.
 bool window_raise(int id);
+// Real desktop fullscreen toggle (Faza II point 18) - see the
+// `fullscreen` field's own comment. Public (unlike the mouse-only
+// maximize_toggle(), static in window.c) because kernel/isr/isr.c's
+// new F11 hotkey is the only way to trigger this - no titlebar icon
+// exists once fullscreen, so there's nothing to click to reverse it
+// without a keyboard path. False if id is out of range/unused.
+bool window_fullscreen_toggle(int id);
 // Drives titlebar-icon clicks (close/minimize/maximize), the bottom-
 // right resize handle, and titlebar-drag-to-move - real mouse
 // interaction, entirely kernel-side (no ring3 syscall involved). Call
