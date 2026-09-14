@@ -10,7 +10,7 @@
 
 # ---- Multiboot1 header - must land in the file's first 8KB, 4-byte aligned
 .set MB_MAGIC, 0x1BADB002
-.set MB_FLAGS, 0x00000003          # bit0: page-align modules, bit1: want a memory map
+.set MB_FLAGS, 0x00000007          # bit0: page-align modules, bit1: want a memory map, bit2: want a video mode
 .set MB_CHECKSUM, -(MB_MAGIC + MB_FLAGS)
 
 .section .multiboot
@@ -18,6 +18,16 @@
 .long MB_MAGIC
 .long MB_FLAGS
 .long MB_CHECKSUM
+# bit2 fields: requested video mode - GRUB/QEMU's own multiboot loader
+# negotiates this via VESA/GOP BEFORE the kernel runs and reports back
+# what it actually got in the multiboot info structure (frames.h's
+# multiboot_info framebuffer_* fields) - a real GPU may grant something
+# other than exactly this, which vbe_init_multiboot() reads back for
+# real rather than assuming.
+.long 0             # mode_type: 0 = linear graphics (not EGA text)
+.long 800           # width
+.long 600           # height
+.long 32            # depth
 
 # ---- Page tables + stack (BSS - zero-initialized, filled in at boot) -----
 .section .bss

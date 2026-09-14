@@ -4,21 +4,9 @@
 
 #include "frames.h"
 
-typedef struct __attribute__((packed)) {
-    u32 flags;
-    u32 mem_lower;
-    u32 mem_upper;
-    u32 boot_device;
-    u32 cmdline;
-    u32 mods_count;
-    u32 mods_addr;
-    u32 syms0;
-    u32 syms1;
-    u32 syms2;
-    u32 syms3;
-    u32 mmap_length;
-    u32 mmap_addr;
-} multiboot_info;
+// multiboot_info (the real, full struct) now lives in frames.h - shared
+// with kernel/drivers/vbe/vbe.c's vbe_init_multiboot(), which needs the
+// framebuffer_* fields this file itself never touches.
 
 // packed: `addr` sits at an unaligned 4-byte offset per the real multiboot spec.
 typedef struct __attribute__((packed)) {

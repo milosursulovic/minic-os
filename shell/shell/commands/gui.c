@@ -119,7 +119,7 @@ void cmd_listcontent(void) {
 // contrasting rect, then reads pixels back (not just the values we sent) to
 // prove real hardware round trips, including exact rect-boundary precision.
 void cmd_fb(void) {
-    bool ok = vbe_init(800, 600);
+    bool ok = graphics_init(800, 600);
     if (!ok) {
         vga_print("framebuffer init failed - no Bochs VBE VGA device found");
         serial_print("framebuffer init failed - no Bochs VBE VGA device found");
@@ -171,7 +171,7 @@ void cmd_fb(void) {
 // inter-character gap column, and a pixel well past both characters - same
 // discipline as cmd_fb's rect read-backs.
 void cmd_text(void) {
-    bool ok = vbe_init(800, 600);
+    bool ok = graphics_init(800, 600);
     if (!ok) {
         vga_print("framebuffer init failed - no Bochs VBE VGA device found");
         serial_print("framebuffer init failed - no Bochs VBE VGA device found");
@@ -237,7 +237,7 @@ void cmd_mouse(void) {
 // checked by reading the actual composited pixels back, not just trusting
 // the calls succeeded.
 void cmd_win(void) {
-    bool ok = vbe_init(800, 600);
+    bool ok = graphics_init(800, 600);
     if (!ok) {
         vga_print("window server init failed - no framebuffer");
         serial_print("window server init failed - no framebuffer");

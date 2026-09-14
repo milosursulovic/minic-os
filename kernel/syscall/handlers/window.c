@@ -41,7 +41,7 @@ typedef struct __attribute__((packed)) {
 bool syscall_window(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
     if (num == 26) {
         if (!g_fb_enabled) {
-            vbe_init(800, 600);
+            graphics_init(800, 600);
         }
         window_create_args* args = (window_create_args*) a1;
         int id = window_create(args->x, args->y, args->width, args->height,
@@ -133,7 +133,7 @@ bool syscall_window(u64 num, u64 a1, u64 a2, u64 a3, u64* result) {
     }
     if (num == 34) {
         if (!g_fb_enabled) {
-            vbe_init(800, 600);
+            graphics_init(800, 600);
         }
         window_create_borderless_args* args = (window_create_borderless_args*) a1;
         int id = window_create_borderless(args->x, args->y, args->width, args->height,

@@ -10,6 +10,7 @@
 #include "../pci/pci.h"
 #include "../device_manager/device_manager.h"
 #include "../../mm/paging/paging.h"
+#include "../../mm/frames/frames.h"
 #include "../../gfx/font/font.h"
 
 static const u16 VBE_DISPI_IOPORT_INDEX = 0x01CE;
@@ -90,6 +91,22 @@ static bool find_vga_device(u8* bus_out, u8* device_out, u8* function_out) {
     return false;
 }
 
+// Shared by vbe_init() and vbe_init_multiboot() - maps `total_bytes`
+// worth of pages starting at physical `phys` to FB_VADDR, writable/non-exec.
+static bool map_framebuffer_pages(u64 phys, u32 total_bytes) {
+    u32 pages = (total_bytes + 4095) / 4096;
+    u32 page = 0;
+    while (page < pages) {
+        u64 vaddr = FB_VADDR + ((u64) page * 4096);
+        u64 paddr = phys + ((u64) page * 4096);
+        if (!map_page(vaddr, paddr, 0x02 | PAGE_NX)) {  // framebuffer: writable, non-exec
+            return false;
+        }
+        page = page + 1;
+    }
+    return true;
+}
+
 bool vbe_init(u32 width, u32 height) {
     if (vbe_read_reg(VBE_DISPI_INDEX_ID) < VBE_DISPI_ID_MIN) {
         return false;
@@ -112,16 +129,8 @@ bool vbe_init(u32 width, u32 height) {
 
     u32 pitch = width * 4;
     u32 total_bytes = pitch * height;
-    u32 pages = (total_bytes + 4095) / 4096;
-
-    u32 page = 0;
-    while (page < pages) {
-        u64 vaddr = FB_VADDR + ((u64) page * 4096);
-        u64 paddr = ((u64) lfb_phys) + ((u64) page * 4096);
-        if (!map_page(vaddr, paddr, 0x02 | PAGE_NX)) {  // framebuffer: writable, non-exec
-            return false;
-        }
-        page = page + 1;
+    if (!map_framebuffer_pages((u64) lfb_phys, total_bytes)) {
+        return false;
     }
 
     g_fb_lfb_phys = lfb_phys;
@@ -132,6 +141,54 @@ bool vbe_init(u32 width, u32 height) {
     g_fb_enabled = true;
     device_manager_register("Bochs VBE Framebuffer", DEVICE_CATEGORY_PLATFORM, 0);
     return true;
+}
+
+// Real linear framebuffer already negotiated by GRUB/QEMU's own
+// multiboot loader via VESA/GOP before the kernel ran (boot.s's MB_FLAGS
+// bit2 request) - works on any real GPU, since the bootloader/firmware
+// did the mode-setting, not this driver. Reads back whatever was
+// actually granted (which may differ from the 800x600/32bpp requested)
+// rather than assuming it.
+bool vbe_init_multiboot(void) {
+    if (g_multiboot_info_ptr == 0) {
+        return false;
+    }
+    multiboot_info* info = (multiboot_info*) ((u64) g_multiboot_info_ptr);
+    if ((info->flags & MULTIBOOT_INFO_FLAG_FRAMEBUFFER) == 0) {
+        return false;
+    }
+    if (info->framebuffer_type != MULTIBOOT_FRAMEBUFFER_TYPE_RGB) {
+        return false;
+    }
+    if (info->framebuffer_bpp != 32) {
+        return false;
+    }
+    if (info->framebuffer_addr == 0) {
+        return false;
+    }
+
+    u32 pitch = info->framebuffer_pitch;
+    u32 height = info->framebuffer_height;
+    u32 total_bytes = pitch * height;
+    if (!map_framebuffer_pages(info->framebuffer_addr, total_bytes)) {
+        return false;
+    }
+
+    g_fb_lfb_phys = (u32) info->framebuffer_addr;
+    g_fb_vaddr = FB_VADDR;
+    g_fb_width = info->framebuffer_width;
+    g_fb_height = height;
+    g_fb_pitch = pitch;
+    g_fb_enabled = true;
+    device_manager_register("Multiboot Framebuffer", DEVICE_CATEGORY_PLATFORM, 0);
+    return true;
+}
+
+bool graphics_init(u32 preferred_width, u32 preferred_height) {
+    if (vbe_init_multiboot()) {
+        return true;
+    }
+    return vbe_init(preferred_width, preferred_height);
 }
 
 void fb_put_pixel(u32 x, u32 y, u32 color) {

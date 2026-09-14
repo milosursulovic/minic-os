@@ -11,6 +11,18 @@ extern u32 g_fb_pitch;
 extern bool g_fb_enabled;
 
 bool vbe_init(u32 width, u32 height);
+// Reads a real linear framebuffer already negotiated by GRUB/QEMU's own
+// multiboot loader via VESA/GOP before the kernel ran (boot.s's MB_FLAGS
+// bit2 request) - works on real hardware, unlike vbe_init()'s
+// Bochs/QEMU-only DISPI register interface. False if the bootloader
+// didn't grant one, or granted something this kernel can't use (not
+// RGB direct-color, or not 32bpp).
+bool vbe_init_multiboot(void);
+// Real entry point every caller should use: tries vbe_init_multiboot()
+// first, falls back to vbe_init(preferred_width, preferred_height) if
+// that fails - zero regression to the existing QEMU/VirtualBox Bochs
+// dev loop.
+bool graphics_init(u32 preferred_width, u32 preferred_height);
 u16 vbe_read_reg(u16 index);
 u32 vbe_lfb_phys(void);
 void fb_put_pixel(u32 x, u32 y, u32 color);
