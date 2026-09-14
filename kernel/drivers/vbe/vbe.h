@@ -18,10 +18,17 @@ bool vbe_init(u32 width, u32 height);
 // didn't grant one, or granted something this kernel can't use (not
 // RGB direct-color, or not 32bpp).
 bool vbe_init_multiboot(void);
-// Real entry point every caller should use: tries vbe_init_multiboot()
-// first, falls back to vbe_init(preferred_width, preferred_height) if
-// that fails - zero regression to the existing QEMU/VirtualBox Bochs
-// dev loop.
+// Real multiboot2 framebuffer path - the one that actually works on
+// real UEFI hardware (multiboot1's own video-mode request breaks boot
+// entirely under UEFI GRUB - see boot.s's own comment). Same honest
+// "graceful false if unusable" contract as vbe_init_multiboot().
+bool vbe_init_multiboot2(void);
+// Real entry point every caller should use: tries vbe_init_multiboot2()
+// (real UEFI GOP framebuffer) first, then vbe_init_multiboot()
+// (multiboot1 - kept for completeness, currently unreachable since no
+// platform grants it), then falls back to vbe_init(preferred_width,
+// preferred_height) - zero regression to the existing QEMU/VirtualBox
+// Bochs dev loop.
 bool graphics_init(u32 preferred_width, u32 preferred_height);
 u16 vbe_read_reg(u16 index);
 u32 vbe_lfb_phys(void);

@@ -153,6 +153,16 @@ bool vbe_init_multiboot(void) {
     if (g_multiboot_info_ptr == 0) {
         return false;
     }
+    if (g_multiboot_magic == MULTIBOOT2_BOOTLOADER_MAGIC) {
+        // Real safety gate, not redundant: if we actually booted via
+        // multiboot2, g_multiboot_info_ptr points at a completely
+        // different tag-list structure (see vbe_init_multiboot2()
+        // below) - reading it as the multiboot1 flat struct here would
+        // interpret unrelated memory as "flags"/"framebuffer_*", the
+        // same false-positive-read bug class already found once for
+        // real Bochs-DISPI hardware detection (project_vbe_real_hardware_bug).
+        return false;
+    }
     multiboot_info* info = (multiboot_info*) ((u64) g_multiboot_info_ptr);
     if ((info->flags & MULTIBOOT_INFO_FLAG_FRAMEBUFFER) == 0) {
         return false;
@@ -184,7 +194,55 @@ bool vbe_init_multiboot(void) {
     return true;
 }
 
+// Real multiboot2 framebuffer path - the actual fix for real UEFI
+// hardware (multiboot1's own video-mode request hard-failed boot under
+// this dev laptop's UEFI GRUB, see reference_multiboot1_uefi_video_limitation
+// / boot.s's own comment). Walks the real multiboot2 tag list (shared
+// walker, frames.h's multiboot2_next_tag()) looking for the
+// framebuffer info tag - same honest "graceful false, not assumed"
+// validation vbe_init_multiboot() already established for multiboot1.
+bool vbe_init_multiboot2(void) {
+    if (g_multiboot_magic != MULTIBOOT2_BOOTLOADER_MAGIC || g_multiboot_info_ptr == 0) {
+        return false;
+    }
+    multiboot2_info* mb2 = (multiboot2_info*) ((u64) g_multiboot_info_ptr);
+    multiboot2_tag* tag = (multiboot2_tag*) ((u64) mb2 + sizeof(multiboot2_info));
+    while (tag->type != MULTIBOOT2_TAG_TYPE_END) {
+        if (tag->type == MULTIBOOT2_TAG_TYPE_FRAMEBUFFER) {
+            multiboot2_tag_framebuffer* fb = (multiboot2_tag_framebuffer*) tag;
+            if (fb->framebuffer_type != MULTIBOOT_FRAMEBUFFER_TYPE_RGB) {
+                return false;
+            }
+            if (fb->framebuffer_bpp != 32) {
+                return false;
+            }
+            if (fb->framebuffer_addr == 0) {
+                return false;
+            }
+            u32 pitch = fb->framebuffer_pitch;
+            u32 height = fb->framebuffer_height;
+            u32 total_bytes = pitch * height;
+            if (!map_framebuffer_pages(fb->framebuffer_addr, total_bytes)) {
+                return false;
+            }
+            g_fb_lfb_phys = (u32) fb->framebuffer_addr;
+            g_fb_vaddr = FB_VADDR;
+            g_fb_width = fb->framebuffer_width;
+            g_fb_height = height;
+            g_fb_pitch = pitch;
+            g_fb_enabled = true;
+            device_manager_register("Multiboot2 Framebuffer", DEVICE_CATEGORY_PLATFORM, 0);
+            return true;
+        }
+        tag = multiboot2_next_tag(tag);
+    }
+    return false;
+}
+
 bool graphics_init(u32 preferred_width, u32 preferred_height) {
+    if (vbe_init_multiboot2()) {
+        return true;
+    }
     if (vbe_init_multiboot()) {
         return true;
     }

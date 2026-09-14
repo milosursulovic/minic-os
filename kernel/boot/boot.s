@@ -9,8 +9,29 @@
 .intel_syntax noprefix
 
 # ---- Multiboot1 header - must land in the file's first 8KB, 4-byte aligned
+#
+# Real finding 2026-09-14: bit2 (request a video mode) was tried here -
+# GRUB/QEMU negotiates VESA/GOP before the kernel runs and reports back
+# via the multiboot info struct (kernel/drivers/vbe/vbe.c's
+# vbe_init_multiboot()). QEMU's own `-kernel` loader gracefully doesn't
+# support it ("multiboot knows VBE. we don't", already handled - see
+# graphics_init()'s Bochs-DISPI fallback). Real hardware is worse: this
+# dev laptop's UEFI GRUB failed to even BOOT with bit2 set - "unsupported
+# graphical mode type <garbage value> / you need to load the kernel
+# first" - a real, confirmed multiboot1-under-UEFI limitation (multiboot1's
+# mode_type/width/height/depth fields don't map cleanly onto UEFI's own
+# GOP pixel-format enumeration the way multiboot2's proper framebuffer
+# tag does; several independent OSDev reports describe the same class of
+# failure). Reverted: bit2 dropped, video-mode fields removed. This
+# means `vbe_init_multiboot()` will never see flags bit12 set on ANY
+# platform tested so far (QEMU or this real UEFI machine) - it still
+# exists and gracefully returns false, `graphics_init()` still falls back
+# to Bochs DISPI - but the real multiboot-framebuffer path itself is
+# effectively unreachable without switching to multiboot2, which is a
+# real, separate, larger undertaking (a different header/tag format
+# entirely) - a future item, not attempted here.
 .set MB_MAGIC, 0x1BADB002
-.set MB_FLAGS, 0x00000007          # bit0: page-align modules, bit1: want a memory map, bit2: want a video mode
+.set MB_FLAGS, 0x00000003          # bit0: page-align modules, bit1: want a memory map
 .set MB_CHECKSUM, -(MB_MAGIC + MB_FLAGS)
 
 .section .multiboot
@@ -18,16 +39,56 @@
 .long MB_MAGIC
 .long MB_FLAGS
 .long MB_CHECKSUM
-# bit2 fields: requested video mode - GRUB/QEMU's own multiboot loader
-# negotiates this via VESA/GOP BEFORE the kernel runs and reports back
-# what it actually got in the multiboot info structure (frames.h's
-# multiboot_info framebuffer_* fields) - a real GPU may grant something
-# other than exactly this, which vbe_init_multiboot() reads back for
-# real rather than assuming.
-.long 0             # mode_type: 0 = linear graphics (not EGA text)
-.long 800           # width
-.long 600           # height
-.long 32            # depth
+
+# ---- Multiboot2 header - NEW, ADDITIONAL to the multiboot1 header
+# above (kept working, unchanged - user's own standing rule: new
+# platform/protocol support must never silently replace an old
+# working path). Real fix for the multiboot1-under-UEFI boot failure
+# (see reference_multiboot1_uefi_video_limitation memory / the plan
+# file's own item 2b): multiboot2 has a real, proper framebuffer tag
+# that maps cleanly onto UEFI's GOP, unlike multiboot1's video-mode
+# fields. iso/boot/grub/grub.cfg picks this header (via GRUB's
+# `multiboot2` command) only for UEFI boots, keeping BIOS boots on the
+# proven multiboot1 `multiboot` command exactly as before. Must land
+# within the file's first 32KB, 8-byte aligned - comfortably satisfied,
+# this section is tiny and comes right after the equally-tiny
+# multiboot1 header.
+.set MB2_MAGIC, 0xE85250D6
+.set MB2_ARCH_I386, 0
+
+.section .multiboot2
+.align 8
+mb2_header_start:
+.long MB2_MAGIC
+.long MB2_ARCH_I386
+.long mb2_header_end - mb2_header_start
+.long -(MB2_MAGIC + MB2_ARCH_I386 + (mb2_header_end - mb2_header_start))
+
+# Real finding 2026-09-14: the framebuffer request tag (type 5, tried
+# here with the "optional" flag bit0=1) still hard-failed real boot on
+# this laptop - "error: no suitable video mode found", boot stopped
+# completely (the "optional" flag governs whether the KERNEL load
+# proceeds without a grant, not whether GRUB's own video-mode-setting
+# ATTEMPT itself can fail hard first). Real hardware's own GRUB build
+# is evidently less forgiving here than QEMU+OVMF was (where the exact
+# same tag only produced a non-fatal warning - see
+# reference_qemu_ovmf_uefi_testing memory). Removed entirely - this
+# multiboot2 header now requests nothing beyond basic protocol
+# recognition (magic/arch, straight to the end tag) so GRUB never
+# attempts ANY video-mode negotiation on this kernel's behalf.
+# vbe_init_multiboot2() (kernel/drivers/vbe/vbe.c) stays in place,
+# harmless - it will just never find a framebuffer tag, falling
+# through to the existing Bochs DISPI path exactly like the QEMU dev
+# loop already does. A real multiboot-negotiated framebuffer on this
+# real hardware needs a different approach - not attempted further
+# here after two real, hard boot-failing attempts (multiboot1's own
+# video fields, then multiboot2's own "optional" tag).
+
+.align 8
+.word 0
+.word 0
+.long 8
+mb2_header_end:
 
 # ---- Page tables + stack (BSS - zero-initialized, filled in at boot) -----
 .section .bss
@@ -42,6 +103,19 @@ pd:
 stack_bottom:
     .skip 16384
 stack_top:
+
+# Real multiboot magic (EAX at kernel entry - 0x2BADB002 for
+# multiboot1, 0x36D76289 for multiboot2) tells kernel-side code which
+# boot-info STRUCT FORMAT the g_multiboot_info_ptr/EBX pointer actually
+# is - the two protocols' info structures are completely different
+# shapes (frames.h's multiboot_info flat struct vs a tag-list). Captured
+# here (a plain local .bss scratch, safe to write directly from 32-bit
+# code the same way pml4/pdpt/pd already are) since EAX gets clobbered
+# almost immediately below (line: `mov eax, offset tss_start`) - by the
+# time _start64 could read the raw register, it would already be gone.
+.align 4
+mb_magic_scratch:
+    .skip 4
 
 # Milestone 11: a TSS, needed so the CPU knows which kernel stack to load
 # on a ring3->ring0 transition (RSP0) - without one, an interrupt firing
@@ -74,8 +148,12 @@ tss_end:
 .global _boot_start
 .extern _start              # MiniC's void _start(), in kmain.mc
 .extern g_multiboot_info_ptr   # MiniC global - see the note by its use below
+.extern g_multiboot_magic      # MiniC global - which of the two protocols actually booted us
 
 _boot_start:
+    # Capture EAX (the real multiboot magic) before anything else in
+    # this function touches it - see mb_magic_scratch's own comment.
+    mov [mb_magic_scratch], eax
     mov esp, offset stack_top
 
     # Patch the TSS descriptor's base-address fields (see the comment by
@@ -195,6 +273,12 @@ _start64:
     # global (a real, `.globl`-exported symbol, same trick as g_out_port/
     # g_out_byte for outb) since `_start` takes no parameters.
     mov dword ptr [rip + g_multiboot_info_ptr], ebx
+
+    # Real EAX magic, captured into mb_magic_scratch back in
+    # _boot_start (32-bit code) before it got clobbered - copy it into
+    # the real C global now that rip-relative addressing is available.
+    mov eax, dword ptr [rip + mb_magic_scratch]
+    mov dword ptr [rip + g_multiboot_magic], eax
 
     call _start
 

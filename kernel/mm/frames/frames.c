@@ -17,6 +17,7 @@ typedef struct __attribute__((packed)) {
 } mmap_entry;
 
 u32 g_multiboot_info_ptr;
+u32 g_multiboot_magic;
 
 #pragma GCC visibility push(hidden)
 extern u8 _kernel_end;  // boot/linker.ld - real end of .bss, 4K-aligned
@@ -75,6 +76,28 @@ static void frame_clear(u32 frame) {
     g_frame_bitmap[byte_index] = g_frame_bitmap[byte_index] & (u8) (~mask);
 }
 
+// Real range-clamp-then-clear logic shared by both multiboot1's and
+// multiboot2's own memory-map walks below (identical math, only the
+// tag/entry format differs) - clamps to [kernel_end, 1GB) then clears
+// (marks free) every frame in the real, clamped range.
+static void mark_range_free(u64 start, u64 end, u64 kernel_end) {
+    if (start < kernel_end) {
+        start = kernel_end;
+    }
+    if (end > 1073741824) {
+        end = 1073741824;
+    }
+    u64 frame = start / 4096;
+    u64 frame_end = end / 4096;
+    while (frame < frame_end) {
+        if (frame_test((u32) frame)) {
+            frame_clear((u32) frame);
+            g_free_frame_count = g_free_frame_count + 1;
+        }
+        frame = frame + 1;
+    }
+}
+
 // Everything starts "used"; the memory map clears what's actually free.
 void frames_init(void) {
     u32 i = 0;
@@ -87,32 +110,41 @@ void frames_init(void) {
 
     u64 kernel_end = (u64) &_kernel_end;
 
-    multiboot_info* info = (multiboot_info*) ((u64) g_multiboot_info_ptr);
-    u64 mmap_addr = (u64) info->mmap_addr;
-    u64 mmap_end = mmap_addr + (u64) info->mmap_length;
-    u64 entry_addr = mmap_addr;
-    while (entry_addr < mmap_end) {
-        mmap_entry* entry = (mmap_entry*) entry_addr;
-        if (entry->type == 1) {
-            u64 start = entry->addr;
-            u64 end = entry->addr + entry->len;
-            if (start < kernel_end) {
-                start = kernel_end;
-            }
-            if (end > 1073741824) {
-                end = 1073741824;
-            }
-            u64 frame = start / 4096;
-            u64 frame_end = end / 4096;
-            while (frame < frame_end) {
-                if (frame_test((u32) frame)) {
-                    frame_clear((u32) frame);
-                    g_free_frame_count = g_free_frame_count + 1;
+    if (g_multiboot_magic == MULTIBOOT2_BOOTLOADER_MAGIC) {
+        // Real multiboot2 tag-list walk - completely different shape
+        // from the flat multiboot1 struct below (see frames.h). Skip
+        // the total_size/reserved header, then step tags until the
+        // real MMAP tag (type 6) or the end tag (type 0).
+        multiboot2_info* mb2 = (multiboot2_info*) ((u64) g_multiboot_info_ptr);
+        multiboot2_tag* tag = (multiboot2_tag*) ((u64) mb2 + sizeof(multiboot2_info));
+        while (tag->type != MULTIBOOT2_TAG_TYPE_END) {
+            if (tag->type == MULTIBOOT2_TAG_TYPE_MMAP) {
+                multiboot2_tag_mmap* mmap_tag = (multiboot2_tag_mmap*) tag;
+                u64 entry_addr = (u64) mmap_tag + sizeof(multiboot2_tag_mmap);
+                u64 entries_end = (u64) mmap_tag + mmap_tag->size;
+                while (entry_addr < entries_end) {
+                    multiboot2_mmap_entry* entry = (multiboot2_mmap_entry*) entry_addr;
+                    if (entry->type == 1) {
+                        mark_range_free(entry->addr, entry->addr + entry->len, kernel_end);
+                    }
+                    entry_addr = entry_addr + mmap_tag->entry_size;
                 }
-                frame = frame + 1;
+                break;
             }
+            tag = multiboot2_next_tag(tag);
         }
-        entry_addr = entry_addr + (u64) entry->size + 4;
+    } else {
+        multiboot_info* info = (multiboot_info*) ((u64) g_multiboot_info_ptr);
+        u64 mmap_addr = (u64) info->mmap_addr;
+        u64 mmap_end = mmap_addr + (u64) info->mmap_length;
+        u64 entry_addr = mmap_addr;
+        while (entry_addr < mmap_end) {
+            mmap_entry* entry = (mmap_entry*) entry_addr;
+            if (entry->type == 1) {
+                mark_range_free(entry->addr, entry->addr + entry->len, kernel_end);
+            }
+            entry_addr = entry_addr + (u64) entry->size + 4;
+        }
     }
 }
 

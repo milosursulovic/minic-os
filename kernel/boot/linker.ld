@@ -9,9 +9,13 @@ SECTIONS
     /* .multiboot must be first *within* .text, not its own output section -
      * two separate output sections here left the location counter at 1M
      * for both (an ld quirk), silently overlapping the multiboot header
-     * with the real code it's supposed to precede. */
+     * with the real code it's supposed to precede. .multiboot2 (the new,
+     * additional UEFI-capable header) goes right after it - both land
+     * comfortably within the real spec's "first 32KB of the file" search
+     * limit, well before the rest of .text. */
     .text ALIGN(4K) : {
         *(.multiboot)
+        *(.multiboot2)
         *(.text)
     }
 
