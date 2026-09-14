@@ -12,6 +12,7 @@
 #include "../../proc/ipc/io_request/io_request.h"
 #include "../../proc/ipc/net_request/net_request.h"
 #include "../../proc/ipc/net_tcp_request/net_tcp_request.h"
+#include "../../proc/ipc/wifi_request/wifi_request.h"
 #include "../../proc/ipc/event/event.h"
 #include "../../proc/ipc/mutex/mutex.h"
 #include "../../proc/ipc/timer/timer.h"
@@ -320,6 +321,17 @@ void net_tcp_request_wait(int slot_index) {
         task* self = &g_tasks[g_current_task];
         self->blocked = true;
         self->waiting_on = &g_net_tcp_requests[slot_index].done;
+        restore_interrupts(saved_flags);
+        yield();
+    }
+}
+
+void wifi_request_wait(int slot_index) {
+    while (!g_wifi_requests[slot_index].done) {
+        u64 saved_flags = disable_interrupts();
+        task* self = &g_tasks[g_current_task];
+        self->blocked = true;
+        self->waiting_on = &g_wifi_requests[slot_index].done;
         restore_interrupts(saved_flags);
         yield();
     }

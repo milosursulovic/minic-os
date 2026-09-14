@@ -3,7 +3,7 @@
 #include "icmp6.h"
 #include "../ipv6/ipv6.h"
 #include "../ndp/ndp.h"
-#include "../e1000/e1000.h"
+#include "../netdev/netdev.h"
 #include "../../isr/isr.h"
 #include "../../sched/task.h"
 
@@ -44,7 +44,7 @@ bool icmp6_ping(u8* target_ip6, u16 identifier, u16 sequence) {
     }
 
     u8 src_mac[6];
-    e1000_get_mac(&src_mac[0]);
+    netdev_get_mac(&src_mac[0]);
 
     // 4-byte ICMPv6 header + a small, fixed 4-byte payload (same shape
     // kernel/net/icmp/icmp.c's own ICMPv4 echo uses).
@@ -84,14 +84,14 @@ bool icmp6_ping(u8* target_ip6, u16 identifier, u16 sequence) {
         i = i + 1;
     }
 
-    if (!e1000_send(&frame[0], 66)) {
+    if (!netdev_send(&frame[0], 66)) {
         return false;
     }
 
     u8 reply[128];
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < 2000) {
-        u16 len = e1000_receive(&reply[0], 128);
+        u16 len = netdev_receive(&reply[0], 128);
         if (len > 0) {
             bool is_ipv6 = reply[12] == 0x86 && reply[13] == 0xDD;
             if (is_ipv6) {

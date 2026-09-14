@@ -4,7 +4,7 @@
 #include "udp.h"
 #include "../ip/ip.h"
 #include "../arp/arp.h"
-#include "../e1000/e1000.h"
+#include "../netdev/netdev.h"
 #include "../../isr/isr.h"
 #include "../../sched/task.h"
 
@@ -60,7 +60,7 @@ bool udp_send(u8* target_ip, u16 dst_port, u16 src_port, u8* payload, u16 payloa
     }
     ensure_ip_configured();
     u8 src_mac[6];
-    e1000_get_mac(&src_mac[0]);
+    netdev_get_mac(&src_mac[0]);
 
     u8 frame[128];
     int i = 0;
@@ -91,7 +91,7 @@ bool udp_send(u8* target_ip, u16 dst_port, u16 src_port, u8* payload, u16 payloa
     udp_build_header(&frame[34], src_port, dst_port, payload_len, &g_my_ip[0], target_ip);
 
     u16 frame_len = 42 + payload_len;
-    return e1000_send(&frame[0], frame_len);
+    return netdev_send(&frame[0], frame_len);
 }
 
 // Tick-bounded poll for a datagram matching EtherType/protocol/source IP/ports.
@@ -100,7 +100,7 @@ u16 udp_receive(u8* expected_src_ip, u16 expected_src_port, u16 expected_dst_por
     u8 reply[160];
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < 2000) {
-        u16 len = e1000_receive(&reply[0], 160);
+        u16 len = netdev_receive(&reply[0], 160);
         if (len > 0) {
             bool is_ip = reply[12] == 0x08 && reply[13] == 0x00;
             if (is_ip) {

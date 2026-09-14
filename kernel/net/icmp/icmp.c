@@ -3,7 +3,7 @@
 #include "icmp.h"
 #include "../ip/ip.h"
 #include "../arp/arp.h"
-#include "../e1000/e1000.h"
+#include "../netdev/netdev.h"
 #include "../../isr/isr.h"
 #include "../../sched/task.h"
 
@@ -30,7 +30,7 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
         return false;
     }
     u8 src_mac[6];
-    e1000_get_mac(&src_mac[0]);
+    netdev_get_mac(&src_mac[0]);
 
     // 8-byte ICMP header + a small, fixed 4-byte payload.
     u8 icmp_msg[12];
@@ -78,14 +78,14 @@ bool icmp_ping(u8* target_ip, u16 identifier, u16 sequence) {
         i = i + 1;
     }
 
-    if (!e1000_send(&frame[0], 46)) {
+    if (!netdev_send(&frame[0], 46)) {
         return false;
     }
 
     u8 reply[128];
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < 2000) {
-        u16 len = e1000_receive(&reply[0], 128);
+        u16 len = netdev_receive(&reply[0], 128);
         if (len > 0) {
             bool is_ip = reply[12] == 0x08 && reply[13] == 0x00;
             if (is_ip) {

@@ -12,7 +12,7 @@
 #include "tcp.h"
 #include "../ip/ip.h"
 #include "../arp/arp.h"
-#include "../e1000/e1000.h"
+#include "../netdev/netdev.h"
 #include "../dns/dns.h"
 #include "../../isr/isr.h"
 #include "../../sched/task.h"
@@ -124,7 +124,7 @@ static bool tcp_send_segment(u8* gateway_mac, u8* target_ip, u16 target_port, u1
         i = i + 1;
     }
     u8 src_mac[6];
-    e1000_get_mac(&src_mac[0]);
+    netdev_get_mac(&src_mac[0]);
     i = 0;
     while (i < 6) {
         frame[6 + i] = src_mac[i];
@@ -144,7 +144,7 @@ static bool tcp_send_segment(u8* gateway_mac, u8* target_ip, u16 target_port, u1
                       &g_my_ip[0], target_ip, payload_len);
 
     u16 frame_len = (u16) (54 + payload_len);
-    return e1000_send(&frame[0], frame_len);
+    return netdev_send(&frame[0], frame_len);
 }
 
 typedef struct {
@@ -171,7 +171,7 @@ static bool tcp_wait_segment(u8* target_ip, u16 target_port, u16 local_port, u64
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < timeout_ticks) {
         yield();  // this runs on a background worker task now
-        u16 len = e1000_receive(buf, buf_len);
+        u16 len = netdev_receive(buf, buf_len);
         if (len == 0) {
             continue;
         }
@@ -568,7 +568,7 @@ int tcp_listen(u16 port) {
     // call to arp_init() - a server has no IP to resolve before it can
     // listen, so this calls the same lazy NIC-bring-up directly. Real bug
     // found during this milestone's own QEMU verification: without this,
-    // e1000_receive() was being polled before the NIC/rings existed at
+    // netdev_receive() was being polled before the NIC/rings existed at
     // all, so tcp_accept() always timed out with zero data ever seen.
     if (!arp_init()) {
         return -1;
@@ -596,7 +596,7 @@ static bool tcp_wait_syn(u16 local_port, u64 timeout_ticks, u8* buf, u16 buf_len
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < timeout_ticks) {
         yield();
-        u16 len = e1000_receive(buf, buf_len);
+        u16 len = netdev_receive(buf, buf_len);
         if (len == 0) {
             continue;
         }

@@ -12,13 +12,13 @@
 // than bolt broadcast/wildcard modes onto udp.c (used elsewhere with
 // different assumptions), this follows kernel/net/tcp/tcp.c's own
 // established precedent - a protocol-specific, self-contained frame
-// builder/poller straight on top of e1000_send/e1000_receive, not a
+// builder/poller straight on top of netdev_send/netdev_receive, not a
 // reuse of the generic UDP layer.
 
 #include "dhcp.h"
 #include "../ip/ip.h"
 #include "../arp/arp.h"
-#include "../e1000/e1000.h"
+#include "../netdev/netdev.h"
 #include "../../isr/isr.h"
 #include "../../sched/task.h"
 #include "../../drivers/io/io.h"
@@ -174,7 +174,7 @@ static bool dhcp_send(u32 xid, u8* client_mac, u8 msg_type, u8* requested_ip, u8
     }
 
     u16 frame_len = (u16) (42 + dhcp_len);
-    return e1000_send(&frame[0], frame_len);
+    return netdev_send(&frame[0], frame_len);
 }
 
 // Tick-bounded poll for a BOOTREPLY matching our own xid and the expected
@@ -187,7 +187,7 @@ static bool dhcp_wait_reply(u32 xid, u8 expected_msg_type, u64 timeout_ticks, dh
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < timeout_ticks) {
         yield();
-        u16 len = e1000_receive(&buf[0], 600);
+        u16 len = netdev_receive(&buf[0], 600);
         if (len == 0) {
             continue;
         }
@@ -291,7 +291,7 @@ bool dhcp_client(void) {
         return false;
     }
     u8 mac[6];
-    e1000_get_mac(&mac[0]);
+    netdev_get_mac(&mac[0]);
     // Tick-derived, not cryptographically random - fine, a DHCP xid only
     // needs to distinguish this exchange from a stale/unrelated one, same
     // "tick-derived" precedent kernel/net/tcp/tcp.c's own my_seq already uses.

@@ -28,6 +28,7 @@
 #include "handlers/users.h"
 #include "handlers/fork.h"
 #include "handlers/port_io.h"
+#include "handlers/wifi.h"
 
 u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     // Faza I point 14, item 17: a sandboxed process (holding an
@@ -58,5 +59,6 @@ u64 syscall_dispatch(u64 num, u64 a1, u64 a2, u64 a3) {
     if (syscall_users(num, a1, a2, a3, &result)) return result;
     if (syscall_fork(num, a1, a2, a3, &result)) return result;
     if (syscall_port_io(num, a1, a2, a3, &result)) return result;
+    if (syscall_wifi(num, a1, a2, a3, &result)) return result;
     return (u64) -1;  // unknown syscall
 }

@@ -63,7 +63,7 @@ DEPFLAGS = -MMD -MP -MT $@ -MF $(basename $@).d
 ASM_SRCS := kernel/boot/boot.s kernel/isr/interrupts.s kernel/sched/switch.s kernel/syscall/usermode.s kernel/sched/fork_enter_ring3.s
 ASM_OBJS := $(addprefix $(BUILD_DIR)/,$(ASM_SRCS:.s=.o))
 
-C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/*' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/drivers/rtc_driver/rtc_driver.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './.claude/*' -not -path './tools/*'))
+C_SRCS := $(patsubst ./%,%,$(shell find . -name '*.c' -not -path './proc/demo/ring3prog/*' -not -path './proc/demo/init/init.c' -not -path './proc/demo/hello_service/hello_service.c' -not -path './proc/drivers/rtc_driver/rtc_driver.c' -not -path './proc/apps/desktop_shell/desktop_shell.c' -not -path './proc/apps/terminal/terminal.c' -not -path './proc/apps/file_manager/file_manager.c' -not -path './proc/apps/settings/settings.c' -not -path './proc/apps/device_manager/device_manager.c' -not -path './proc/apps/service_manager/service_manager.c' -not -path './proc/apps/wifi/wifi.c' -not -path './.claude/*' -not -path './tools/*'))
 C_OBJS := $(addprefix $(BUILD_DIR)/,$(C_SRCS:.c=.o))
 
 .PHONY: all run iso disk clean sign_exec
@@ -237,6 +237,19 @@ $(BUILD_DIR)/proc/apps/service_manager/service_manager.bin: proc/apps/service_ma
 
 -include $(BUILD_DIR)/proc/apps/service_manager/service_manager.d
 
+# WiFi connect GUI - same shape again, launched on demand via syscall
+# 41 app_id 5 (desktop_shell.c's MENU dropdown), not auto-spawned at
+# boot (real-hardware driver arc item 5/5, Phase 8).
+$(BUILD_DIR)/proc/apps/wifi/wifi.bin: proc/apps/wifi/wifi.c proc/gui_toolkit.h proc/ring3.ld
+	@mkdir -p $(BUILD_DIR)/proc/apps/wifi
+	$(CC) $(CFLAGS) -MMD -MP -MT $(BUILD_DIR)/proc/apps/wifi/wifi.bin -MF $(BUILD_DIR)/proc/apps/wifi/wifi.d -S -o $(BUILD_DIR)/proc/apps/wifi/wifi.gen.s proc/apps/wifi/wifi.c
+	{ echo ".code64"; cat $(BUILD_DIR)/proc/apps/wifi/wifi.gen.s; } | $(AS) --32 -o $(BUILD_DIR)/proc/apps/wifi/wifi_raw.o
+	$(LD) -m elf_i386 -T proc/ring3.ld -o $(BUILD_DIR)/proc/apps/wifi/wifi_linked.elf $(BUILD_DIR)/proc/apps/wifi/wifi_raw.o
+	$(OBJCOPY) -O binary --set-section-flags .bss=alloc,load,contents \
+		$(BUILD_DIR)/proc/apps/wifi/wifi_linked.elf $(BUILD_DIR)/proc/apps/wifi/wifi.bin
+
+-include $(BUILD_DIR)/proc/apps/wifi/wifi.d
+
 # `.incbin` in each *_blob.s resolves relative to the assembler's own
 # working directory, not the .s file's location - `cd` into that
 # program's own leaf folder first, matching the MiniC-era build's own
@@ -283,6 +296,10 @@ $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o: proc/apps/service
 	@mkdir -p $(BUILD_DIR)/proc/apps/service_manager
 	cd proc/apps/service_manager && $(AS) --32 service_manager_blob.s -o ../../../$@
 
+$(BUILD_DIR)/proc/apps/wifi/wifi_blob.o: proc/apps/wifi/wifi_blob.s $(BUILD_DIR)/proc/apps/wifi/wifi.bin
+	@mkdir -p $(BUILD_DIR)/proc/apps/wifi
+	cd proc/apps/wifi && $(AS) --32 wifi_blob.s -o ../../../$@
+
 # These three `.incbin` a real, committed binary asset directly (assets/*.png)
 # instead of a build/-generated .bin - the source is the PNG file itself, not
 # something the ring3-program sub-pipeline produces, so the prerequisite is
@@ -313,8 +330,8 @@ $(BUILD_DIR)/kernel/net/rtw89/rtw89_fw_blob.o: kernel/net/rtw89/rtw89_fw_blob.s 
 	@mkdir -p $(BUILD_DIR)/kernel/net/rtw89
 	cd kernel/net/rtw89 && $(AS) --32 rtw89_fw_blob.s -o ../../../$@
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS) $(BUILD_DIR)/kernel/net/rtw89/rtw89_fw_blob.o
-	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS) $(BUILD_DIR)/kernel/net/rtw89/rtw89_fw_blob.o
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(BUILD_DIR)/proc/apps/wifi/wifi_blob.o $(PNG_ASSET_BLOBS) $(BUILD_DIR)/kernel/net/rtw89/rtw89_fw_blob.o
+	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(BUILD_DIR)/proc/apps/wifi/wifi_blob.o $(PNG_ASSET_BLOBS) $(BUILD_DIR)/kernel/net/rtw89/rtw89_fw_blob.o
 	@echo "built kernel.elf"
 
 disk.img:

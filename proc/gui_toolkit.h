@@ -25,6 +25,7 @@
 #include "gui_toolkit/users.h"
 #include "gui_toolkit/process.h"
 #include "gui_toolkit/port_io.h"
+#include "gui_toolkit/wifi.h"
 
 #include "gui_toolkit/widgets/button.h"
 #include "gui_toolkit/widgets/label.h"

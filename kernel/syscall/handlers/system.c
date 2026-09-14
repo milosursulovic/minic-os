@@ -18,6 +18,8 @@ extern u8 g_device_manager_prog_start;
 extern u8 g_device_manager_prog_end;
 extern u8 g_service_manager_prog_start;
 extern u8 g_service_manager_prog_end;
+extern u8 g_wifi_prog_start;
+extern u8 g_wifi_prog_end;
 #pragma GCC visibility pop
 
 typedef struct __attribute__((packed)) {
@@ -61,6 +63,11 @@ static bool gui_app_bounds(int app_id, u8** start_out, u8** end_out) {
     if (app_id == 4) {
         *start_out = &g_service_manager_prog_start;
         *end_out = &g_service_manager_prog_end;
+        return true;
+    }
+    if (app_id == 5) {
+        *start_out = &g_wifi_prog_start;
+        *end_out = &g_wifi_prog_end;
         return true;
     }
     return false;

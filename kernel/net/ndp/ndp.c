@@ -5,7 +5,7 @@
 #include "ndp.h"
 #include "../ipv6/ipv6.h"
 #include "../arp/arp.h"
-#include "../e1000/e1000.h"
+#include "../netdev/netdev.h"
 #include "../../isr/isr.h"
 #include "../../sched/task.h"
 
@@ -81,7 +81,7 @@ static void all_routers_multicast(u8* out) {
 static void ndp_send_neighbor_solicitation(u8* target_ip6) {
     ipv6_init_link_local();
     u8 mac[6];
-    e1000_get_mac(&mac[0]);
+    netdev_get_mac(&mac[0]);
 
     u8 sn_multicast[16];
     ipv6_solicited_node_multicast(target_ip6, &sn_multicast[0]);
@@ -129,7 +129,7 @@ static void ndp_send_neighbor_solicitation(u8* target_ip6) {
         frame[54 + i] = icmp6_msg[i];
         i = i + 1;
     }
-    e1000_send(&frame[0], 14 + 40 + 32);
+    netdev_send(&frame[0], 14 + 40 + 32);
 }
 
 static const u64 NDP_TIMEOUT_TICKS = 2000;
@@ -139,7 +139,7 @@ static bool ndp_wait_neighbor_advertisement(u8* target_ip6, u64 timeout_ticks, u
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < timeout_ticks) {
         yield();
-        u16 len = e1000_receive(&buf[0], 128);
+        u16 len = netdev_receive(&buf[0], 128);
         if (len == 0) {
             continue;
         }
@@ -191,7 +191,7 @@ bool ndp_resolve(u8* target_ip6, u8* mac_out) {
 static void ndp_send_router_solicitation(void) {
     ipv6_init_link_local();
     u8 mac[6];
-    e1000_get_mac(&mac[0]);
+    netdev_get_mac(&mac[0]);
 
     u8 all_routers[16];
     all_routers_multicast(&all_routers[0]);
@@ -234,7 +234,7 @@ static void ndp_send_router_solicitation(void) {
         frame[54 + i] = icmp6_msg[i];
         i = i + 1;
     }
-    e1000_send(&frame[0], 14 + 40 + 16);
+    netdev_send(&frame[0], 14 + 40 + 16);
 }
 
 // Waits for a real Router Advertisement carrying a Prefix Information
@@ -245,7 +245,7 @@ static bool ndp_wait_router_advertisement(u64 timeout_ticks, u8* prefix_out, u8*
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < timeout_ticks) {
         yield();
-        u16 len = e1000_receive(&buf[0], 300);
+        u16 len = netdev_receive(&buf[0], 300);
         if (len == 0) {
             continue;
         }

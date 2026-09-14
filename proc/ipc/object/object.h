@@ -51,6 +51,11 @@
 // automatically granted to every signature-verified executable.
 #define OBJ_SANDBOX 17
 
+// Backs syscalls 101-104 (real-hardware driver arc item 5/5, Phase 8) -
+// same async issue/wait shape as OBJ_NET_PING_REQUEST/OBJ_NET_TCP_REQUEST,
+// data_index into proc/ipc/wifi_request/wifi_request.h's g_wifi_requests[].
+#define OBJ_WIFI_REQUEST 18
+
 typedef struct {
     bool used;
     int type;

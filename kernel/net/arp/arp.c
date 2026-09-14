@@ -4,7 +4,8 @@
 // fallback if DHCP genuinely fails.
 
 #include "arp.h"
-#include "../e1000/e1000.h"
+#include "../netdev/netdev.h"
+#include "../e1000/e1000.h"  // e1000_init/e1000_init_rings - real e1000-specific bring-up, unrelated to netdev's send/receive/get_mac dispatch (rtw89_init() is WiFi's own, separate init path, kmain.c)
 #include "../ip/ip.h"
 #include "../../isr/isr.h"
 #include "../../sched/task.h"
@@ -80,7 +81,7 @@ static void arp_cache_insert(u8* ip, u8* mac) {
 // called here to guarantee g_my_ip is valid.
 static void arp_send_request(u8* target_ip) {
     u8 mac[6];
-    e1000_get_mac(&mac[0]);
+    netdev_get_mac(&mac[0]);
 
     u8 frame[60];
     int i = 0;
@@ -125,7 +126,7 @@ static void arp_send_request(u8* target_ip) {
         i = i + 1;
     }
 
-    e1000_send(&frame[0], 60);
+    netdev_send(&frame[0], 60);
 }
 
 // Cache hit returns immediately; a miss sends a request and polls for a
@@ -145,7 +146,7 @@ bool arp_resolve(u8* target_ip, u8* mac_out) {
     u8 reply[64];
     u64 start_tick = g_tick_count;
     while (g_tick_count - start_tick < ARP_TIMEOUT_TICKS) {
-        u16 len = e1000_receive(&reply[0], 64);
+        u16 len = netdev_receive(&reply[0], 64);
         if (len > 0) {
             bool is_arp = reply[12] == 0x08 && reply[13] == 0x06;
             bool is_reply_op = reply[20] == 0x00 && reply[21] == 0x02;

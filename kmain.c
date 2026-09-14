@@ -17,6 +17,7 @@
 #include "proc/process.h"
 #include "proc/ipc/io_request/io_request.h"
 #include "proc/ipc/net_request/net_request.h"
+#include "proc/ipc/wifi_request/wifi_request.h"
 #include "proc/ipc/net_tcp_request/net_tcp_request.h"
 #include "kernel/services/service_manager.h"
 #include "kernel/security/users/users.h"
@@ -106,6 +107,7 @@ void _start(void) {
     create_isolated_task(&proc_b_entry);
     create_task(&io_worker_entry);
     create_task(&net_worker_entry);
+    create_task(&wifi_worker_entry);
     create_task(&tcp_worker_entry);
     create_task(&service_manager_worker_entry);
     // Creation order fixes each channel's index (0, 1) - must stay in this order.
