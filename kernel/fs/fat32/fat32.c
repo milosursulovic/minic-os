@@ -2,7 +2,7 @@
 // documented scope limits.
 
 #include "fat32.h"
-#include "../ata/ata.h"
+#include "../blockdev/blockdev.h"
 
 #define ATTR_VOLUME_ID 0x08
 #define ATTR_DIRECTORY 0x10
@@ -33,7 +33,6 @@ typedef struct __attribute__((packed)) {
 
 typedef struct {
     bool initialized;
-    u8 drive;
     u16 bytes_per_sector;
     u8 sectors_per_cluster;
     u16 reserved_sector_count;
@@ -62,15 +61,14 @@ static void write_u32(u8* p, u32 value) {
     p[3] = (u8) ((value >> 24) & 0xFF);
 }
 
-bool fat32_init(u8 drive) {
+bool fat32_init(void) {
     u8 sector[512];
-    if (!ata_read_sector_drive(drive, 0, sector)) {
+    if (!blockdev_read_sector(BLOCKDEV_FAT32, 0, sector)) {
         return false;
     }
     if (sector[510] != 0x55 || sector[511] != 0xAA) {
         return false;
     }
-    g_fat32.drive = drive;
     g_fat32.bytes_per_sector = read_u16(&sector[11]);
     g_fat32.sectors_per_cluster = sector[13];
     g_fat32.reserved_sector_count = read_u16(&sector[14]);
@@ -99,7 +97,7 @@ static u32 get_fat_entry(u32 cluster) {
     u32 fat_sector = g_fat32.first_fat_lba + (fat_offset / g_fat32.bytes_per_sector);
     u32 offset_in_sector = fat_offset % g_fat32.bytes_per_sector;
     u8 sector[512];
-    if (!ata_read_sector_drive(g_fat32.drive, fat_sector, sector)) {
+    if (!blockdev_read_sector(BLOCKDEV_FAT32, fat_sector, sector)) {
         return FAT32_EOC;
     }
     return read_u32(&sector[offset_in_sector]) & FAT_ENTRY_MASK;
@@ -110,12 +108,12 @@ static void set_fat_entry(u32 cluster, u32 value) {
     u32 fat_sector = g_fat32.first_fat_lba + (fat_offset / g_fat32.bytes_per_sector);
     u32 offset_in_sector = fat_offset % g_fat32.bytes_per_sector;
     u8 sector[512];
-    if (!ata_read_sector_drive(g_fat32.drive, fat_sector, sector)) {
+    if (!blockdev_read_sector(BLOCKDEV_FAT32, fat_sector, sector)) {
         return;
     }
     u32 preserved_top = read_u32(&sector[offset_in_sector]) & ~FAT_ENTRY_MASK;
     write_u32(&sector[offset_in_sector], (value & FAT_ENTRY_MASK) | preserved_top);
-    ata_write_sector_drive(g_fat32.drive, fat_sector, sector);
+    blockdev_write_sector(BLOCKDEV_FAT32, fat_sector, sector);
 }
 
 static bool cluster_in_use(u32 entry) {
@@ -138,7 +136,7 @@ static u32 alloc_cluster(void) {
             }
             int s = 0;
             while (s < g_fat32.sectors_per_cluster) {
-                ata_write_sector_drive(g_fat32.drive, cluster_to_lba(cluster) + (u32) s, zero);
+                blockdev_write_sector(BLOCKDEV_FAT32, cluster_to_lba(cluster) + (u32) s, zero);
                 s = s + 1;
             }
             return cluster;
@@ -268,7 +266,7 @@ static bool find_entry_in_dir(u32 dir_cluster, const char name_83[11], fat32_dir
         while (s < g_fat32.sectors_per_cluster) {
             u32 lba = cluster_to_lba(cluster) + s;
             u8 sector[512];
-            if (!ata_read_sector_drive(g_fat32.drive, lba, sector)) {
+            if (!blockdev_read_sector(BLOCKDEV_FAT32, lba, sector)) {
                 return false;
             }
             u32 off = 0;
@@ -307,7 +305,7 @@ static bool find_free_dir_slot(u32 dir_cluster, u32* out_lba, u32* out_offset) {
         while (s < g_fat32.sectors_per_cluster) {
             u32 lba = cluster_to_lba(cluster) + s;
             u8 sector[512];
-            if (!ata_read_sector_drive(g_fat32.drive, lba, sector)) {
+            if (!blockdev_read_sector(BLOCKDEV_FAT32, lba, sector)) {
                 return false;
             }
             u32 off = 0;
@@ -336,12 +334,12 @@ static bool find_free_dir_slot(u32 dir_cluster, u32* out_lba, u32* out_offset) {
 
 static void write_entry_at(u32 lba, u32 offset, const fat32_dir_entry* entry) {
     u8 sector[512];
-    if (!ata_read_sector_drive(g_fat32.drive, lba, sector)) {
+    if (!blockdev_read_sector(BLOCKDEV_FAT32, lba, sector)) {
         return;
     }
     fat32_dir_entry* dst = (fat32_dir_entry*) &sector[offset];
     *dst = *entry;
-    ata_write_sector_drive(g_fat32.drive, lba, sector);
+    blockdev_write_sector(BLOCKDEV_FAT32, lba, sector);
 }
 
 // Walks every component except the last, returns the directory cluster
@@ -416,7 +414,7 @@ int fat32_read_file(const char* path, u8* out_buffer, u32 max_len) {
         u32 s = 0;
         while (s < g_fat32.sectors_per_cluster && read_total < e.file_size) {
             u8 sector[512];
-            if (!ata_read_sector_drive(g_fat32.drive, cluster_to_lba(cluster) + s, sector)) {
+            if (!blockdev_read_sector(BLOCKDEV_FAT32, cluster_to_lba(cluster) + s, sector)) {
                 return -1;
             }
             u32 b = 0;
@@ -480,7 +478,7 @@ bool fat32_write_file(const char* path, u8* data, u32 len) {
                     written = written + 1;
                     b = b + 1;
                 }
-                ata_write_sector_drive(g_fat32.drive, cluster_to_lba(c) + s, sector);
+                blockdev_write_sector(BLOCKDEV_FAT32, cluster_to_lba(c) + s, sector);
                 s = s + 1;
             }
         }
@@ -531,11 +529,11 @@ bool fat32_delete_file(const char* path) {
         return false;
     }
     u8 sector[512];
-    if (!ata_read_sector_drive(g_fat32.drive, lba, sector)) {
+    if (!blockdev_read_sector(BLOCKDEV_FAT32, lba, sector)) {
         return false;
     }
     sector[off] = (u8) 0xE5;
-    ata_write_sector_drive(g_fat32.drive, lba, sector);
+    blockdev_write_sector(BLOCKDEV_FAT32, lba, sector);
     u32 first = entry_first_cluster(&e);
     if (first >= 2) {
         free_cluster_chain(first);
@@ -603,7 +601,7 @@ bool fat32_list_entry(const char* dir_path, int index, char* name_out, u32* size
         u32 s = 0;
         while (s < g_fat32.sectors_per_cluster) {
             u8 sector[512];
-            if (!ata_read_sector_drive(g_fat32.drive, cluster_to_lba(cluster) + s, sector)) {
+            if (!blockdev_read_sector(BLOCKDEV_FAT32, cluster_to_lba(cluster) + s, sector)) {
                 return false;
             }
             u32 off = 0;

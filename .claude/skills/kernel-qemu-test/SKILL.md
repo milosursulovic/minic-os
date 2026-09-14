@@ -32,9 +32,21 @@ qemu-system-x86_64 -kernel kernel.elf -display none -serial file:serial.log \
   -no-reboot -daemonize
 ```
 
-`disk.img` is only needed for `disk`/`diskwrite`/VFS-over-disk commands -
-build it first with `make disk` if it doesn't exist yet. Every other command
-works identically without `-drive` at all.
+**`-drive file=disk.img,format=raw,if=ide` is required for almost everything.**
+MiniFS (`kernel/fs/minifs/minifs.c`) is backed by real ATA PIO sectors
+(`kernel/fs/ata/ata.c`), not memory - and `/system` (where most demo/shell
+file operations live: `ring3msg.txt`, `posix.txt`, `settings.cfg`, etc.) is
+mounted on MiniFS. Boot without `-drive` and `ata_wait_ready()`/
+`ata_wait_drq()` spin their full 1,000,000-iteration bound and return
+false for every single sector access - so `fs_read_file`/`fs_write_file`
+fail silently for BOTH sync and async paths alike, with no crash and no
+obvious error, just `-1`/`false` results that look exactly like a real
+code bug. Build `disk.img` first with `make disk` if it doesn't exist yet.
+Only device-/procfs-/tmpfs-backed paths (`/devices`, `/processes`, `/tmp`)
+and non-filesystem commands are unaffected by omitting `-drive` - anything
+touching `/system` is not, and a "found a real bug in MiniFS/ATA/async-IO"
+result from a run without `-drive` should be treated as suspect first,
+not trusted at face value (see [[reference_missing_drive_false_bug]]).
 
 Wait ~2s, then confirm it's actually up:
 ```bash

@@ -11,7 +11,7 @@
 //   (both file data AND subdirectory sectors come from the same pool).
 
 #include "minifs.h"
-#include "../ata/ata.h"
+#include "../blockdev/blockdev.h"
 #include "../../lib/strings.h"
 
 static const u32 SUPERBLOCK_LBA = 500;
@@ -76,7 +76,7 @@ bool mkfs(void) {
     sb->magic = MINIFS_MAGIC;
     sb->file_count = 0;
     sb->next_free_lba = DATA_START_LBA;
-    if (!ata_write_sector(SUPERBLOCK_LBA, sb_buf)) {
+    if (!blockdev_write_sector(BLOCKDEV_SYSTEM, SUPERBLOCK_LBA, sb_buf)) {
         return false;
     }
 
@@ -86,7 +86,7 @@ bool mkfs(void) {
         dir_buf[i] = 0;
         i = i + 1;
     }
-    return ata_write_sector(ROOT_LBA, dir_buf);
+    return blockdev_write_sector(BLOCKDEV_SYSTEM, ROOT_LBA, dir_buf);
 }
 
 static int find_entry(dir_entry* entries, const char* name) {
@@ -137,7 +137,7 @@ static bool resolve_parent_dir(const char* path, u32* parent_lba_out, char* last
     int i = 0;
     while (i < count - 1) {
         u8 dir_buf[512];
-        if (!ata_read_sector(current_lba, dir_buf)) {
+        if (!blockdev_read_sector(BLOCKDEV_SYSTEM, current_lba, dir_buf)) {
             return false;
         }
         dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -163,7 +163,7 @@ static bool resolve_dir(const char* path, u32* dir_lba_out) {
     int i = 0;
     while (i < count) {
         u8 dir_buf[512];
-        if (!ata_read_sector(current_lba, dir_buf)) {
+        if (!blockdev_read_sector(BLOCKDEV_SYSTEM, current_lba, dir_buf)) {
             return false;
         }
         dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -180,23 +180,23 @@ static bool resolve_dir(const char* path, u32* dir_lba_out) {
 
 static bool alloc_lba(u32 sector_count, u32* lba_out) {
     u8 sb_buf[512];
-    if (!ata_read_sector(SUPERBLOCK_LBA, sb_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, SUPERBLOCK_LBA, sb_buf)) {
         return false;
     }
     superblock* sb = (superblock*) &sb_buf[0];
     *lba_out = sb->next_free_lba;
     sb->next_free_lba = sb->next_free_lba + sector_count;
-    return ata_write_sector(SUPERBLOCK_LBA, sb_buf);
+    return blockdev_write_sector(BLOCKDEV_SYSTEM, SUPERBLOCK_LBA, sb_buf);
 }
 
 static bool bump_file_count(int delta) {
     u8 sb_buf[512];
-    if (!ata_read_sector(SUPERBLOCK_LBA, sb_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, SUPERBLOCK_LBA, sb_buf)) {
         return false;
     }
     superblock* sb = (superblock*) &sb_buf[0];
     sb->file_count = (u32) ((int) sb->file_count + delta);
-    return ata_write_sector(SUPERBLOCK_LBA, sb_buf);
+    return blockdev_write_sector(BLOCKDEV_SYSTEM, SUPERBLOCK_LBA, sb_buf);
 }
 
 // No create/open/write/close split; fails if the name already exists.
@@ -207,7 +207,7 @@ bool fs_write_file(const char* path, u8* data, u32 len) {
         return false;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(parent_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -247,7 +247,7 @@ bool fs_write_file(const char* path, u8* data, u32 len) {
             }
             b = b + 1;
         }
-        if (!ata_write_sector(start_lba + s, sector_buf)) {
+        if (!blockdev_write_sector(BLOCKDEV_SYSTEM, start_lba + s, sector_buf)) {
             return false;
         }
         written = written + 512;
@@ -261,7 +261,7 @@ bool fs_write_file(const char* path, u8* data, u32 len) {
     entries[free_slot].is_dir = false;
     entries[free_slot].owner_uid = 0;
     entries[free_slot].mode = 0;
-    if (!ata_write_sector(parent_lba, dir_buf)) {
+    if (!blockdev_write_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     return bump_file_count(1);
@@ -274,7 +274,7 @@ bool fs_create_dir(const char* path) {
         return false;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(parent_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -304,7 +304,7 @@ bool fs_create_dir(const char* path) {
         zero_buf[i] = 0;
         i = i + 1;
     }
-    if (!ata_write_sector(new_dir_lba, zero_buf)) {
+    if (!blockdev_write_sector(BLOCKDEV_SYSTEM, new_dir_lba, zero_buf)) {
         return false;
     }
 
@@ -315,7 +315,7 @@ bool fs_create_dir(const char* path) {
     entries[free_slot].is_dir = true;
     entries[free_slot].owner_uid = 0;
     entries[free_slot].mode = 0;
-    if (!ata_write_sector(parent_lba, dir_buf)) {
+    if (!blockdev_write_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     return bump_file_count(1);
@@ -328,7 +328,7 @@ bool fs_delete_file(const char* path) {
         return false;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(parent_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -337,7 +337,7 @@ bool fs_delete_file(const char* path) {
         return false;
     }
     entries[slot].used = false;
-    if (!ata_write_sector(parent_lba, dir_buf)) {
+    if (!blockdev_write_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     return bump_file_count(-1);
@@ -345,7 +345,7 @@ bool fs_delete_file(const char* path) {
 
 bool fs_superblock_info(u32* file_count_out) {
     u8 sb_buf[512];
-    if (!ata_read_sector(SUPERBLOCK_LBA, sb_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, SUPERBLOCK_LBA, sb_buf)) {
         return false;
     }
     superblock* sb = (superblock*) &sb_buf[0];
@@ -359,7 +359,7 @@ bool fs_list_entry(const char* dir_path, int index, char* name_out, u32* size_ou
         return false;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(dir_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, dir_lba, dir_buf)) {
         return false;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -382,7 +382,7 @@ int fs_read_file(const char* path, u8* out_buffer, u32 max_len) {
         return -1;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(parent_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return -1;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -400,7 +400,7 @@ int fs_read_file(const char* path, u8* out_buffer, u32 max_len) {
     u32 read = 0;
     u32 s = 0;
     while (s < sector_count) {
-        if (!ata_read_sector(entries[slot].start_lba + s, sector_buf)) {
+        if (!blockdev_read_sector(BLOCKDEV_SYSTEM, entries[slot].start_lba + s, sector_buf)) {
             return -1;
         }
         int b = 0;
@@ -424,7 +424,7 @@ bool fs_get_owner_mode(const char* path, u8* owner_uid_out, u8* mode_out) {
         return false;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(parent_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -444,7 +444,7 @@ bool fs_stat_file(const char* path, u32* size_out, bool* is_dir_out, u8* owner_u
         return false;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(parent_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -466,7 +466,7 @@ bool fs_set_owner(const char* path, u8 uid, u8 caller_uid) {
         return false;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(parent_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -478,7 +478,7 @@ bool fs_set_owner(const char* path, u8 uid, u8 caller_uid) {
         return false;
     }
     entries[slot].owner_uid = uid;
-    return ata_write_sector(parent_lba, dir_buf);
+    return blockdev_write_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf);
 }
 
 bool fs_set_mode(const char* path, u8 mode, u8 caller_uid) {
@@ -488,7 +488,7 @@ bool fs_set_mode(const char* path, u8 mode, u8 caller_uid) {
         return false;
     }
     u8 dir_buf[512];
-    if (!ata_read_sector(parent_lba, dir_buf)) {
+    if (!blockdev_read_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf)) {
         return false;
     }
     dir_entry* entries = (dir_entry*) &dir_buf[0];
@@ -500,5 +500,5 @@ bool fs_set_mode(const char* path, u8 mode, u8 caller_uid) {
         return false;
     }
     entries[slot].mode = mode;
-    return ata_write_sector(parent_lba, dir_buf);
+    return blockdev_write_sector(BLOCKDEV_SYSTEM, parent_lba, dir_buf);
 }

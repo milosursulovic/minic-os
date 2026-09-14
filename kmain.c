@@ -23,6 +23,7 @@
 #include "kernel/fs/vfs/vfs.h"
 #include "kernel/fs/minifs/minifs.h"
 #include "kernel/fs/fat32/fat32.h"
+#include "kernel/fs/blockdev/blockdev.h"
 #include "proc/ipc/object/object.h"
 #include "kernel/drivers/io_port_range/io_port_range.h"
 #include "shell/shell/shell.h"
@@ -109,6 +110,12 @@ void _start(void) {
     // 128KB gap every call site here already relied on.
     spawn_process(&g_test_prog_start, &g_test_prog_end, 0x80000000, 0x80020000, false);
     create_isolated_task(&proc_receiver_entry);
+
+    // Real block-device dispatch (kernel/fs/blockdev) - probes for a
+    // real NVMe controller, falls back to legacy ATA drive 0/1 if none
+    // is found. Must run before any MiniFS access below (the very next
+    // real disk I/O is fs_create_dir("apps") further down).
+    blockdev_init();
     vfs_mount("/system", BACKEND_MINIFS);
     vfs_mount("/devices", BACKEND_DEVICE);
     vfs_mount("/processes", BACKEND_PROCFS);
@@ -153,10 +160,12 @@ void _start(void) {
     }
 
     // Faza I point 6, item 15: a real, separate hand-written FAT32
-    // driver (kernel/fs/fat32) on its own drive (kernel/fs/ata's new
-    // drive-select support, drive 1 = slave) - proves the VFS backend
-    // dispatch is genuinely pluggable, not hardcoded to MiniFS.
-    fat32_init(1);
+    // driver (kernel/fs/fat32), on its own logical block device
+    // (kernel/fs/blockdev's BLOCKDEV_FAT32 - real ATA drive 1/slave, or
+    // NVMe namespace 2 if a real NVMe controller was found above) -
+    // proves the VFS backend dispatch is genuinely pluggable, not
+    // hardcoded to MiniFS.
+    fat32_init();
     vfs_mount("/fat32", BACKEND_FAT32);
 
     // Registered (available to "service start hello_service"), not

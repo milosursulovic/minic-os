@@ -26,7 +26,7 @@
 // Must call fat32_init() once (kmain.c, before any other call) - real
 // on-disk state (BPB-derived layout) has to exist before any path can
 // resolve to anything.
-bool fat32_init(u8 drive);
+bool fat32_init(void);
 
 // Returns byte count read, -1 if not found (or resolves to a directory),
 // -2 if too big for max_len.
