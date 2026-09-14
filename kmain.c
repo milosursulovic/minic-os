@@ -7,6 +7,7 @@
 #include "kernel/drivers/keyboard/keyboard.h"
 #include "kernel/drivers/device_manager/device_manager.h"
 #include "kernel/drivers/usb/usbhc.h"
+#include "kernel/net/rtw89/rtw89.h"
 #include "kernel/drivers/usb/usb_hid.h"
 #include "kernel/mm/frames/frames.h"
 #include "kernel/mm/paging/paging.h"
@@ -86,6 +87,14 @@ void _start(void) {
     // codebase's own boot sequence to need paging this early).
     usbhc_init();
     usb_hid_init();
+
+    // Real hand-written Realtek RTL8852BE WiFi driver, Phase 1 (real-
+    // hardware driver arc item 5) - firmware upload + chip bring-up
+    // only (see kernel/net/rtw89/rtw89.h). Same paging-must-be-ready
+    // requirement as xHCI above. No QEMU emulation exists for this
+    // chip - unverified until tested on this dev laptop's real
+    // hardware.
+    rtw89_init();
 
     // Must run before `sti` - the timer ISR calls yield(), which divides by g_task_count.
     scheduler_init();

@@ -6,6 +6,7 @@
 #include "../../../kernel/drivers/device_manager/device_manager.h"
 #include "../../../kernel/net/e1000/e1000.h"
 #include "../../../kernel/drivers/usb/usb_hid.h"
+#include "../../../kernel/net/rtw89/rtw89.h"
 
 void cmd_pci(void) {
     pci_enumerate();
@@ -136,4 +137,16 @@ void cmd_usbinfo(void) {
     vga_print("events=0x");
     serial_print("events=0x");
     print_hex((u64) g_usb_key_event_count);
+}
+
+// Real, hand-checkable window into kernel/net/rtw89/rtw89.c's own
+// boot-time firmware-download attempt (real-hardware driver arc item
+// 5, Phase 1) - same "report already-run boot state, don't re-trigger
+// a real hardware operation" convention as cmd_usbinfo() above.
+// status: 0=initial,1=ongoing,2=checksum fail,3=security fail,
+// 4=CV mismatch,6=WCPU_FWDL_RDY,7=WCPU_FW_INIT_RDY (real success).
+void cmd_wifi(void) {
+    vga_print("rtw89 fwdl_status=0x");
+    serial_print("rtw89 fwdl_status=0x");
+    print_hex((u64) g_rtw89_fwdl_status);
 }

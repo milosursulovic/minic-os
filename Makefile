@@ -305,8 +305,16 @@ $(BUILD_DIR)/kernel/gfx/png/wallpaper_blob.o: kernel/gfx/png/wallpaper_blob.s as
 
 PNG_ASSET_BLOBS := $(BUILD_DIR)/kernel/gfx/png/cursor_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_stored_blob.o $(BUILD_DIR)/kernel/gfx/png/png_test_huffman_blob.o $(BUILD_DIR)/kernel/gfx/png/wallpaper_blob.o
 
-kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
-	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS)
+# Real vendor firmware blob for the RTL8852BE WiFi chip - the one,
+# narrow, documented exception to this project's hand-written-only rule
+# (CLAUDE.md, 2026-09-14). Same .incbin-a-committed-asset shape as the
+# PNG blobs above, not build/-generated.
+$(BUILD_DIR)/kernel/net/rtw89/rtw89_fw_blob.o: kernel/net/rtw89/rtw89_fw_blob.s assets/rtw8852b_fw.bin
+	@mkdir -p $(BUILD_DIR)/kernel/net/rtw89
+	cd kernel/net/rtw89 && $(AS) --32 rtw89_fw_blob.s -o ../../../$@
+
+kernel.elf: $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS) $(BUILD_DIR)/kernel/net/rtw89/rtw89_fw_blob.o
+	$(LD) -m elf_i386 -T kernel/boot/linker.ld -o $@ $(ASM_OBJS) $(C_OBJS) $(BUILD_DIR)/proc/demo/ring3prog/ring3blob.o $(BUILD_DIR)/proc/demo/init/init_blob.o $(BUILD_DIR)/proc/demo/hello_service/hello_service_blob.o $(BUILD_DIR)/proc/drivers/rtc_driver/rtc_driver_blob.o $(BUILD_DIR)/proc/apps/desktop_shell/desktop_shell_blob.o $(BUILD_DIR)/proc/apps/terminal/terminal_blob.o $(BUILD_DIR)/proc/apps/file_manager/file_manager_blob.o $(BUILD_DIR)/proc/apps/settings/settings_blob.o $(BUILD_DIR)/proc/apps/device_manager/device_manager_blob.o $(BUILD_DIR)/proc/apps/service_manager/service_manager_blob.o $(PNG_ASSET_BLOBS) $(BUILD_DIR)/kernel/net/rtw89/rtw89_fw_blob.o
 	@echo "built kernel.elf"
 
 disk.img:

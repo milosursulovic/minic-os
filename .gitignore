@@ -4,6 +4,7 @@
 *.img
 *.log
 *.bin
+!assets/rtw8852b_fw.bin
 *.gen.s
 *.d
 build/
